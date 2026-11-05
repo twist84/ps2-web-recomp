@@ -6,6 +6,7 @@ struct Blit {
     blend: u32,
     out_width: u32,
     out_height: u32,
+    nearest: u32,
     options: u32,
 }
 
@@ -34,6 +35,10 @@ fn texel(base: u32, x: i32, y: i32) -> vec4<f32> {
 
 fn sample(base: u32, uv: vec2<f32>) -> vec4<f32> {
     let size = vec2<f32>(f32(blit.width), f32(blit.height));
+    if (blit.nearest != 0u) {
+        let p = vec2<i32>(floor(uv * size));
+        return texel(base, p.x, p.y);
+    }
     let scale = max(floor(vec2<f32>(f32(blit.out_width), f32(blit.out_height)) / size), vec2<f32>(1.0));
     let t = uv * size;
     let d = fract(t) - 0.5;

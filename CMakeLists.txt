@@ -4,6 +4,9 @@ project(ps2-web-recomp CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(PS2_STATIC_CPP_RUNTIME "Link MinGW executable runtime libraries statically" ON)
+option(PS2_USE_SDBZ_RECONSTRUCTED "Build and link the SDBZ reconstructed C++ (sdbz_decomp)" OFF)
+
 set(PS2_GENERATED "" CACHE PATH "Folder with the C++ generated for a game")
 
 if(EMSCRIPTEN)
@@ -28,6 +31,10 @@ if(NOT EMSCRIPTEN)
     target_compile_options(vurecomp PRIVATE -Wall -Wextra)
 endif()
 
+if(PS2_USE_SDBZ_RECONSTRUCTED)
+    add_subdirectory(games/sdbz_decomp)
+endif()
+
 add_library(ps2runtime STATIC
     runtime/src/memory.cpp
     runtime/src/dispatch.cpp
@@ -36,6 +43,7 @@ add_library(ps2runtime STATIC
     runtime/src/hw.cpp
     runtime/src/cop.cpp
     runtime/src/disc.cpp
+    runtime/src/disc_folder.cpp
     runtime/src/dmac.cpp
     runtime/src/vif.cpp
     runtime/src/vu_micro.cpp
@@ -57,10 +65,16 @@ add_library(ps2runtime STATIC
     runtime/src/iop/sif.cpp
     runtime/src/iop/cdvdfsv.cpp)
 target_include_directories(ps2runtime PUBLIC runtime/include)
+if(PS2_USE_SDBZ_RECONSTRUCTED)
+    target_sources(ps2runtime PRIVATE runtime/src/sdbz_bridge.cpp)
+    target_include_directories(ps2runtime PRIVATE games/sdbz_decomp/include)
+    target_link_libraries(ps2runtime PUBLIC sdbz_reconstructed)
+    target_compile_definitions(ps2runtime PUBLIC PS2_USE_SDBZ_RECONSTRUCTED)
+endif()
 target_compile_options(ps2runtime PRIVATE -Wall -Wextra)
 
 set(PS2_WGPU_DIR "${CMAKE_SOURCE_DIR}/third_party/wgpu-native" CACHE PATH "wgpu-native release folder")
-if(EMSCRIPTEN OR EXISTS "${PS2_WGPU_DIR}/lib/libwgpu_native.a")
+if(EMSCRIPTEN OR EXISTS "${PS2_WGPU_DIR}/lib/libwgpu_native.a" OR EXISTS "${PS2_WGPU_DIR}/lib/libwgpu_native.dll.a")
     set(PS2_GS_WGSL "${CMAKE_BINARY_DIR}/gs_wgsl.cpp")
     add_custom_command(OUTPUT "${PS2_GS_WGSL}"
         COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR}/runtime/src/gs/gpu/gs.wgsl -DOUT=${PS2_GS_WGSL} -DNAME=kGsShader -P ${CMAKE_SOURCE_DIR}/cmake/embed.cmake
@@ -76,12 +90,24 @@ if(EMSCRIPTEN OR EXISTS "${PS2_WGPU_DIR}/lib/libwgpu_native.a")
         target_link_options(ps2runtime PUBLIC --use-port=emdawnwebgpu)
     else()
         target_include_directories(ps2runtime PRIVATE "${PS2_WGPU_DIR}/include")
-        target_link_libraries(ps2runtime PUBLIC "${PS2_WGPU_DIR}/lib/libwgpu_native.a" dl pthread m)
+        if(WIN32)
+            if(NOT EXISTS "${PS2_WGPU_DIR}/lib/libwgpu_native.dll.a")
+                message(FATAL_ERROR "Windows CLANG64 requires the wgpu-native GNU release (libwgpu_native.dll.a). Run scripts/build_windows_gpu.sh.")
+            endif()
+            set(PS2_WGPU_DLL "${PS2_WGPU_DIR}/lib/wgpu_native.dll")
+            if(NOT EXISTS "${PS2_WGPU_DLL}")
+                message(FATAL_ERROR "Missing ${PS2_WGPU_DLL}")
+            endif()
+            target_link_libraries(ps2runtime PUBLIC "${PS2_WGPU_DIR}/lib/libwgpu_native.dll.a")
+        else()
+            target_link_libraries(ps2runtime PUBLIC "${PS2_WGPU_DIR}/lib/libwgpu_native.a" dl pthread m)
+        endif()
         if(APPLE)
             target_link_libraries(ps2runtime PUBLIC "-framework Metal" "-framework QuartzCore" "-framework Foundation" "-framework CoreFoundation" "-framework IOKit" "-framework IOSurface" objc)
         endif()
     endif()
 endif()
+
 
 if(PS2_GENERATED)
     file(GLOB PS2_UNITS CONFIGURE_DEPENDS "${PS2_GENERATED}/*.cpp")
@@ -91,7 +117,7 @@ if(PS2_GENERATED)
     target_compile_options(ps2game PRIVATE -Wno-unused-label -Wno-unused-variable)
 
     if(EMSCRIPTEN)
-        set(PS2_WEB_ELF "" CACHE FILEPATH "Game executable preloaded as /game/core.elf")
+        set(PS2_WEB_ELF "" CACHE FILEPATH "SDBZ executable preloaded as /game/core.elf")
         set(PS2_WEB_BOOT_FILE "" CACHE FILEPATH "Text file holding the argv[0] the game sees, preloaded as /game/boot.txt")
         set(PS2_WEB_PATCHES "" CACHE FILEPATH "Patch list the runtime writes into memory, preloaded as /game/patches.txt")
         add_executable(ps2web host/web.cpp)
@@ -111,6 +137,15 @@ if(PS2_GENERATED)
     endif()
 
     add_executable(ps2run host/main.cpp)
+    if(WIN32 AND DEFINED PS2_WGPU_DLL)
+        add_custom_command(TARGET ps2run POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${PS2_WGPU_DLL}" "$<TARGET_FILE_DIR:ps2run>"
+            VERBATIM)
+    endif()
+    if(WIN32)
+        target_link_libraries(ps2run PRIVATE psapi)
+    endif()
     target_link_libraries(ps2run PRIVATE ps2game ps2runtime)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
         target_sources(ps2run PRIVATE host/profile.cpp)
@@ -121,5 +156,41 @@ if(PS2_GENERATED)
         target_sources(ps2run PRIVATE host/window.cpp)
         target_compile_definitions(ps2run PRIVATE PS2_WINDOW)
         target_link_libraries(ps2run PRIVATE SDL2::SDL2)
+        if(WIN32)
+            add_executable(SDBZ host/game_main.cpp host/window.cpp)
+            target_compile_definitions(SDBZ PRIVATE PS2_WINDOW)
+            target_link_libraries(SDBZ PRIVATE ps2game ps2runtime SDL2::SDL2 psapi user32)
+            set(PS2_GAME_OUTPUT_DIR "" CACHE PATH "Output directory for the direct SDBZ.exe target")
+            if(PS2_GAME_OUTPUT_DIR)
+                set_target_properties(SDBZ PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PS2_GAME_OUTPUT_DIR}")
+            else()
+                get_filename_component(ps2_game_name "${PS2_GENERATED}" NAME)
+                if(IS_DIRECTORY "${CMAKE_SOURCE_DIR}/games/${ps2_game_name}/disc")
+                    set_target_properties(SDBZ PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/games/${ps2_game_name}/disc")
+                endif()
+            endif()
+            if(DEFINED PS2_WGPU_DLL)
+                add_custom_command(TARGET SDBZ POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PS2_WGPU_DLL}" "$<TARGET_FILE_DIR:SDBZ>"
+                    VERBATIM)
+            endif()
+            get_filename_component(ps2_compiler_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+            find_file(PS2_SDL2_DLL NAMES SDL2.dll HINTS "${ps2_compiler_bin}" "${SDL2_DIR}/../../../bin")
+            if(PS2_SDL2_DLL)
+                add_custom_command(TARGET SDBZ POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PS2_SDL2_DLL}" "$<TARGET_FILE_DIR:SDBZ>"
+                    VERBATIM)
+            endif()
+        endif()
     endif()
+endif()
+
+# Each executable must receive this linker option. Linking ps2runtime as a
+# static archive alone does not remove an executable's libc++ DLL dependency.
+if(MINGW AND PS2_STATIC_CPP_RUNTIME)
+    foreach(ps2_native_target eerecomp vurecomp vujit_dump ps2run SDBZ)
+        if(TARGET ${ps2_native_target})
+            target_link_options(${ps2_native_target} PRIVATE -static)
+        endif()
+    endforeach()
 endif()

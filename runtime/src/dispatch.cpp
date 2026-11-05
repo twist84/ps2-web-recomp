@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -27,6 +28,7 @@ struct Instance {
     const ModuleInfo *module;
 };
 
+std::map<std::uint32_t, ReconstructedFn> g_reconstructed;
 const ModuleInfo *g_modules = nullptr;
 std::uint32_t g_module_count = 0;
 std::uint32_t g_module_span = 0;
@@ -119,6 +121,18 @@ void record_miss(std::uint32_t pc) {
 
 }
 
+void register_reconstructed(std::uint32_t address, ReconstructedFn fn) {
+    g_reconstructed[address] = fn;
+}
+
+bool has_reconstructed(std::uint32_t address) {
+    return g_reconstructed.find(address) != g_reconstructed.end();
+}
+
+#ifndef PS2_USE_SDBZ_RECONSTRUCTED
+void register_sdbz_reconstructed() {}
+#endif
+
 void register_units(const UnitInfo *units, std::uint32_t count) {
     g_units.assign(units, units + count);
     if (g_units.empty()) return;
@@ -148,6 +162,11 @@ void dispatch(Cpu &c, std::uint32_t, std::uint32_t depth) {
     const std::uint32_t pc = c.pc;
     if (pc & kUnwind) return;
     if (pc == kHandlerReturn || pc == kIdle) return;
+    auto rit = g_reconstructed.find(pc);
+    if (rit != g_reconstructed.end()) {
+        rit->second(c);
+        return;
+    }
     const UnitInfo *u = unit_for(pc);
     const std::uint16_t id = u ? u->entries[(pc - u->base) >> 2] : 0;
     if (!id) {

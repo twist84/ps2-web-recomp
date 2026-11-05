@@ -38,6 +38,17 @@ struct ModuleInfo {
 void register_units(const UnitInfo *units, std::uint32_t count);
 void register_modules(const ModuleInfo *modules, std::uint32_t count);
 
+// Reconstructed-function override registry. A registered function takes
+// precedence over generated code for the given EE address.
+using ReconstructedFn = void (*)(Cpu &);
+void register_reconstructed(std::uint32_t address, ReconstructedFn fn);
+bool has_reconstructed(std::uint32_t address);
+
+#ifdef PS2_USE_SDBZ_RECONSTRUCTED
+// Provided by the optional sdbz bridge.
+void register_sdbz_reconstructed();
+#endif
+
 void dispatch(Cpu &c, std::uint32_t entry, std::uint32_t depth);
 void call(Cpu &c, std::uint32_t target, std::uint32_t depth);
 void bad_entry(Cpu &c, std::uint32_t unit_base);

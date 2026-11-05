@@ -1,6 +1,8 @@
 #include "gpu.hpp"
 #include "ps2/system.hpp"
 #include "ps2/video.hpp"
+#include "ps2/presentation.hpp"
+#include "ps2/render_scale.hpp"
 
 #include <webgpu/webgpu.h>
 #ifndef __EMSCRIPTEN__
@@ -28,6 +30,8 @@ void swizzle_tables(std::vector<std::uint32_t> &out);
 namespace ps2::gs::gpu {
 
 namespace {
+
+ps2::s_window_viewport g_present_viewport;
 
 enum Pipeline { kUpload, kCopyRead, kCopyWrite, kLoadClut, kDisplay, kRaster, kResolve, kSnapshot, kDecode, kPipelines };
 const char *const kEntryPoints[kPipelines] = {"upload", "copy_read", "copy_write", "load_clut", "display", "raster", "resolve", "snapshot", "decode"};
@@ -843,6 +847,34 @@ void ensure_capacity() {
     if (changed || !g_group) rebuild_group();
 }
 
+bool make_scaled_pipelines(std::uint32_t scale, WGPUComputePipeline *pipelines)
+{
+    WGPUShaderSourceWGSL source = WGPU_SHADER_SOURCE_WGSL_INIT;
+    source.code = view(kGsShader);
+    WGPUShaderModuleDescriptor md = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
+    md.nextInChain = &source.chain;
+    WGPUShaderModule module = wgpuDeviceCreateShaderModule(g_device, &md);
+    for (int i = 0; i < kPipelines; ++i) {
+        WGPUComputePipelineDescriptor cd = WGPU_COMPUTE_PIPELINE_DESCRIPTOR_INIT;
+        cd.layout = g_pipeline_layout;
+        cd.compute.module = module;
+        cd.compute.entryPoint = view(kEntryPoints[i]);
+        WGPUConstantEntry constant = WGPU_CONSTANT_ENTRY_INIT;
+        constant.key = view("SCALE");
+        constant.value = static_cast<double>(scale);
+        cd.compute.constantCount = 1;
+        cd.compute.constants = &constant;
+        pipelines[i] = wgpuDeviceCreateComputePipeline(g_device, &cd);
+        if (!pipelines[i])
+        {
+            wgpuShaderModuleRelease(module);
+            return false;
+        }
+    }
+    wgpuShaderModuleRelease(module);
+    return true;
+}
+
 void profile_submit() {
     constexpr std::uint32_t kMax = 2048;
     if (!g_profile_queries) {
@@ -972,10 +1004,8 @@ void submit(WGPUTextureView present_view = nullptr) {
         rd.colorAttachmentCount = 1;
         rd.colorAttachments = &color;
         WGPURenderPassEncoder rp = wgpuCommandEncoderBeginRenderPass(enc, &rd);
-        const float w = static_cast<float>(g_surface_width), h = static_cast<float>(g_surface_height);
-        const float aspect = g_options.widescreen ? 16.0f / 9.0f : 4.0f / 3.0f;
-        const float vw = std::min(w, h * aspect), vh = vw / aspect;
-        wgpuRenderPassEncoderSetViewport(rp, (w - vw) * 0.5f, (h - vh) * 0.5f, vw, vh, 0.0f, 1.0f);
+        wgpuRenderPassEncoderSetViewport(rp, static_cast<float>(g_present_viewport.x), static_cast<float>(g_present_viewport.y),
+            static_cast<float>(g_present_viewport.width), static_cast<float>(g_present_viewport.height), 0.0f, 1.0f);
         wgpuRenderPassEncoderSetPipeline(rp, g_blit);
         wgpuRenderPassEncoderSetBindGroup(rp, 0, g_blit_group, 0, nullptr);
         wgpuRenderPassEncoderDraw(rp, 3, 1, 0, 0);
@@ -1164,6 +1194,20 @@ void attrs(std::uint32_t *rec, int n, const Vertex &v, bool fst, const Vertex *c
 
 Mode mode() { return g_mode; }
 
+bool change_render_scale(std::uint32_t scale);
+
+void apply_requested_render_scale()
+{
+    const auto requested = static_cast<std::uint32_t>(std::clamp(
+        ps2::g_presentation_options.render_scale.load(std::memory_order_relaxed), 1, 4));
+    if (requested != g_scale && !change_render_scale(requested))
+    {
+        ps2::g_presentation_options.render_scale.store(static_cast<int>(g_scale), std::memory_order_relaxed);
+        std::fprintf(stderr, "[gpu] render scale change rejected; keeping %ux\n", g_scale);
+    }
+}
+
+
 bool init(Mode m) {
     if (m == Mode::off) return false;
 #ifdef __EMSCRIPTEN__
@@ -1171,7 +1215,7 @@ bool init(Mode m) {
 #else
     WGPUInstanceExtras extras = {};
     extras.chain.sType = static_cast<WGPUSType>(WGPUSType_InstanceExtras);
-    extras.backends = WGPUInstanceBackend_Primary;
+    extras.backends = WGPUInstanceBackend_DX12;
     WGPUInstanceDescriptor id = WGPU_INSTANCE_DESCRIPTOR_INIT;
     id.nextInChain = &extras.chain;
     g_instance = wgpuCreateInstance(&id);
@@ -1240,7 +1284,11 @@ bool init(Mode m) {
             g_profile_to = z;
         }
     }
-    if (const char *scale = std::getenv("PS2_SCALE")) g_scale = std::clamp<std::uint32_t>(static_cast<std::uint32_t>(std::atoi(scale)), 1u, 3u);
+    g_scale = static_cast<std::uint32_t>(std::clamp(ps2::g_presentation_options.render_scale.load(std::memory_order_relaxed), 1, 4));
+    if (const char *scale = std::getenv("PS2_SCALE")) g_scale = static_cast<std::uint32_t>(std::clamp(std::atoi(scale), 1, 4));
+    while (g_scale > 1 && (8ull << 20) * g_scale * g_scale > std::min(supported.maxBufferSize, supported.maxStorageBufferBindingSize)) --g_scale;
+    ps2::g_presentation_options.render_scale.store(static_cast<int>(g_scale), std::memory_order_relaxed);
+    ps2::g_presentation_options.active_render_scale.store(static_cast<int>(g_scale), std::memory_order_relaxed);
     g_copy_words = (1u << 20) * g_scale * g_scale;
     g_tiles_per_row = (2048 * static_cast<int>(g_scale) + 15) / 16;
     g_tile_count.assign(static_cast<std::size_t>(g_tiles_per_row) * g_tiles_per_row, 0);
@@ -1288,25 +1336,7 @@ bool init(Mode m) {
     pld.bindGroupLayouts = &g_layout;
     g_pipeline_layout = wgpuDeviceCreatePipelineLayout(g_device, &pld);
 
-    WGPUShaderSourceWGSL source = WGPU_SHADER_SOURCE_WGSL_INIT;
-    source.code = view(kGsShader);
-    WGPUShaderModuleDescriptor md = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
-    md.nextInChain = &source.chain;
-    WGPUShaderModule module = wgpuDeviceCreateShaderModule(g_device, &md);
-    for (int i = 0; i < kPipelines; ++i) {
-        WGPUComputePipelineDescriptor cd = WGPU_COMPUTE_PIPELINE_DESCRIPTOR_INIT;
-        cd.layout = g_pipeline_layout;
-        cd.compute.module = module;
-        cd.compute.entryPoint = view(kEntryPoints[i]);
-        WGPUConstantEntry constant = WGPU_CONSTANT_ENTRY_INIT;
-        constant.key = view("SCALE");
-        constant.value = static_cast<double>(g_scale);
-        cd.compute.constantCount = 1;
-        cd.compute.constants = &constant;
-        g_pipelines[i] = wgpuDeviceCreateComputePipeline(g_device, &cd);
-        if (!g_pipelines[i]) return false;
-    }
-    wgpuShaderModuleRelease(module);
+    if (!make_scaled_pipelines(g_scale, g_pipelines)) return false;
     ensure_capacity();
     g_mode = m;
     return true;
@@ -1705,6 +1735,15 @@ bool attach_surface(const SurfaceTarget &target) {
     WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvas = WGPU_EMSCRIPTEN_SURFACE_SOURCE_CANVAS_HTML_SELECTOR_INIT;
     canvas.selector = view(target.selector ? target.selector : "#canvas");
     sd.nextInChain = &canvas.chain;
+#elif defined(_WIN32)
+    if (target.kind != SurfaceTarget::Win32)
+    {
+        return false;
+    }
+    WGPUSurfaceSourceWindowsHWND win32_surface = WGPU_SURFACE_SOURCE_WINDOWS_HWND_INIT;
+    win32_surface.hinstance = target.display;
+    win32_surface.hwnd = target.surface;
+    sd.nextInChain = &win32_surface.chain;
 #else
     WGPUSurfaceSourceXlibWindow xlib = WGPU_SURFACE_SOURCE_XLIB_WINDOW_INIT;
     WGPUSurfaceSourceWaylandSurface wayland = WGPU_SURFACE_SOURCE_WAYLAND_SURFACE_INIT;
@@ -1782,14 +1821,14 @@ bool attach_surface(const SurfaceTarget &target) {
     g_blit = wgpuDeviceCreateRenderPipeline(g_device, &rd);
     wgpuShaderModuleRelease(module);
     wgpuPipelineLayoutRelease(pipeline_layout);
-    g_blit_params = make_buffer(32, WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst);
+    g_blit_params = make_buffer(36, WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst);
     WGPUBindGroupEntry be[2] = {WGPU_BIND_GROUP_ENTRY_INIT, WGPU_BIND_GROUP_ENTRY_INIT};
     be[0].binding = 0;
     be[0].buffer = g_scratch;
     be[0].size = WGPU_WHOLE_SIZE;
     be[1].binding = 1;
     be[1].buffer = g_blit_params;
-    be[1].size = 32;
+    be[1].size = 36;
     WGPUBindGroupDescriptor bd = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
     bd.layout = layout;
     bd.entryCount = 2;
@@ -1810,16 +1849,33 @@ bool has_surface() { return g_surface != nullptr; }
 
 bool present(const DisplaySource &src) {
     if (!g_surface) return false;
+    apply_requested_render_scale();
+    ps2::g_presentation_options.native_width.store(static_cast<int>(src.width), std::memory_order_relaxed);
+    ps2::g_presentation_options.native_height.store(static_cast<int>(src.height), std::memory_order_relaxed);
     flush_all();
     const std::uint32_t current = field_base(g_field), previous = field_base(g_field + 1);
     static const bool weave_off = std::getenv("PS2_NO_DEINTERLACE") != nullptr;
-    const bool blend = src.halved && g_have_previous && g_last_width == src.width && g_last_height == src.height && !weave_off;
+    static const bool env_force_blend = []()
+    {
+        const char *value = std::getenv("PS2_FORCE_DEINTERLACE");
+        const bool enabled = value && std::strcmp(value, "1") == 0;
+        if (enabled)
+        {
+            std::fprintf(stderr, "[gpu] forced field blending enabled\n");
+        }
+        return enabled;
+    }();
+    const bool force_blend = ps2::g_presentation_options.force_blend.load(std::memory_order_relaxed) || env_force_blend;
+    const bool blend = (src.halved || force_blend) && g_have_previous && g_last_width == src.width && g_last_height == src.height && !weave_off;
     const std::uint32_t param = push_params({src.fbp, src.fbw, src.psm, src.dbx, src.dby, src.width, src.height, src.halved ? 1u : 0u, current});
     g_commands.push_back({kDisplay, (src.width * g_scale + 7) / 8, (src.height * g_scale + 7) / 8, param});
-    const float sw = static_cast<float>(g_surface_width), sh = static_cast<float>(g_surface_height);
-    const float aspect = g_options.widescreen ? 16.0f / 9.0f : 4.0f / 3.0f;
-    const float vw = std::min(sw, sh * aspect), vh = vw / aspect;
-    const std::uint32_t blit[8] = {src.width * g_scale, src.height * g_scale, current, previous, blend ? 1u : 0u, static_cast<std::uint32_t>(vw), static_cast<std::uint32_t>(vh), ps2::video_options()};
+    g_present_viewport = ps2::window_viewport(static_cast<int>(g_surface_width), static_cast<int>(g_surface_height),
+        static_cast<int>(src.width), static_cast<int>(src.height), g_options.widescreen,
+        ps2::g_presentation_options.scaling.load(std::memory_order_relaxed));
+    const std::uint32_t blit[9] = {src.width * g_scale, src.height * g_scale, current, previous, blend ? 1u : 0u,
+        static_cast<std::uint32_t>(g_present_viewport.width), static_cast<std::uint32_t>(g_present_viewport.height),
+        ps2::g_presentation_options.nearest.load(std::memory_order_relaxed) ? 1u : 0u,
+        ps2::video_options()};
     wgpuQueueWriteBuffer(g_queue, g_blit_params, 0, blit, sizeof blit);
     ++g_field;
     g_have_previous = true;
@@ -1858,6 +1914,7 @@ Copy g_copies[3];
 std::uint64_t g_copy_order = 0;
 
 bool display_async(const DisplaySource &src, std::vector<std::uint32_t> &rgba, std::uint32_t &width, std::uint32_t &height) {
+    apply_requested_render_scale();
 #ifdef __EMSCRIPTEN__
     wgpuInstanceProcessEvents(g_instance);
 #else
@@ -1920,6 +1977,7 @@ bool display_async(const DisplaySource &src, std::vector<std::uint32_t> &rgba, s
 }
 
 bool display(const DisplaySource &src, std::vector<std::uint32_t> &rgba, std::uint32_t &width, std::uint32_t &height) {
+    apply_requested_render_scale();
     flush_all();
     const std::uint32_t param = push_params({src.fbp, src.fbw, src.psm, src.dbx, src.dby, src.width, src.height, src.halved ? 1u : 0u});
     g_commands.push_back({kDisplay, (src.width * g_scale + 7) / 8, (src.height * g_scale + 7) / 8, param});
@@ -1928,6 +1986,91 @@ bool display(const DisplaySource &src, std::vector<std::uint32_t> &rgba, std::ui
     height = src.height * g_scale;
     rgba.resize(static_cast<std::size_t>(width) * height);
     read_back(g_scratch, rgba.size() * 4, rgba.data());
+    return true;
+}
+
+bool change_render_scale(std::uint32_t scale)
+{
+    scale = std::clamp(scale, 1u, 4u);
+    if (scale == g_scale) return true;
+    if (!g_device || g_mode == Mode::off) return false;
+    WGPULimits limits = WGPU_LIMITS_INIT;
+    if (wgpuDeviceGetLimits(g_device, &limits) != WGPUStatus_Success ||
+        (8ull << 20) * scale * scale > std::min(limits.maxBufferSize, limits.maxStorageBufferBindingSize)) return false;
+
+    // Finish all old-scale draws and pending reads before replacing resources.
+    // EE/IOP/game state is untouched; only the GPU sample grid is rebuilt.
+    wait_idle();
+    while (g_pending.busy && !g_pending.ready) pump();
+    collect_download();
+    for (Copy &copy : g_copies)
+    {
+        while (copy.busy && !copy.ready) pump();
+        if (copy.ready) wgpuBufferUnmap(copy.buffer);
+        if (copy.buffer) wgpuBufferRelease(copy.buffer);
+        copy = {};
+    }
+
+    std::vector<std::uint32_t> old_samples(static_cast<std::size_t>(kMemorySize / 4) * g_scale * g_scale);
+    read_back(g_vram, old_samples.size() * 4, old_samples.data());
+    const auto new_samples = ps2::rescale_vram_samples(old_samples, g_scale, scale);
+    const auto vram_bytes = static_cast<std::uint64_t>(kMemorySize) * scale * scale;
+    WGPUBuffer vram = make_buffer(vram_bytes, WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc | WGPUBufferUsage_CopyDst);
+    WGPUBuffer scratch = make_buffer(vram_bytes * 2, WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc);
+    WGPUBuffer readback = make_buffer(vram_bytes, WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst);
+    WGPUComputePipeline pipelines[kPipelines] = {};
+    if (!vram || !scratch || !readback || !make_scaled_pipelines(scale, pipelines))
+    {
+        if (vram) wgpuBufferRelease(vram);
+        if (scratch) wgpuBufferRelease(scratch);
+        if (readback) wgpuBufferRelease(readback);
+        for (auto pipeline : pipelines) if (pipeline) wgpuComputePipelineRelease(pipeline);
+        return false;
+    }
+    wgpuQueueWriteBuffer(g_queue, vram, 0, new_samples.data(), new_samples.size() * 4);
+
+    const auto old_vram = g_vram, old_scratch = g_scratch, old_readback = g_readback;
+    g_vram = vram;
+    g_scratch = scratch;
+    g_readback = readback;
+    g_scale = scale;
+    g_copy_words = (1u << 20) * scale * scale;
+    g_field_words = (1u << 19) * scale * scale;
+    g_tiles_per_row = (2048 * static_cast<int>(scale) + 15) / 16;
+    g_tile_count.assign(static_cast<std::size_t>(g_tiles_per_row) * g_tiles_per_row, 0);
+    g_tile_fill.assign(g_tile_count.size(), 0);
+    g_touched.clear();
+    for (int i = 0; i < kPipelines; ++i)
+    {
+        wgpuComputePipelineRelease(g_pipelines[i]);
+        g_pipelines[i] = pipelines[i];
+    }
+    rebuild_group();
+    if (g_blit)
+    {
+        const auto layout = wgpuRenderPipelineGetBindGroupLayout(g_blit, 0);
+        WGPUBindGroupEntry entries[2] = {WGPU_BIND_GROUP_ENTRY_INIT, WGPU_BIND_GROUP_ENTRY_INIT};
+        entries[0].binding = 0;
+        entries[0].buffer = g_scratch;
+        entries[0].size = WGPU_WHOLE_SIZE;
+        entries[1].binding = 1;
+        entries[1].buffer = g_blit_params;
+        entries[1].size = 36;
+        WGPUBindGroupDescriptor descriptor = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
+        descriptor.layout = layout;
+        descriptor.entryCount = 2;
+        descriptor.entries = entries;
+        if (g_blit_group) wgpuBindGroupRelease(g_blit_group);
+        g_blit_group = wgpuDeviceCreateBindGroup(g_device, &descriptor);
+        wgpuBindGroupLayoutRelease(layout);
+    }
+    wgpuBufferRelease(old_vram);
+    wgpuBufferRelease(old_scratch);
+    wgpuBufferRelease(old_readback);
+    g_have_previous = false;
+    g_field = 0;
+    ps2::g_presentation_options.active_render_scale.store(static_cast<int>(scale), std::memory_order_relaxed);
+    std::fprintf(stderr, "[gpu] internal render resolution %ux\n", scale);
     return true;
 }
 

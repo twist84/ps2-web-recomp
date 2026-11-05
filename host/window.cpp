@@ -1,14 +1,26 @@
+#if defined(_WIN32) && !defined(NOMINMAX)
+#define NOMINMAX
+#endif
+
 #include "window.hpp"
+#include "window_preferences.hpp"
 
 #include "ps2/system.hpp"
+#include "ps2/presentation.hpp"
 
 #include <SDL.h>
 #include <SDL_syswm.h>
+#ifndef _WIN32
 #include <sys/resource.h>
 #include <unistd.h>
+#endif
 #ifdef __APPLE__
 #include <SDL_metal.h>
 #include <mach/mach.h>
+#endif
+#ifdef _WIN32
+#include <windows.h>
+#include <psapi.h>
 #endif
 
 #include <algorithm>
@@ -17,6 +29,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -68,6 +81,230 @@ std::uint64_t g_last = 0;
 std::vector<std::uint32_t> g_pixels;
 bool g_gpu_present = false;
 
+s_window_preferences g_preferences;
+std::string g_preferences_path;
+std::atomic<int> g_output_volume{100};
+std::atomic<bool> g_muted{false};
+std::string g_notice;
+Uint64 g_notice_until = 0;
+bool g_fullscreen_enter = false;
+bool g_scaling_shortcut_2 = false;
+bool g_resize_pending = true;
+
+const char *scaling_name()
+{
+    switch (ps2::g_presentation_options.scaling.load(std::memory_order_relaxed))
+    {
+    case ps2::e_window_scaling::integer_aspect: return "integer aspect";
+    case ps2::e_window_scaling::integer_pixels: return "integer pixels";
+    case ps2::e_window_scaling::scale_2x: return "2x aspect (limited to window size)";
+    case ps2::e_window_scaling::scale_3x: return "3x aspect (limited to window size)";
+    case ps2::e_window_scaling::scale_4x: return "4x aspect (limited to window size)";
+    case ps2::e_window_scaling::pixels_2x: return "2x pixels (limited to window size)";
+    case ps2::e_window_scaling::pixels_3x: return "3x pixels (limited to window size)";
+    case ps2::e_window_scaling::pixels_4x: return "4x pixels (limited to window size)";
+    default: return "fit";
+    }
+}
+
+void notify(const char *message)
+{
+    g_notice = message;
+    g_notice_until = SDL_GetTicks64() + 3000;
+    std::fprintf(stderr, "[window] %s\n", message);
+    SDL_SetWindowTitle(g_window, message);
+}
+
+void apply_preferences()
+{
+    ps2::g_presentation_options.scaling.store(static_cast<ps2::e_window_scaling>(g_preferences.scaling), std::memory_order_relaxed);
+    ps2::g_presentation_options.nearest.store(g_preferences.nearest != 0, std::memory_order_relaxed);
+    ps2::g_presentation_options.force_blend.store(g_preferences.field_blending != 0, std::memory_order_relaxed);
+    g_output_volume.store(g_preferences.volume, std::memory_order_relaxed);
+    g_muted.store(g_preferences.muted != 0, std::memory_order_relaxed);
+    const int fixed = ps2::fixed_window_scale(static_cast<ps2::e_window_scaling>(g_preferences.scaling));
+    ps2::g_presentation_options.render_scale.store(g_preferences.render_scale ? g_preferences.render_scale : std::max(1, fixed), std::memory_order_relaxed);
+}
+
+void resize_for_scaling()
+{
+    static int last_width = 0, last_height = 0;
+    const int source_width = ps2::g_presentation_options.native_width.load(std::memory_order_relaxed);
+    const int source_height = ps2::g_presentation_options.native_height.load(std::memory_order_relaxed);
+    if (source_width <= 0 || source_height <= 0) return;
+    if (!g_resize_pending && source_width == last_width && source_height == last_height) return;
+    g_resize_pending = false;
+    last_width = source_width;
+    last_height = source_height;
+    const auto mode = static_cast<ps2::e_window_scaling>(g_preferences.scaling);
+    if (!g_preferences.resize_with_scale || !ps2::fixed_window_scale(mode) ||
+        (SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN)) return;
+
+    const int display = std::max(0, SDL_GetWindowDisplayIndex(g_window));
+    SDL_Rect usable{};
+    if (SDL_GetDisplayUsableBounds(display, &usable) != 0) return;
+    int logical_width = 0, logical_height = 0, pixel_width = 0, pixel_height = 0;
+    SDL_GetWindowSize(g_window, &logical_width, &logical_height);
+    SDL_GetWindowSizeInPixels(g_window, &pixel_width, &pixel_height);
+    const double dpi_x = static_cast<double>(std::max(pixel_width, 1)) / std::max(logical_width, 1);
+    const double dpi_y = static_cast<double>(std::max(pixel_height, 1)) / std::max(logical_height, 1);
+    int top = 32, left = 0, bottom = 0, right = 0;
+    SDL_GetWindowBordersSize(g_window, &top, &left, &bottom, &right);
+    const auto viewport = ps2::window_viewport(
+        std::max(1, static_cast<int>((usable.w - left - right) * dpi_x)),
+        std::max(1, static_cast<int>((usable.h - top - bottom) * dpi_y)),
+        source_width, source_height, ps2::g_options.widescreen, mode);
+    const int width = std::max(320, static_cast<int>(std::lround(viewport.width / dpi_x)));
+    const int height = std::max(240, static_cast<int>(std::lround(viewport.height / dpi_y)));
+    if (SDL_GetWindowFlags(g_window) & SDL_WINDOW_MAXIMIZED) SDL_RestoreWindow(g_window);
+    SDL_SetWindowSize(g_window, width, height);
+    SDL_SetWindowPosition(g_window, SDL_WINDOWPOS_CENTERED_DISPLAY(display), SDL_WINDOWPOS_CENTERED_DISPLAY(display));
+    g_preferences.width = width;
+    g_preferences.height = height;
+}
+
+void load_preferences()
+{
+    g_preferences.width = ps2::g_options.widescreen ? 1280 : 960;
+    g_preferences.widescreen = ps2::g_options.widescreen ? 1 : 0;
+    const char *config_path = std::getenv("PS2_CONFIG");
+    if (config_path && *config_path)
+    {
+        g_preferences_path = config_path;
+    }
+    else if (std::FILE *file = std::fopen("ps2run.ini", "r"))
+    {
+        g_preferences_path = "ps2run.ini";
+        std::fclose(file);
+    }
+    else if (char *directory = SDL_GetPrefPath("ps2-web-recomp", "native"))
+    {
+        g_preferences_path = std::string(directory) + "window.ini";
+        SDL_free(directory);
+    }
+    if (std::FILE *file = std::fopen(g_preferences_path.c_str(), "r"))
+    {
+        read_window_preferences(file, g_preferences);
+        std::fclose(file);
+    }
+    // The previous environment switch remains a startup override.
+    if (const char *value = std::getenv("PS2_FORCE_DEINTERLACE"))
+    {
+        if (!std::strcmp(value, "0") || !std::strcmp(value, "1"))
+        {
+            g_preferences.field_blending = *value == '1';
+        }
+    }
+    ps2::g_options.widescreen = g_preferences.widescreen != 0;
+    apply_preferences();
+}
+
+void save_preferences()
+{
+    if (g_preferences_path.empty()) return;
+    std::FILE *file = std::fopen(g_preferences_path.c_str(), "w");
+    if (!file)
+    {
+        std::fprintf(stderr, "[window] cannot save preferences: %s\n", g_preferences_path.c_str());
+        return;
+    }
+    const bool wrote = write_window_preferences(file, g_preferences);
+    const bool closed = std::fclose(file) == 0;
+    if (!wrote || !closed) std::fprintf(stderr, "[window] could not write window preferences\n");
+}
+
+void toggle_fullscreen()
+{
+    const bool full = (SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN) != 0;
+    if (SDL_SetWindowFullscreen(g_window, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP) != 0)
+    {
+        notify(SDL_GetError());
+        return;
+    }
+    g_preferences.fullscreen = !full;
+    SDL_ShowCursor(full ? SDL_ENABLE : SDL_DISABLE);
+    g_resize_pending = true;
+    save_preferences();
+}
+
+bool handle_hotkey(const SDL_KeyboardEvent &key)
+{
+    if (key.repeat) return false;
+    switch (key.keysym.scancode)
+    {
+    case SDL_SCANCODE_RETURN:
+        if (!(key.keysym.mod & KMOD_ALT)) return false;
+        g_fullscreen_enter = true;
+        [[fallthrough]];
+    case SDL_SCANCODE_F11:
+        toggle_fullscreen();
+        return true;
+    case SDL_SCANCODE_F6:
+        g_preferences.scaling = (g_preferences.scaling + 1) % 9;
+        apply_preferences();
+        g_resize_pending = true;
+        notify(scaling_name());
+        break;
+    case SDL_SCANCODE_2:
+    case SDL_SCANCODE_3:
+    case SDL_SCANCODE_4:
+        if (!(key.keysym.mod & KMOD_CTRL)) return false;
+        if (key.keysym.scancode == SDL_SCANCODE_2) g_scaling_shortcut_2 = true;
+        g_preferences.scaling = key.keysym.scancode == SDL_SCANCODE_2 ? 3 :
+            key.keysym.scancode == SDL_SCANCODE_3 ? 4 : 5;
+        if (key.keysym.mod & KMOD_SHIFT) g_preferences.scaling += 3;
+        apply_preferences();
+        g_resize_pending = true;
+        notify(scaling_name());
+        break;
+    case SDL_SCANCODE_F5:
+    {
+        g_preferences.render_scale = (g_preferences.render_scale + 1) % 5;
+        apply_preferences();
+        char message[64];
+        std::snprintf(message, sizeof message, "GPU render scale: %s%d", g_preferences.render_scale ? "" : "auto / ",
+            ps2::g_presentation_options.render_scale.load(std::memory_order_relaxed));
+        notify(message);
+        break;
+    }
+    case SDL_SCANCODE_F7:
+        g_preferences.nearest = !g_preferences.nearest;
+        apply_preferences();
+        notify(g_preferences.nearest ? "nearest filtering" : "smooth filtering");
+        break;
+    case SDL_SCANCODE_F8:
+        g_preferences.field_blending = !g_preferences.field_blending;
+        apply_preferences();
+        notify(g_preferences.field_blending ? "field blending on" : "field blending auto");
+        break;
+    case SDL_SCANCODE_F9:
+        g_preferences.show_stats = !g_preferences.show_stats;
+        notify(g_preferences.show_stats ? "performance title on" : "performance title off");
+        break;
+    case SDL_SCANCODE_F10:
+        g_preferences.muted = !g_preferences.muted;
+        apply_preferences();
+        notify(g_preferences.muted ? "muted" : "unmuted");
+        break;
+    case SDL_SCANCODE_MINUS:
+    case SDL_SCANCODE_EQUALS:
+    case SDL_SCANCODE_KP_MINUS:
+    case SDL_SCANCODE_KP_PLUS:
+    {
+        const bool down = key.keysym.scancode == SDL_SCANCODE_MINUS || key.keysym.scancode == SDL_SCANCODE_KP_MINUS;
+        g_preferences.volume = std::clamp(g_preferences.volume + (down ? -5 : 5), 0, 100);
+        apply_preferences();
+        char message[64];
+        std::snprintf(message, sizeof message, "volume %d%%%s", g_preferences.volume, g_preferences.muted ? " (muted)" : "");
+        notify(message);
+        break;
+    }
+    default: return false;
+    }
+    save_preferences();
+    return true;
+}
+
 bool create_renderer() {
     g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_ACCELERATED);
     if (!g_renderer) g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_SOFTWARE);
@@ -88,19 +325,16 @@ bool attach_gpu() {
     SDL_GetWindowSizeInPixels(g_window, &w, &h);
     target.width = static_cast<std::uint32_t>(w);
     target.height = static_cast<std::uint32_t>(h);
-#ifdef __APPLE__
-    if (info.subsystem == SDL_SYSWM_COCOA) {
-        SDL_MetalView view = SDL_Metal_CreateView(g_window);
-        if (!view) return false;
-        target.kind = ps2::WindowTarget::Metal;
-        target.surface = SDL_Metal_GetLayer(view);
-        SDL_Metal_GetDrawableSize(g_window, &w, &h);
-        target.width = static_cast<std::uint32_t>(w);
-        target.height = static_cast<std::uint32_t>(h);
-        return target.surface && ps2::attach_window(target);
+    switch (info.subsystem) {
+#if defined(SDL_VIDEO_DRIVER_WINDOWS)
+    case SDL_SYSWM_WINDOWS:
+    {
+        target.kind = ps2::WindowTarget::Win32;
+        target.display = info.info.win.hinstance;
+        target.surface = info.info.win.window;
+        break;
     }
 #endif
-    switch (info.subsystem) {
 #if defined(SDL_VIDEO_DRIVER_X11)
     case SDL_SYSWM_X11:
         target.kind = ps2::WindowTarget::X11;
@@ -164,10 +398,11 @@ void poll_port(int port) {
     std::uint16_t pressed = 0;
     std::uint8_t l2 = 0xFF, r2 = 0xFF;
     std::uint8_t lx = 0x80, ly = 0x80, rx = 0x80, ry = 0x80;
-    if (port == 0) {
+    if (port == 0 && (SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS)) {
         const Uint8 *keys = SDL_GetKeyboardState(nullptr);
         for (const KeyBinding &b : kKeys)
-            if (keys[b.key]) pressed |= b.button;
+            if (keys[b.key] && !(b.key == SDL_SCANCODE_RETURN && (g_fullscreen_enter || (SDL_GetModState() & KMOD_ALT))) &&
+                !(b.key == SDL_SCANCODE_2 && (g_scaling_shortcut_2 || (SDL_GetModState() & KMOD_CTRL)))) pressed |= b.button;
         if (keys[SDL_SCANCODE_LEFT]) lx = 0x00;
         if (keys[SDL_SCANCODE_RIGHT]) lx = 0xFF;
         if (keys[SDL_SCANCODE_UP]) ly = 0x00;
@@ -207,11 +442,17 @@ void poll_port(int port) {
 void poll() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
-        if (e.type == SDL_QUIT) ps2::halt("window closed");
-        if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_F11 && !e.key.repeat) {
-            const bool full = SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN;
-            SDL_SetWindowFullscreen(g_window, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
-            SDL_ShowCursor(full ? SDL_ENABLE : SDL_DISABLE);
+        if (e.type == SDL_QUIT) { save_preferences(); ps2::halt("window closed"); }
+        if (e.type == SDL_KEYDOWN) handle_hotkey(e.key);
+        if (e.type == SDL_KEYUP && e.key.keysym.scancode == SDL_SCANCODE_RETURN) g_fullscreen_enter = false;
+        if (e.type == SDL_KEYUP && e.key.keysym.scancode == SDL_SCANCODE_2) g_scaling_shortcut_2 = false;
+        if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) g_fullscreen_enter = false;
+        if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) g_scaling_shortcut_2 = false;
+        if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED &&
+            !(SDL_GetWindowFlags(g_window) & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MAXIMIZED | SDL_WINDOW_MINIMIZED)))
+        {
+            g_preferences.width = std::max(320, e.window.data1);
+            g_preferences.height = std::max(240, e.window.data2);
         }
         if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED && g_gpu_present) {
             int w = 0, h = 0;
@@ -232,19 +473,52 @@ void poll() {
     }
     poll_port(0);
     poll_port(1);
+    resize_for_scaling();
 }
 
 void show_pixels(const std::uint32_t *rgba, std::uint32_t w, std::uint32_t h) {
+    const bool force_blend = ps2::g_presentation_options.force_blend.load(std::memory_order_relaxed);
+    static std::vector<std::uint32_t> g_prev_pixels;
+    std::vector<std::uint32_t> blended;
+    if (force_blend && !g_prev_pixels.empty() && g_prev_pixels.size() == static_cast<std::size_t>(w) * h) {
+        blended.resize(w * h);
+        std::memcpy(blended.data(), rgba, w * h * 4);
+        // Full-frame field blend: average current with previous frame to eliminate vertical jitter,
+        // matching the WebGPU present() path behavior.
+        for (std::size_t i = 0; i < g_pixels.size(); ++i) {
+            const std::uint32_t cur = blended[i];
+            const std::uint32_t prev = g_prev_pixels[i];
+            const std::uint8_t cr = static_cast<std::uint8_t>(cur);
+            const std::uint8_t cg = static_cast<std::uint8_t>(cur >> 8);
+            const std::uint8_t cb = static_cast<std::uint8_t>(cur >> 16);
+            const std::uint8_t pr = static_cast<std::uint8_t>(prev);
+            const std::uint8_t pg = static_cast<std::uint8_t>(prev >> 8);
+            const std::uint8_t pb = static_cast<std::uint8_t>(prev >> 16);
+            blended[i] = ((cr + pr) >> 1) | (((cg + pg) >> 1) << 8) | (((cb + pb) >> 1) << 16) | 0xFF000000u;
+        }
+    }
+    g_prev_pixels.assign(rgba, rgba + w * h);
+    const unsigned scale = static_cast<unsigned>(std::max(1, ps2::g_presentation_options.active_render_scale.load(std::memory_order_relaxed)));
+    const unsigned native_w = g_gpu_present ? w : w / scale;
+    const unsigned native_h = g_gpu_present ? h : h / scale;
+    ps2::g_presentation_options.native_width.store(static_cast<int>(native_w), std::memory_order_relaxed);
+    ps2::g_presentation_options.native_height.store(static_cast<int>(native_h), std::memory_order_relaxed);
     if (w != g_tex_w || h != g_tex_h) {
         if (g_texture) SDL_DestroyTexture(g_texture);
         g_texture = SDL_CreateTexture(g_renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, static_cast<int>(w), static_cast<int>(h));
-        SDL_RenderSetLogicalSize(g_renderer, static_cast<int>(w), static_cast<int>(w) * (ps2::g_options.widescreen ? 9 : 3) / (ps2::g_options.widescreen ? 16 : 4));
         g_tex_w = w;
         g_tex_h = h;
     }
-    SDL_UpdateTexture(g_texture, nullptr, rgba, static_cast<int>(w * 4));
+    SDL_UpdateTexture(g_texture, nullptr, force_blend && !blended.empty() ? blended.data() : rgba, static_cast<int>(w * 4));
+    SDL_SetTextureScaleMode(g_texture, ps2::g_presentation_options.nearest.load(std::memory_order_relaxed) ? SDL_ScaleModeNearest : SDL_ScaleModeLinear);
+    int output_width = 0, output_height = 0;
+    SDL_GetRendererOutputSize(g_renderer, &output_width, &output_height);
+    const auto viewport = ps2::window_viewport(output_width, output_height, static_cast<int>(native_w), static_cast<int>(native_h),
+        ps2::g_options.widescreen, ps2::g_presentation_options.scaling.load(std::memory_order_relaxed));
+    const SDL_Rect destination{viewport.x, viewport.y, viewport.width, viewport.height};
+    SDL_SetRenderDrawColor(g_renderer, 0, 0, 0, 255);
     SDL_RenderClear(g_renderer);
-    SDL_RenderCopy(g_renderer, g_texture, nullptr, nullptr);
+    SDL_RenderCopy(g_renderer, g_texture, nullptr, &destination);
     SDL_RenderPresent(g_renderer);
 }
 
@@ -288,9 +562,20 @@ void pace() {
 }
 
 double process_cpu_seconds() {
+#ifdef _WIN32
+    FILETIME creation_time{}, exit_time{}, kernel_time{}, user_time{};
+    if (!GetProcessTimes(GetCurrentProcess(), &creation_time, &exit_time, &kernel_time, &user_time)) return 0.0;
+    ULARGE_INTEGER kernel_ticks{}, user_ticks{};
+    kernel_ticks.LowPart = kernel_time.dwLowDateTime;
+    kernel_ticks.HighPart = kernel_time.dwHighDateTime;
+    user_ticks.LowPart = user_time.dwLowDateTime;
+    user_ticks.HighPart = user_time.dwHighDateTime;
+    return (static_cast<double>(kernel_ticks.QuadPart) + static_cast<double>(user_ticks.QuadPart)) / 10000000.0;
+#else
     rusage usage{};
     getrusage(RUSAGE_SELF, &usage);
     return static_cast<double>(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) + static_cast<double>(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1e6;
+#endif
 }
 
 double resident_mb() {
@@ -300,12 +585,19 @@ double resident_mb() {
     if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&task), &count) != KERN_SUCCESS) return 0.0;
     return static_cast<double>(task.resident_size) / (1024.0 * 1024.0);
 #endif
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS counters{};
+    counters.cb = sizeof(counters);
+    if (!GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters))) return 0.0;
+    return static_cast<double>(counters.WorkingSetSize) / (1024.0 * 1024.0);
+#else
     long pages = 0, resident = 0;
     if (std::FILE *f = std::fopen("/proc/self/statm", "r")) {
         if (std::fscanf(f, "%ld %ld", &pages, &resident) != 2) resident = 0;
         std::fclose(f);
     }
     return static_cast<double>(resident) * static_cast<double>(sysconf(_SC_PAGESIZE)) / (1024.0 * 1024.0);
+#endif
 }
 
 void show_speed() {
@@ -328,16 +620,24 @@ void show_speed() {
     if (seconds < 1.0) return;
     const double cpu = process_cpu_seconds(), gpu = ps2::gpu_busy_ms(), emu = emu_idle(), vu = ps2::vu_thread_idle_ms(), gs = ps2::thread_waited_ms(2);
     const std::uint64_t interpreted = ps2::vu1_interpreted_calls();
-    char title[256];
+    char title[192];
     const double queued = g_audio ? SDL_GetQueuedAudioSize(g_audio) / static_cast<double>(kAudioBytesPerMs) : 0.0;
-    std::snprintf(title, sizeof title, "ps2-web-recomp  %.1f fps  CPU %.0f%%  GPU %.0f%%  idle emu %.0f%% vu %.0f%% gs %.0f%%  RAM %.0f MB  audio %.0f ms",
-                  static_cast<double>(frames) / seconds, (cpu - cpu_start) / seconds * 100.0, (gpu - gpu_start) / (seconds * 10.0),
-                  (emu - emu_start) / (seconds * 10.0), (vu - vu_start) / (seconds * 10.0), (gs - gs_start) / (seconds * 10.0), resident_mb(), queued);
-    if (interpreted > interpreted_start) {
-        const std::size_t used = std::strlen(title);
-        std::snprintf(title + used, sizeof title - used, "  vu1 interpreted %.0f/s", static_cast<double>(interpreted - interpreted_start) / seconds);
+    std::snprintf(title, sizeof title, "ps2-web-recomp  %.1f fps  CPU %.0f%%  GPU %.0f%%  RAM %.0f MB  audio %.0f ms", static_cast<double>(frames) / seconds,
+                  (cpu - cpu_start) / seconds * 100.0, (gpu - gpu_start) / (seconds * 10.0), resident_mb(), queued);
+    const int render_scale = ps2::g_presentation_options.active_render_scale.load(std::memory_order_relaxed);
+    const int render_width = ps2::g_presentation_options.native_width.load(std::memory_order_relaxed) * render_scale;
+    const int render_height = ps2::g_presentation_options.native_height.load(std::memory_order_relaxed) * render_scale;
+    const auto used = std::strlen(title);
+    std::snprintf(title + used, sizeof title - used, "  render %dx%d (%dx)", render_width, render_height, render_scale);
+    if (SDL_GetTicks64() < g_notice_until)
+    {
+        SDL_SetWindowTitle(g_window, g_notice.c_str());
     }
-    SDL_SetWindowTitle(g_window, title);
+    else
+    {
+        if (!g_preferences.show_stats) std::snprintf(title, sizeof title, "ps2-web-recomp | %s", scaling_name());
+        SDL_SetWindowTitle(g_window, title);
+    }
     start = now;
     frames = 0;
     emu_start = emu;
@@ -357,7 +657,20 @@ void on_vblank() {
 
 void queue_audio(const std::int16_t *samples, std::size_t frames) {
     if (SDL_GetQueuedAudioSize(g_audio) > 500 * kAudioBytesPerMs) return;
-    SDL_QueueAudio(g_audio, samples, static_cast<Uint32>(frames * 4));
+    const int volume = g_muted.load(std::memory_order_relaxed) ? 0 : g_output_volume.load(std::memory_order_relaxed);
+    if (volume == 100)
+    {
+        SDL_QueueAudio(g_audio, samples, static_cast<Uint32>(frames * 4));
+        return;
+    }
+    // Queue silence when muted so the audio clock still paces emulation.
+    thread_local std::vector<std::int16_t> adjusted;
+    adjusted.resize(frames * 2);
+    for (std::size_t i = 0; i < adjusted.size(); ++i)
+    {
+        adjusted[i] = static_cast<std::int16_t>(static_cast<int>(samples[i]) * volume / 100);
+    }
+    SDL_QueueAudio(g_audio, adjusted.data(), static_cast<Uint32>(frames * 4));
 }
 
 }
@@ -367,18 +680,31 @@ bool open_window(bool fullscreen) {
         std::fprintf(stderr, "SDL: %s\n", SDL_GetError());
         return false;
     }
+    load_preferences();
+    fullscreen = fullscreen || g_preferences.fullscreen != 0;
+    g_preferences.fullscreen = fullscreen;
 #ifdef __APPLE__
     const Uint32 metal = std::getenv("PS2_SDL_RENDERER") ? 0u : SDL_WINDOW_METAL;
 #else
     const Uint32 metal = 0u;
 #endif
-    const Uint32 flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | metal | (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0u);
-    g_window = SDL_CreateWindow("ps2-web-recomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, ps2::g_options.widescreen ? 1280 : 960, 720, flags);
+    const Uint32 flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | metal | (fullscreen ? static_cast<Uint32>(SDL_WINDOW_FULLSCREEN_DESKTOP) : 0u);
+    SDL_Rect usable{};
+    if (SDL_GetDisplayUsableBounds(0, &usable) == 0)
+    {
+        g_preferences.width = std::clamp(g_preferences.width, 320, std::max(320, usable.w - 32));
+        g_preferences.height = std::clamp(g_preferences.height, 240, std::max(240, usable.h - 64));
+    }
+    g_window = SDL_CreateWindow("ps2-web-recomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, g_preferences.width, g_preferences.height, flags);
     if (!g_window) {
         std::fprintf(stderr, "SDL: %s\n", SDL_GetError());
         return false;
     }
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+    SDL_SetWindowMinimumSize(g_window, 320, 240);
+    save_preferences();
+    std::fprintf(stderr, "[window] F5 GPU resolution | F6 scaling | Ctrl+2/3/4 aspect | Ctrl+Shift+2/3/4 pixels | F7 filter | F8 field blending | F9 stats | F10 mute | +/- volume | F11 / Alt+Enter fullscreen\n");
+    std::fprintf(stderr, "[window] settings: %s\n", g_preferences_path.c_str());
     SDL_AudioSpec want{}, have{};
     want.freq = 48000;
     want.format = AUDIO_S16SYS;
@@ -400,7 +726,7 @@ int run_window(const std::function<int()> &emulate) {
     g_gpu_present = attach_gpu();
     std::fprintf(stderr, "[window] %s\n", g_gpu_present ? "presenting through WebGPU" : "presenting through SDL");
     if (!g_gpu_present && !create_renderer()) return 1;
-    const bool threads = !std::getenv("PS2_ONE_THREAD") && !std::getenv("PS2_TIME") && ps2::g_options.frames_dir.empty();
+    const bool threads = g_gpu_present && !std::getenv("PS2_ONE_THREAD") && !std::getenv("PS2_TIME") && ps2::g_options.frames_dir.empty();
     if (!threads) {
         ps2::g_options.on_vblank = on_vblank;
         return emulate();

@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "kernel.hpp"
 
 #include "hw.hpp"
