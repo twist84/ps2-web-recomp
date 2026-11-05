@@ -41,7 +41,7 @@ struct Envelope {
         if (++counter < cycles) return;
         counter = 0;
         int delta = (decrease ? -8 + (rate & 3) : 7 - (rate & 3)) << std::max(0, 11 - shift);
-        if (exponential && decrease) delta = delta * level / 0x8000;
+        if (exponential && decrease) delta = (delta * level) >> 15;
         level = std::clamp(level + delta, 0, 0x7FFF);
     }
 };
@@ -79,10 +79,11 @@ std::vector<std::uint16_t> g_ram(kRamWords);
 Core g_cores[2];
 std::uint32_t g_statx_settling[2] = {};
 bool g_block_end[2][24][2];
+std::uint8_t g_block_flags[2][24][2];
 
-bool *block_end(const Voice &v) {
+std::uint8_t *block_flags(const Voice &v) {
     const int c = &v >= g_cores[1].voices ? 1 : 0;
-    return g_block_end[c][&v - g_cores[c].voices];
+    return g_block_flags[c][&v - g_cores[c].voices];
 }
 std::uint16_t g_spdif_out = 0, g_spdif_mode = 0, g_spdif_media = 0;
 std::vector<std::int16_t> g_audio;
@@ -119,21 +120,16 @@ void decode_block(Voice &v, std::int16_t *out) {
         out[i] = static_cast<std::int16_t>(sample);
     }
     v.block[out == v.buffer ? 0 : 1] = at;
-    block_end(v)[out == v.buffer ? 0 : 1] = (flags & 1u) != 0;
+    block_flags(v)[out == v.buffer ? 0 : 1] = static_cast<std::uint8_t>(flags);
     if ((flags & 4u) && !v.lsax_written) v.lsax = at;
     v.next = (at + 8) & kRamMask;
-    if (flags & 1u) {
-        v.next = v.lsax;
-        if (!(flags & 2u)) {
-            v.phase = kRelease;
-            v.env.level = 0;
-        }
-    }
+    // Decoding looks ahead. Retire ENDX/mute events only when this block
+    // is consumed by render_voice(), not while filling the decode buffer.
+    if (flags & 1u) v.next = v.lsax;
 }
 
 void key_on(Voice &v) {
     v.key_on = false;
-    v.lsax_written = false;
     v.end = false;
     v.next = v.ssa;
     v.s1 = v.s2 = 0;
@@ -190,11 +186,18 @@ void render_voice(Voice &v, std::int32_t (*sum)[2], std::int16_t *raw) {
         while ((position >> 12) >= 28) {
             position -= 28u << 12;
             std::memmove(v.buffer, v.buffer + 28, 28 * sizeof(std::int16_t));
-            v.end |= block_end(v)[0];
+            const unsigned flags = block_flags(v)[0];
+            v.end |= (flags & 1u) != 0;
             v.block[0] = v.block[1];
-            block_end(v)[0] = block_end(v)[1];
+            block_flags(v)[0] = block_flags(v)[1];
             v.position = position;
             check_irq(v.block[0], 8);
+            if ((flags & 1u) && !(flags & 2u))
+            {
+                v.phase = kOff;
+                v.env.level = 0;
+                break;
+            }
             decode_block(v, v.buffer + 28);
         }
         update_envelope(v);
@@ -313,7 +316,8 @@ void tick() {
     for (unsigned n = 0; n < kBatch; ++n) {
         std::int32_t mix[2] = {};
         for (int c = 0; c < 2; ++c) {
-            const std::int32_t l = sum[c][n][0] * master(g_cores[c].mvol[0]) >> 15, r = sum[c][n][1] * master(g_cores[c].mvol[1]) >> 15;
+            const std::int32_t l = static_cast<std::int32_t>((static_cast<std::int64_t>(sum[c][n][0]) * master(g_cores[c].mvol[0])) >> 15);
+            const std::int32_t r = static_cast<std::int32_t>((static_cast<std::int64_t>(sum[c][n][1]) * master(g_cores[c].mvol[1])) >> 15);
             if (!c) {
                 rings[1][0][n] = clamp16(l);
                 rings[1][1][n] = clamp16(r);
@@ -408,7 +412,11 @@ void key(Core &k, std::uint32_t mask, bool on) {
     for (int i = 0; i < 24; ++i) {
         if (!(mask & (1u << i))) continue;
         Voice &v = k.voices[i];
-        if (on) v.key_on = true;
+        if (on)
+        {
+            v.lsax_written = false;
+            v.key_on = true;
+        }
         else if (v.key_on) v.key_on = false;
         else if (v.phase != kOff) v.phase = kRelease;
     }
@@ -524,7 +532,7 @@ void reset() {
     kernel::register_job(kernel::kJobSpuTick, [](const kernel::Job &) { tick(); });
     std::fill(g_ram.begin(), g_ram.end(), 0);
     for (Core &k : g_cores) k = Core{};
-    std::memset(g_block_end, 0, sizeof g_block_end);
+    std::memset(g_block_flags, 0, sizeof g_block_flags);
     g_spdif_out = g_spdif_mode = g_spdif_media = 0;
     g_audio.clear();
     g_record = std::getenv("PS2_DUMP_AUDIO") != nullptr;
@@ -618,7 +626,7 @@ void state(ps2::state::Stream &s) {
         s.pod(k.voices);
         if (s.loading())
             for (const Voice &v : k.voices)
-                for (int i = 0; i < 2; ++i) block_end(v)[i] = (g_ram[v.block[i] & kRamMask] >> 8) & 1u;
+                for (int i = 0; i < 2; ++i) block_flags(v)[i] = static_cast<std::uint8_t>(g_ram[v.block[i] & kRamMask] >> 8);
         s.pod(k.attr);
         s.pod(k.admas);
         s.pod(k.irqa);

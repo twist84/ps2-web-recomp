@@ -11,7 +11,15 @@ for cxx in "${cxx_candidates[@]}"; do
   command -v "$cxx" > /dev/null || continue
   for stdlib in "" -stdlib=libc++; do
     if "$cxx" -std=c++20 $stdlib "$cxx_probe/t.cpp" -o "$cxx_probe/t" 2> /dev/null; then
-      cxx_flags=(-DCMAKE_CXX_COMPILER="$(command -v "$cxx")")
+      cxx_path=$(command -v "$cxx")
+      case "$(uname -s)" in
+        MINGW*|MSYS*)
+          # Native CMake needs the actual Windows executable, including .exe.
+          if [ -f "$cxx_path.exe" ]; then cxx_path="$cxx_path.exe"; fi
+          cxx_path=$(cygpath -am "$cxx_path")
+          ;;
+      esac
+      cxx_flags=(-DCMAKE_CXX_COMPILER="$cxx_path")
       [ -z "$stdlib" ] || cxx_flags+=(-DCMAKE_CXX_FLAGS="$stdlib")
       break 2
     fi

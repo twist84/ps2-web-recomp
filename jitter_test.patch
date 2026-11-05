@@ -1,0 +1,23 @@
+--- a/runtime/src/gs/gpu/gpu.cpp
++++ b/runtime/src/gs/gpu/gpu.cpp
+@@ -1750,7 +1750,19 @@
+     flush_all();
+     const std::uint32_t current = field_base(g_field), previous = field_base(g_field + 1);
+     static const bool weave_off = std::getenv("PS2_NO_DEINTERLACE") != nullptr;
+-    const bool blend = src.halved && g_have_previous && g_last_width == src.width && g_last_height == src.height && !weave_off;
++    // Diagnostic override: full-height interlaced buffers can also alternate
++    // their rendered vertical position between fields.
++    static const bool force_blend = []()
++    {
++        const char *value = std::getenv("PS2_FORCE_DEINTERLACE");
++        const bool enabled = value && std::strcmp(value, "1") == 0;
++        if (enabled)
++        {
++            std::fprintf(stderr, "[gpu] forced field blending enabled\n");
++        }
++        return enabled;
++    }();
++    const bool blend = (src.halved || force_blend) && g_have_previous && g_last_width == src.width && g_last_height == src.height && !weave_off;
+     const std::uint32_t param = push_params({src.fbp, src.fbw, src.psm, src.dbx, src.dby, src.width, src.height, src.halved ? 1u : 0u, current});
+     g_commands.push_back({kDisplay, (src.width * g_scale + 7) / 8, (src.height * g_scale + 7) / 8, param});
+     const float sw = static_cast<float>(g_surface_width), sh = static_cast<float>(g_surface_height);

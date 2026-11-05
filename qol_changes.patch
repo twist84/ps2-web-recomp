@@ -1,0 +1,2620 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -3,6 +3,8 @@
+ 
+ set(CMAKE_CXX_STANDARD 20)
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
++
++option(PS2_STATIC_CPP_RUNTIME "Link MinGW executable runtime libraries statically" ON)
+ 
+ set(PS2_GENERATED "" CACHE PATH "Folder with the C++ generated for a game")
+ 
+@@ -36,6 +38,7 @@
+     runtime/src/hw.cpp
+     runtime/src/cop.cpp
+     runtime/src/disc.cpp
++    runtime/src/disc_folder.cpp
+     runtime/src/dmac.cpp
+     runtime/src/vif.cpp
+     runtime/src/vu_micro.cpp
+@@ -94,6 +97,7 @@
+     endif()
+ endif()
+ 
++
+ if(PS2_GENERATED)
+     file(GLOB PS2_UNITS CONFIGURE_DEPENDS "${PS2_GENERATED}/*.cpp")
+     add_library(ps2game STATIC ${PS2_UNITS})
+@@ -141,5 +145,41 @@
+         target_sources(ps2run PRIVATE host/window.cpp)
+         target_compile_definitions(ps2run PRIVATE PS2_WINDOW)
+         target_link_libraries(ps2run PRIVATE SDL2::SDL2)
++        if(WIN32)
++            add_executable(SDBZ host/game_main.cpp host/window.cpp)
++            target_compile_definitions(SDBZ PRIVATE PS2_WINDOW)
++            target_link_libraries(SDBZ PRIVATE ps2game ps2runtime SDL2::SDL2 psapi user32)
++            set(PS2_GAME_OUTPUT_DIR "" CACHE PATH "Output directory for the direct SDBZ.exe target")
++            if(PS2_GAME_OUTPUT_DIR)
++                set_target_properties(SDBZ PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PS2_GAME_OUTPUT_DIR}")
++            else()
++                get_filename_component(ps2_game_name "${PS2_GENERATED}" NAME)
++                if(IS_DIRECTORY "${CMAKE_SOURCE_DIR}/games/${ps2_game_name}/disc")
++                    set_target_properties(SDBZ PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/games/${ps2_game_name}/disc")
++                endif()
++            endif()
++            if(DEFINED PS2_WGPU_DLL)
++                add_custom_command(TARGET SDBZ POST_BUILD
++                    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PS2_WGPU_DLL}" "$<TARGET_FILE_DIR:SDBZ>"
++                    VERBATIM)
++            endif()
++            get_filename_component(ps2_compiler_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
++            find_file(PS2_SDL2_DLL NAMES SDL2.dll HINTS "${ps2_compiler_bin}" "${SDL2_DIR}/../../../bin")
++            if(PS2_SDL2_DLL)
++                add_custom_command(TARGET SDBZ POST_BUILD
++                    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PS2_SDL2_DLL}" "$<TARGET_FILE_DIR:SDBZ>"
++                    VERBATIM)
++            endif()
++        endif()
+     endif()
+ endif()
++
++# Each executable must receive this linker option. Linking ps2runtime as a
++# static archive alone does not remove an executable's libc++ DLL dependency.
++if(MINGW AND PS2_STATIC_CPP_RUNTIME)
++    foreach(ps2_native_target eerecomp vurecomp vujit_dump ps2run SDBZ)
++        if(TARGET ${ps2_native_target})
++            target_link_options(${ps2_native_target} PRIVATE -static)
++        endif()
++    endforeach()
++endif()
+--- /dev/null
++++ b/README_FOLDER_DISC.txt
+@@ -0,0 +1,68 @@
++Running from an extracted disc folder
++====================================
++
++When --disc is omitted, ps2run now mounts the folder containing the ELF.
++It reads the extracted game files directly; no ISO is opened in that mode.
++An explicit --disc image.iso still takes priority. --disc folder is also
++accepted, so the disc data folder can differ from the ELF folder.
++
++Important: the original port script extracts only the ELF and selected
++support files. You need ALL the disc files to play without the ISO.
++
++One-time extraction (CLANG64, repository root)
++-------------------------------------------
++python3 scripts/extract_disc_folder.py games/SuperDragonBallZ/disc.iso games/SuperDragonBallZ/disc
++
++Alternatively, use the original ISO path:
++python3 scripts/extract_disc_folder.py "C:/Games/Super Dragon Ball Z (Europe) (Beta).iso" games/SuperDragonBallZ/disc
++
++The helper extracts every file, including files over 64 MiB. It uses the
++repository's existing scripts/disc.py and Python's standard library.
++Keep the .ps2-disc subfolder it creates: layout.tsv records original file
++sectors, and metadata/ stores the ISO directory and volume sectors.
++The source ISO is only needed during extraction. Extraction rewrites the
++extracted files from that ISO, so use the same game revision as your build.
++
++Rebuild (CLANG64)
++----------------
++cmake -S . -B build/native-SuperDragonBallZ
++touch host/main.cpp runtime/src/disc.cpp runtime/src/disc_folder.cpp
++cmake --build build/native-SuperDragonBallZ --target ps2run
++
++Run without --disc
++------------------
++build/native-SuperDragonBallZ/ps2run games/SuperDragonBallZ/disc/SLES_541.61 --window
++
++Or explicitly select the extracted folder:
++build/native-SuperDragonBallZ/ps2run games/SuperDragonBallZ/disc/SLES_541.61 --disc games/SuperDragonBallZ/disc --window
++
++play_SuperDragonBallZ.cmd prefers folder mode if its preserved layout is
++present. Otherwise it keeps using an existing disc.iso, falling back to
++the ELF folder when the ISO is absent. Explicit launch arguments can still
++override the launcher's choice.
++
++Startup should report:
++[disc] using ELF folder: games/SuperDragonBallZ/disc
++[disc] folder preserves original file LBAs and ISO directory metadata
++
++Already-extracted folders
++-------------------------
++Folders without .ps2-disc/layout.tsv are supported using a virtual ISO
++directory and synthetic sector addresses. File lookup, nested directories
++and sector reads work, but games with fixed original sector addresses may
++fail in that mode. Use the extraction helper for original file LBAs.
++
++The preserved layout verifies that its files exist and have the expected
++sizes. Missing or resized files cause a clear mount error. Same-size file
++mods remain possible. Sectors outside recorded files/metadata read as zero;
++non-file protection data or other unusual raw sectors are not retained.
++Actual game behavior still needs verification on your Windows build.
++
++Validation
++----------
++Sanitized C++ tests covered case-insensitive paths, nested and multi-sector
++directories, empty files, partial-sector padding and random sector reads.
++An exported test ISO was extracted and mounted again, reproducing the test
++ISO byte-for-byte with identical file LBAs. Missing files and invalid layout
++paths were rejected. CLI tests covered ELF-folder default, current-directory
++ELFs, explicit ISO overrides and explicit folder overrides.
+--- /dev/null
++++ b/README_GAME_EXE.txt
+@@ -0,0 +1,54 @@
++Direct SDBZ.exe entry point
++===========================
++
++SDBZ.exe is the same compiled runtime and translated EE/VU code as ps2run,
++linked to host/game_main.cpp instead of the command-line host/main.cpp.
++There is no wrapper, child process, archive, unpacking or runtime cache.
++
++Build (CLANG64, repository root)
++-------------------------------
++cmake -S . -B build/native-SuperDragonBallZ
++cmake --build build/native-SuperDragonBallZ --target SDBZ
++
++For the standard port layout, the output is written directly to:
++games/SuperDragonBallZ/disc/SDBZ.exe
++
++CMake copies SDL2.dll and wgpu_native.dll there when it locates them. These
++are the same shared libraries needed by the existing native ps2run build.
++Keep them beside SDBZ.exe. Static C++ runtime linking also applies to SDBZ.
++
++If the standard games/<generated-folder-name>/disc folder does not exist,
++the executable stays in the build directory. You can explicitly select its
++destination using -DPS2_GAME_OUTPUT_DIR=C:/path/to/extracted/disc.
++SDL2 must be enabled for the SDBZ target to be available.
++
++Launch
++------
++Put SDBZ.exe beside the extracted ELF, SYSTEM.CNF, all disc files and the
++.ps2-disc metadata directory, then double-click it. No arguments are used.
++
++The new main reads BOOT2 from SYSTEM.CNF to find the game ELF. If there is
++no boot entry, it selects a single nearby ELF32 MIPS executable (ET_EXEC),
++ignoring relocatable IRX modules. Missing/ambiguous boot files produce an
++error message. It uses SDBZ.exe's own folder regardless of the terminal or
++shortcut working directory, and mounts that folder as the disc source.
++
++Settings and runtime behavior
++-----------------------------
++ps2run.ini is read/written beside SDBZ.exe. Keep your existing customized
++file there. Fullscreen, scaling, filtering, field blending, statistics and
++volume continue to use the existing config and hotkeys. The widescreen key
++selects the presentation aspect ratio: 0=4:3, 1=16:9.
++
++SDBZ.exe starts windowed presentation automatically, with fullscreen taken
++from the saved config. Console logging remains available for diagnostics.
++The original ps2run target remains the command-line utility used by the
++port/exploration scripts. Both targets share the same game/runtime code.
++
++Validation
++----------
++Tests covered BOOT2/BOOT precedence, CRLF/quoted paths, nested boot paths,
++missing files, ambiguous executables and rejection of IRX boot modules.
++The Windows x64 game_main.cpp compilation was checked against the actual
++runtime headers. Config round-trip tests cover the widescreen setting.
++The full game still needs to be built and launched on your Windows machine.
+--- /dev/null
++++ b/README_WINDOWS_QOL.txt
+@@ -0,0 +1,169 @@
++Windows native quality-of-life update
++====================================
++
++Extract this ZIP into C:/dev/ps2-web-recomp and replace the included files.
++Keep your existing ps2run.ini if you have customized its settings.
++It is based on the earlier Windows WebGPU and successful jitter patches.
++The SPU2 audio/stage-completion fixes and generated game code are not
++included or replaced. Keep those files from your working installation.
++
++Features
++--------
++SDBZ.exe        Direct runtime entry point without command-line parsing; see README_GAME_EXE.txt
++Omit --disc     Read game files from the ELF's extracted folder
++                See README_FOLDER_DISC.txt for full extraction instructions
++F5              Cycle GPU render resolution: auto / 1x / 2x / 3x / 4x
++F6              Cycle fit / integer aspect / integer pixels / fixed aspect / fixed pixels
++Ctrl+2/3/4      Select fixed 2x / 3x / 4x aspect scaling directly
++Ctrl+Shift+2/3/4 Select fixed 2x / 3x / 4x pixel scaling directly
++F7              Toggle nearest / smooth filtering
++F8              Toggle forced field blending / automatic blending (WebGPU)
++F9              Toggle performance statistics in the window title
++F10             Toggle mute
++- / =           Lower / raise volume by 5 percent
++Keypad - / +    Lower / raise volume by 5 percent
++F11 / Alt+Enter Toggle desktop fullscreen
++
++Keyboard game input is ignored while the window lacks focus. Alt+Enter
++does not also send the game's Start button. Controller mappings stay as
++before. This update does not add pause or save-state hotkeys.
++
++Default settings: integer aspect scaling, nearest filtering, forced field
++blending enabled, full volume. Window size, fullscreen, scaling, filtering,
++blending, render resolution, automatic window resizing, statistics, mute
++and volume are saved between launches.
++
++All QoL settings are documented in the included ps2run.ini. The launcher
++loads this file from the repository root and saves hotkey changes to it.
++Close the game before editing it manually. SDBZ.exe automatically uses its
++own extracted disc folder and local config; widescreen=0/1 controls its
++presentation aspect ratio. The original ps2run utility retains command-line
++controls for disc paths and diagnostics.
++
++Config lookup order: the PS2_CONFIG environment path, then ps2run.ini in
++the current working directory, then the older per-user settings file at
++%APPDATA%/ps2-web-recomp/native/window.ini. The active path is printed at
++startup. The bundled launcher sets PS2_CONFIG to the included file.
++SDBZ.exe always uses ps2run.ini in its own folder.
++Deleting an active file restores defaults on the next start unless the
++fallback per-user file exists. To explicitly create a fresh default file,
++point PS2_CONFIG to a nonexistent filename in an existing directory.
++Scaling values: 0=fit, 1=integer aspect, 2=integer pixels,
++3=fixed aspect 2x, 4=fixed aspect 3x, 5=fixed aspect 4x,
++6=fixed pixels 2x, 7=fixed pixels 3x, 8=fixed pixels 4x.
++render_scale: 0=follow fixed display multiplier (otherwise 1x), 1..4=override.
++resize_with_scale: 1=resize the window for fixed modes, 0=keep its size.
++The remaining switches use 0 or 1; volume is 0..100.
++
++Scaling details
++---------------
++Fit: fill the available area at 4:3 (or 16:9 with --widescreen).
++Integer aspect: whole multiples of native display height, with the width
++corrected to 4:3 or 16:9 and rounded to a whole pixel at the base size.
++Integer pixels: equal whole-number multipliers for both native framebuffer
++dimensions; the result can be narrower or wider than 4:3.
++Fixed 2x / 3x / 4x: use the selected multiplier of the aspect-corrected
++native display size. By default these choices BOTH resize the window and
++select matching 2x / 3x / 4x internal GPU render resolution. Window resizing
++is limited to the current monitor's usable desktop. The display uses the
++largest lower integer multiplier that fits if needed, while the internal
++GPU resolution can still use the requested higher multiplier. Fullscreen
++retains the desktop resolution. If even 1x will not fit, presentation uses
++proportional downscaling.
++Fixed pixel 2x / 3x / 4x: multiply both framebuffer dimensions equally,
++without aspect correction, using the same fit limits. A 512x448 image
++becomes 1024x896, 1536x1344 or 2048x1792 respectively if the window fits it.
++
++For example, a 512x448 image on a 1920x1080 output uses:
++fit=1440x1080, integer aspect=1194x896, integer pixels=1024x896.
++
++Integer scaling can leave large black borders. If even 1x will not fit,
++the image scales down proportionally instead of being cropped. Scaling
++adapts to PAL/NTSC display dimensions and window resizing. It controls
++presentation size. GPU resolution now follows fixed modes by default;
++set render_scale=1..4 or use F5 to override it independently. Set
++resize_with_scale=0 to retain a manually chosen window size. The legacy
++PS2_SCALE environment variable is still a startup override (1..4).
++Exact texel-to-screen integer ratios are obtained with integer pixels at
++the native GPU render scale. Aspect correction necessarily changes the
++horizontal pixel shape.
++
++The performance title reports actual internal render dimensions and scale.
++GPU scale changes are applied between frames without restarting the game;
++VRAM samples are remapped and dependent GPU resources/shaders rebuilt.
++A scale change can briefly pause rendering. 4x requires more GPU work than
++1x; unsupported buffer sizes are rejected while the current scale is kept.
++Higher internal resolution requires the WebGPU renderer.
++
++Nearest filtering is crisp. Smooth filtering uses the existing WebGPU
++sharp-bilinear filter; SDL fallback uses linear filtering.
++The field-blending toggle applies to direct WebGPU presentation. The
++earlier PS2_NO_DEINTERLACE switch still disables blending if present.
++
++Build in CLANG64 from the repository root
++---------------------------------------
++1. Build the tools with static runtime linking:
++
++cmake -S . -B build/tools -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=C:/msys64/clang64/bin/clang++.exe -DPS2_STATIC_CPP_RUNTIME=ON
++cmake --build build/tools --target eerecomp vurecomp
++
++2. Reconfigure the existing native game build and rebuild it:
++
++cmake -S . -B build/native-SuperDragonBallZ -DPS2_STATIC_CPP_RUNTIME=ON
++touch host/window.cpp runtime/src/gs/gpu/gpu.cpp runtime/src/gs/gpu/blit.wgsl
++cmake --build build/native-SuperDragonBallZ --target ps2run
++
++The existing native build cache retains the generated-code and SDL2 paths.
++These commands assume the working build directories from our earlier steps.
++You do not need to regenerate translated EE/VU code for this update.
++
++Folder disc support adds runtime/src/disc_folder.cpp to the runtime target.
++Reconfigure/build as above so the new source is compiled. Explicit ISO
++arguments continue to work; see README_FOLDER_DISC.txt for details.
++
++Static runtime linking is now ON by default under MinGW/CLANG64. It applies
++to eerecomp, vurecomp, vujit_dump and ps2run. It can be disabled with
++-DPS2_STATIC_CPP_RUNTIME=OFF. Other toolchains are unaffected.
++SDL2.dll and wgpu_native.dll remain separate dependencies of the runner.
++
++Run
++---
++Double-click play_SuperDragonBallZ.cmd in the repository root. It uses
++saved preferences and clears the old field-blending environment overrides
++within that launcher only.
++
++Or run in CLANG64:
++
++unset PS2_FORCE_DEINTERLACE PS2_NO_DEINTERLACE PS2_TRACE_DISPLAY
++build/native-SuperDragonBallZ/ps2run games/SuperDragonBallZ/disc/SLES_541.61 --disc games/SuperDragonBallZ/disc.iso --window
++
++PS2_FORCE_DEINTERLACE=0 or =1 is still accepted as a startup override.
++Leave it unset for the saved F8 preference to control subsequent launches.
++Mute continues to queue silent audio, preserving the audio pacing clock.
++
++Validation
++----------
++Viewport bounds/integer-multiple tests and settings round-trip/invalid-input
++tests passed under AddressSanitizer and UndefinedBehaviorSanitizer.
++Window and GPU C++ syntax checks passed against official SDL2 and
++wgpu-native v29.0.1.1 headers. Offscreen shader/render tests passed for
++nearest/smooth filtering, field blending and black letterboxing.
++Live GPU scale transition tests covered 1x/2x/3x/4x, preserved VRAM/CLUT
++contents, rebuilt presentation bindings, and verified output dimensions.
++The standalone GPU test used a software OpenGL adapter on the test host;
++the production backend selection is unchanged. An SDL dummy-display test
++also verified actual window resizing and shortcut/config overrides.
++CMake's generated build graph includes -static for all four executables.
++eerecomp was also successfully linked statically on the Linux test host.
++vurecomp uses Clang-specific intrinsics unavailable in that host's GCC.
++The complete Windows build and this game still need validation locally.
++
++Optional developer checks (not needed to play):
++g++ -std=c++20 -Iruntime/include -Ihost tests/presentation_tests.cpp -o presentation_tests
++./presentation_tests
++python tests/presentation_gpu_test.py
++The GPU test requires Python's wgpu package and a working adapter.
++
++qol_changes.patch contains only the changes relative to the earlier
++Windows GPU package plus the successful jitter test. Full source files
++are included so applying the patch manually is not required.
+--- /dev/null
++++ b/host/game_boot.hpp
+@@ -0,0 +1,90 @@
++#pragma once
++
++#include <algorithm>
++#include <array>
++#include <cctype>
++#include <filesystem>
++#include <fstream>
++#include <stdexcept>
++#include <string>
++
++namespace ps2::game
++{
++inline std::string trim(std::string text)
++{
++    const auto space = [](unsigned char c) { return std::isspace(c) != 0; };
++    while (!text.empty() && space(static_cast<unsigned char>(text.front()))) text.erase(text.begin());
++    while (!text.empty() && space(static_cast<unsigned char>(text.back()))) text.pop_back();
++    return text;
++}
++
++inline std::string upper(std::string text)
++{
++    for (char &c : text) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
++    return text;
++}
++
++inline bool ee_executable(const std::filesystem::path &path)
++{
++    std::array<unsigned char, 20> header{};
++    std::ifstream input(path, std::ios::binary);
++    input.read(reinterpret_cast<char *>(header.data()), header.size());
++    return input.good() && header[0] == 0x7F && header[1] == 'E' && header[2] == 'L' && header[3] == 'F' &&
++        header[4] == 1 && header[5] == 1 && header[16] == 2 && header[17] == 0 && header[18] == 8 && header[19] == 0;
++}
++
++inline std::filesystem::path find_elf(const std::filesystem::path &folder)
++{
++    namespace fs = std::filesystem;
++    fs::path config;
++    for (const auto &entry : fs::directory_iterator(folder))
++        if (entry.is_regular_file() && upper(entry.path().filename().string()) == "SYSTEM.CNF") config = entry.path();
++    std::string boot, boot2;
++    if (!config.empty())
++    {
++        std::ifstream input(config);
++        if (!input) throw std::runtime_error("Cannot read SYSTEM.CNF beside SDBZ.exe");
++        std::string line;
++        while (std::getline(input, line))
++        {
++            const auto equals = line.find('=');
++            if (equals == std::string::npos) continue;
++            const auto key = upper(trim(line.substr(0, equals)));
++            if (key == "BOOT2") boot2 = trim(line.substr(equals + 1));
++            else if (key == "BOOT") boot = trim(line.substr(equals + 1));
++        }
++    }
++    std::string value = boot2.empty() ? boot : boot2;
++    if (!value.empty())
++    {
++        if (value.front() == '"' || value.front() == '\'')
++        {
++            const auto end = value.find(value.front(), 1);
++            if (end == std::string::npos) throw std::runtime_error("Unclosed BOOT2 filename in SYSTEM.CNF");
++            value = value.substr(1, end - 1);
++        }
++        else value = value.substr(0, value.find_first_of(" \t\r\n"));
++        if (const auto colon = value.find(':'); colon != std::string::npos) value.erase(0, colon + 1);
++        std::replace(value.begin(), value.end(), '\\', '/');
++        while (!value.empty() && value.front() == '/') value.erase(value.begin());
++        if (const auto version = value.find(';'); version != std::string::npos) value.resize(version);
++        const fs::path relative = std::u8string(value.begin(), value.end());
++        if (relative.empty() || relative.is_absolute() || relative.has_root_name() || value.find(':') != std::string::npos)
++            throw std::runtime_error("Invalid BOOT2 filename in SYSTEM.CNF");
++        for (const auto &part : relative) if (part == "..") throw std::runtime_error("BOOT2 must refer to a file in the extracted disc folder");
++        const auto elf = folder / relative;
++        if (!fs::is_regular_file(elf) || !ee_executable(elf)) throw std::runtime_error("SYSTEM.CNF boot file is missing or is not a PS2 executable: " + value);
++        return elf;
++    }
++
++    fs::path found;
++    for (const auto &entry : fs::directory_iterator(folder))
++    {
++        if (!entry.is_regular_file() || !ee_executable(entry.path())) continue;
++        if (!found.empty()) throw std::runtime_error("Several PS2 executables found; provide SYSTEM.CNF with BOOT2 beside SDBZ.exe");
++        found = entry.path();
++    }
++    if (found.empty()) throw std::runtime_error("Place SDBZ.exe beside the extracted game ELF and SYSTEM.CNF");
++    return found;
++}
++}
+--- /dev/null
++++ b/host/game_main.cpp
+@@ -0,0 +1,56 @@
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#define WIN32_LEAN_AND_MEAN
++#include <windows.h>
++
++#include "game_boot.hpp"
++#include "window.hpp"
++#include "ps2/system.hpp"
++
++#include <cstdio>
++#include <vector>
++
++void register_generated_code();
++void register_generated_vu();
++
++int main()
++{
++    try
++    {
++        std::wstring path(32768, L'\0');
++        const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
++        if (!length || length >= path.size()) throw std::runtime_error("Cannot locate SDBZ.exe");
++        path.resize(length);
++        const auto folder = std::filesystem::path(path).parent_path();
++        std::filesystem::current_path(folder);
++        const auto elf = ps2::game::find_elf(folder);
++        const auto settings = folder / L"ps2run.ini";
++        if (!SetEnvironmentVariableW(L"PS2_CONFIG", settings.c_str())) throw std::runtime_error("Cannot set game config path");
++        SetEnvironmentVariableW(L"PS2_FORCE_DEINTERLACE", nullptr);
++        SetEnvironmentVariableW(L"PS2_NO_DEINTERLACE", nullptr);
++        ps2::g_options.disc_path = folder.string();
++        std::fprintf(stderr, "[game] ELF: %s\n[game] disc folder: %s\n", elf.string().c_str(), folder.string().c_str());
++
++        if (!open_window(false)) return 1;
++        register_generated_code();
++        register_generated_vu();
++        return run_window([&]() -> int
++        {
++            std::uint32_t entry = 0;
++            if (!ps2::load_elf(elf.string(), entry))
++            {
++                std::fprintf(stderr, "cannot load %s\n", elf.string().c_str());
++                return 1;
++            }
++            ps2::boot(entry, {elf.string()});
++            return ps2::run();
++        });
++    }
++    catch (const std::exception &error)
++    {
++        std::fprintf(stderr, "[game] %s\n", error.what());
++        MessageBoxA(nullptr, error.what(), "SDBZ.exe", MB_OK | MB_ICONERROR);
++        return 1;
++    }
++}
+--- a/host/main.cpp
++++ b/host/main.cpp
+@@ -10,6 +10,7 @@
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
++#include <filesystem>
+ #include <string>
+ #include <vector>
+ 
+@@ -21,7 +22,7 @@
+ int usage() {
+     std::fprintf(stderr,
+                  "usage: ps2run <elf> [--arg text]... [--frames n] [--ntsc] [--misses file]\n"
+-                 "              [--disc image.iso] [--memcard card.ps2] [--pal | --ntsc] [--trace-syscalls] [--trace-io] [--trace-threads]\n"
++                 "              [--disc image.iso|folder] [--memcard card.ps2] [--pal | --ntsc] [--trace-syscalls] [--trace-io] [--trace-threads]\n"
+                  "              [--trace-iop] [--trace-iop-hle] [--frames-dir dir] [--frame-every n]\n"
+                  "              [--press frame:button[+button][:frames]]... [--window] [--fullscreen]\n"
+                  "              [--save-state frame:file] [--load-state file] [--widescreen] [--patches file]\n");
+@@ -35,6 +36,7 @@
+     std::vector<std::string> args{argv[1]};
+     [[maybe_unused]] bool window = false, fullscreen = false;
+     std::string load_path;
++    bool disc_provided = false;
+     for (int i = 2; i < argc; ++i) {
+         const std::string a = argv[i];
+         if (a == "--arg" && i + 1 < argc) args.push_back(argv[++i]);
+@@ -51,7 +53,10 @@
+         }
+         else if (a == "--trace-io") ps2::g_options.trace_io = true;
+         else if (a == "--trace-threads") ps2::g_options.trace_threads = true;
+-        else if (a == "--disc" && i + 1 < argc) ps2::g_options.disc_path = argv[++i];
++        else if (a == "--disc" && i + 1 < argc) {
++            ps2::g_options.disc_path = argv[++i];
++            disc_provided = true;
++        }
+         else if (a == "--memcard" && i + 1 < argc) ps2::g_options.memcard_path = argv[++i];
+         else if (a == "--trace-iop") ps2::g_options.trace_iop_modules = true;
+         else if (a == "--trace-iop-hle") ps2::g_options.trace_iop_hle = true;
+@@ -80,6 +85,13 @@
+         }
+         else if (a == "--load-state" && i + 1 < argc) load_path = argv[++i];
+         else return usage();
++    }
++
++    if (!disc_provided)
++    {
++        auto folder = std::filesystem::path(argv[1]).parent_path();
++        ps2::g_options.disc_path = folder.empty() ? "." : folder.string();
++        std::fprintf(stderr, "[disc] using ELF folder: %s\n", ps2::g_options.disc_path.c_str());
+     }
+ 
+ #ifdef PS2_WINDOW
+--- a/host/window.cpp
++++ b/host/window.cpp
+@@ -3,8 +3,10 @@
+ #endif
+ 
+ #include "window.hpp"
++#include "window_preferences.hpp"
+ 
+ #include "ps2/system.hpp"
++#include "ps2/presentation.hpp"
+ 
+ #include <SDL.h>
+ #include <SDL_syswm.h>
+@@ -21,6 +23,8 @@
+ #include <cmath>
+ #include <cstdio>
+ #include <cstdlib>
++#include <cstring>
++#include <string>
+ #include <thread>
+ #include <vector>
+ 
+@@ -71,6 +75,230 @@
+ std::uint64_t g_last = 0;
+ std::vector<std::uint32_t> g_pixels;
+ bool g_gpu_present = false;
++
++s_window_preferences g_preferences;
++std::string g_preferences_path;
++std::atomic<int> g_output_volume{100};
++std::atomic<bool> g_muted{false};
++std::string g_notice;
++Uint64 g_notice_until = 0;
++bool g_fullscreen_enter = false;
++bool g_scaling_shortcut_2 = false;
++bool g_resize_pending = true;
++
++const char *scaling_name()
++{
++    switch (ps2::g_presentation_options.scaling.load(std::memory_order_relaxed))
++    {
++    case ps2::e_window_scaling::integer_aspect: return "integer aspect";
++    case ps2::e_window_scaling::integer_pixels: return "integer pixels";
++    case ps2::e_window_scaling::scale_2x: return "2x aspect (limited to window size)";
++    case ps2::e_window_scaling::scale_3x: return "3x aspect (limited to window size)";
++    case ps2::e_window_scaling::scale_4x: return "4x aspect (limited to window size)";
++    case ps2::e_window_scaling::pixels_2x: return "2x pixels (limited to window size)";
++    case ps2::e_window_scaling::pixels_3x: return "3x pixels (limited to window size)";
++    case ps2::e_window_scaling::pixels_4x: return "4x pixels (limited to window size)";
++    default: return "fit";
++    }
++}
++
++void notify(const char *message)
++{
++    g_notice = message;
++    g_notice_until = SDL_GetTicks64() + 3000;
++    std::fprintf(stderr, "[window] %s\n", message);
++    SDL_SetWindowTitle(g_window, message);
++}
++
++void apply_preferences()
++{
++    ps2::g_presentation_options.scaling.store(static_cast<ps2::e_window_scaling>(g_preferences.scaling), std::memory_order_relaxed);
++    ps2::g_presentation_options.nearest.store(g_preferences.nearest != 0, std::memory_order_relaxed);
++    ps2::g_presentation_options.force_blend.store(g_preferences.field_blending != 0, std::memory_order_relaxed);
++    g_output_volume.store(g_preferences.volume, std::memory_order_relaxed);
++    g_muted.store(g_preferences.muted != 0, std::memory_order_relaxed);
++    const int fixed = ps2::fixed_window_scale(static_cast<ps2::e_window_scaling>(g_preferences.scaling));
++    ps2::g_presentation_options.render_scale.store(g_preferences.render_scale ? g_preferences.render_scale : std::max(1, fixed), std::memory_order_relaxed);
++}
++
++void resize_for_scaling()
++{
++    static int last_width = 0, last_height = 0;
++    const int source_width = ps2::g_presentation_options.native_width.load(std::memory_order_relaxed);
++    const int source_height = ps2::g_presentation_options.native_height.load(std::memory_order_relaxed);
++    if (source_width <= 0 || source_height <= 0) return;
++    if (!g_resize_pending && source_width == last_width && source_height == last_height) return;
++    g_resize_pending = false;
++    last_width = source_width;
++    last_height = source_height;
++    const auto mode = static_cast<ps2::e_window_scaling>(g_preferences.scaling);
++    if (!g_preferences.resize_with_scale || !ps2::fixed_window_scale(mode) ||
++        (SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN)) return;
++
++    const int display = std::max(0, SDL_GetWindowDisplayIndex(g_window));
++    SDL_Rect usable{};
++    if (SDL_GetDisplayUsableBounds(display, &usable) != 0) return;
++    int logical_width = 0, logical_height = 0, pixel_width = 0, pixel_height = 0;
++    SDL_GetWindowSize(g_window, &logical_width, &logical_height);
++    SDL_GetWindowSizeInPixels(g_window, &pixel_width, &pixel_height);
++    const double dpi_x = static_cast<double>(std::max(pixel_width, 1)) / std::max(logical_width, 1);
++    const double dpi_y = static_cast<double>(std::max(pixel_height, 1)) / std::max(logical_height, 1);
++    int top = 32, left = 0, bottom = 0, right = 0;
++    SDL_GetWindowBordersSize(g_window, &top, &left, &bottom, &right);
++    const auto viewport = ps2::window_viewport(
++        std::max(1, static_cast<int>((usable.w - left - right) * dpi_x)),
++        std::max(1, static_cast<int>((usable.h - top - bottom) * dpi_y)),
++        source_width, source_height, ps2::g_options.widescreen, mode);
++    const int width = std::max(320, static_cast<int>(std::lround(viewport.width / dpi_x)));
++    const int height = std::max(240, static_cast<int>(std::lround(viewport.height / dpi_y)));
++    if (SDL_GetWindowFlags(g_window) & SDL_WINDOW_MAXIMIZED) SDL_RestoreWindow(g_window);
++    SDL_SetWindowSize(g_window, width, height);
++    SDL_SetWindowPosition(g_window, SDL_WINDOWPOS_CENTERED_DISPLAY(display), SDL_WINDOWPOS_CENTERED_DISPLAY(display));
++    g_preferences.width = width;
++    g_preferences.height = height;
++}
++
++void load_preferences()
++{
++    g_preferences.width = ps2::g_options.widescreen ? 1280 : 960;
++    g_preferences.widescreen = ps2::g_options.widescreen ? 1 : 0;
++    const char *config_path = std::getenv("PS2_CONFIG");
++    if (config_path && *config_path)
++    {
++        g_preferences_path = config_path;
++    }
++    else if (std::FILE *file = std::fopen("ps2run.ini", "r"))
++    {
++        g_preferences_path = "ps2run.ini";
++        std::fclose(file);
++    }
++    else if (char *directory = SDL_GetPrefPath("ps2-web-recomp", "native"))
++    {
++        g_preferences_path = std::string(directory) + "window.ini";
++        SDL_free(directory);
++    }
++    if (std::FILE *file = std::fopen(g_preferences_path.c_str(), "r"))
++    {
++        read_window_preferences(file, g_preferences);
++        std::fclose(file);
++    }
++    // The previous environment switch remains a startup override.
++    if (const char *value = std::getenv("PS2_FORCE_DEINTERLACE"))
++    {
++        if (!std::strcmp(value, "0") || !std::strcmp(value, "1"))
++        {
++            g_preferences.field_blending = *value == '1';
++        }
++    }
++    ps2::g_options.widescreen = g_preferences.widescreen != 0;
++    apply_preferences();
++}
++
++void save_preferences()
++{
++    if (g_preferences_path.empty()) return;
++    std::FILE *file = std::fopen(g_preferences_path.c_str(), "w");
++    if (!file)
++    {
++        std::fprintf(stderr, "[window] cannot save preferences: %s\n", g_preferences_path.c_str());
++        return;
++    }
++    const bool wrote = write_window_preferences(file, g_preferences);
++    const bool closed = std::fclose(file) == 0;
++    if (!wrote || !closed) std::fprintf(stderr, "[window] could not write window preferences\n");
++}
++
++void toggle_fullscreen()
++{
++    const bool full = (SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN) != 0;
++    if (SDL_SetWindowFullscreen(g_window, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP) != 0)
++    {
++        notify(SDL_GetError());
++        return;
++    }
++    g_preferences.fullscreen = !full;
++    SDL_ShowCursor(full ? SDL_ENABLE : SDL_DISABLE);
++    g_resize_pending = true;
++    save_preferences();
++}
++
++bool handle_hotkey(const SDL_KeyboardEvent &key)
++{
++    if (key.repeat) return false;
++    switch (key.keysym.scancode)
++    {
++    case SDL_SCANCODE_RETURN:
++        if (!(key.keysym.mod & KMOD_ALT)) return false;
++        g_fullscreen_enter = true;
++        [[fallthrough]];
++    case SDL_SCANCODE_F11:
++        toggle_fullscreen();
++        return true;
++    case SDL_SCANCODE_F6:
++        g_preferences.scaling = (g_preferences.scaling + 1) % 9;
++        apply_preferences();
++        g_resize_pending = true;
++        notify(scaling_name());
++        break;
++    case SDL_SCANCODE_2:
++    case SDL_SCANCODE_3:
++    case SDL_SCANCODE_4:
++        if (!(key.keysym.mod & KMOD_CTRL)) return false;
++        if (key.keysym.scancode == SDL_SCANCODE_2) g_scaling_shortcut_2 = true;
++        g_preferences.scaling = key.keysym.scancode == SDL_SCANCODE_2 ? 3 :
++            key.keysym.scancode == SDL_SCANCODE_3 ? 4 : 5;
++        if (key.keysym.mod & KMOD_SHIFT) g_preferences.scaling += 3;
++        apply_preferences();
++        g_resize_pending = true;
++        notify(scaling_name());
++        break;
++    case SDL_SCANCODE_F5:
++    {
++        g_preferences.render_scale = (g_preferences.render_scale + 1) % 5;
++        apply_preferences();
++        char message[64];
++        std::snprintf(message, sizeof message, "GPU render scale: %s%d", g_preferences.render_scale ? "" : "auto / ",
++            ps2::g_presentation_options.render_scale.load(std::memory_order_relaxed));
++        notify(message);
++        break;
++    }
++    case SDL_SCANCODE_F7:
++        g_preferences.nearest = !g_preferences.nearest;
++        apply_preferences();
++        notify(g_preferences.nearest ? "nearest filtering" : "smooth filtering");
++        break;
++    case SDL_SCANCODE_F8:
++        g_preferences.field_blending = !g_preferences.field_blending;
++        apply_preferences();
++        notify(g_preferences.field_blending ? "field blending on" : "field blending auto");
++        break;
++    case SDL_SCANCODE_F9:
++        g_preferences.show_stats = !g_preferences.show_stats;
++        notify(g_preferences.show_stats ? "performance title on" : "performance title off");
++        break;
++    case SDL_SCANCODE_F10:
++        g_preferences.muted = !g_preferences.muted;
++        apply_preferences();
++        notify(g_preferences.muted ? "muted" : "unmuted");
++        break;
++    case SDL_SCANCODE_MINUS:
++    case SDL_SCANCODE_EQUALS:
++    case SDL_SCANCODE_KP_MINUS:
++    case SDL_SCANCODE_KP_PLUS:
++    {
++        const bool down = key.keysym.scancode == SDL_SCANCODE_MINUS || key.keysym.scancode == SDL_SCANCODE_KP_MINUS;
++        g_preferences.volume = std::clamp(g_preferences.volume + (down ? -5 : 5), 0, 100);
++        apply_preferences();
++        char message[64];
++        std::snprintf(message, sizeof message, "volume %d%%%s", g_preferences.volume, g_preferences.muted ? " (muted)" : "");
++        notify(message);
++        break;
++    }
++    default: return false;
++    }
++    save_preferences();
++    return true;
++}
+ 
+ bool create_renderer() {
+     g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_ACCELERATED);
+@@ -165,10 +393,11 @@
+     std::uint16_t pressed = 0;
+     std::uint8_t l2 = 0xFF, r2 = 0xFF;
+     std::uint8_t lx = 0x80, ly = 0x80, rx = 0x80, ry = 0x80;
+-    if (port == 0) {
++    if (port == 0 && (SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS)) {
+         const Uint8 *keys = SDL_GetKeyboardState(nullptr);
+         for (const KeyBinding &b : kKeys)
+-            if (keys[b.key]) pressed |= b.button;
++            if (keys[b.key] && !(b.key == SDL_SCANCODE_RETURN && (g_fullscreen_enter || (SDL_GetModState() & KMOD_ALT))) &&
++                !(b.key == SDL_SCANCODE_2 && (g_scaling_shortcut_2 || (SDL_GetModState() & KMOD_CTRL)))) pressed |= b.button;
+         if (keys[SDL_SCANCODE_LEFT]) lx = 0x00;
+         if (keys[SDL_SCANCODE_RIGHT]) lx = 0xFF;
+         if (keys[SDL_SCANCODE_UP]) ly = 0x00;
+@@ -208,11 +437,17 @@
+ void poll() {
+     SDL_Event e;
+     while (SDL_PollEvent(&e)) {
+-        if (e.type == SDL_QUIT) ps2::halt("window closed");
+-        if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_F11 && !e.key.repeat) {
+-            const bool full = SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN;
+-            SDL_SetWindowFullscreen(g_window, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+-            SDL_ShowCursor(full ? SDL_ENABLE : SDL_DISABLE);
++        if (e.type == SDL_QUIT) { save_preferences(); ps2::halt("window closed"); }
++        if (e.type == SDL_KEYDOWN) handle_hotkey(e.key);
++        if (e.type == SDL_KEYUP && e.key.keysym.scancode == SDL_SCANCODE_RETURN) g_fullscreen_enter = false;
++        if (e.type == SDL_KEYUP && e.key.keysym.scancode == SDL_SCANCODE_2) g_scaling_shortcut_2 = false;
++        if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) g_fullscreen_enter = false;
++        if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) g_scaling_shortcut_2 = false;
++        if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED &&
++            !(SDL_GetWindowFlags(g_window) & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MAXIMIZED | SDL_WINDOW_MINIMIZED)))
++        {
++            g_preferences.width = std::max(320, e.window.data1);
++            g_preferences.height = std::max(240, e.window.data2);
+         }
+         if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED && g_gpu_present) {
+             int w = 0, h = 0;
+@@ -229,19 +464,31 @@
+     }
+     poll_port(0);
+     poll_port(1);
++    resize_for_scaling();
+ }
+ 
+ void show_pixels(const std::uint32_t *rgba, std::uint32_t w, std::uint32_t h) {
++    const unsigned scale = static_cast<unsigned>(std::max(1, ps2::g_presentation_options.active_render_scale.load(std::memory_order_relaxed)));
++    const unsigned native_w = g_gpu_present ? w : w / scale;
++    const unsigned native_h = g_gpu_present ? h : h / scale;
++    ps2::g_presentation_options.native_width.store(static_cast<int>(native_w), std::memory_order_relaxed);
++    ps2::g_presentation_options.native_height.store(static_cast<int>(native_h), std::memory_order_relaxed);
+     if (w != g_tex_w || h != g_tex_h) {
+         if (g_texture) SDL_DestroyTexture(g_texture);
+         g_texture = SDL_CreateTexture(g_renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, static_cast<int>(w), static_cast<int>(h));
+-        SDL_RenderSetLogicalSize(g_renderer, static_cast<int>(w), static_cast<int>(w) * (ps2::g_options.widescreen ? 9 : 3) / (ps2::g_options.widescreen ? 16 : 4));
+         g_tex_w = w;
+         g_tex_h = h;
+     }
+     SDL_UpdateTexture(g_texture, nullptr, rgba, static_cast<int>(w * 4));
++    SDL_SetTextureScaleMode(g_texture, ps2::g_presentation_options.nearest.load(std::memory_order_relaxed) ? SDL_ScaleModeNearest : SDL_ScaleModeLinear);
++    int output_width = 0, output_height = 0;
++    SDL_GetRendererOutputSize(g_renderer, &output_width, &output_height);
++    const auto viewport = ps2::window_viewport(output_width, output_height, static_cast<int>(native_w), static_cast<int>(native_h),
++        ps2::g_options.widescreen, ps2::g_presentation_options.scaling.load(std::memory_order_relaxed));
++    const SDL_Rect destination{viewport.x, viewport.y, viewport.width, viewport.height};
++    SDL_SetRenderDrawColor(g_renderer, 0, 0, 0, 255);
+     SDL_RenderClear(g_renderer);
+-    SDL_RenderCopy(g_renderer, g_texture, nullptr, nullptr);
++    SDL_RenderCopy(g_renderer, g_texture, nullptr, &destination);
+     SDL_RenderPresent(g_renderer);
+ }
+ 
+@@ -323,7 +570,20 @@
+     const double queued = g_audio ? SDL_GetQueuedAudioSize(g_audio) / static_cast<double>(kAudioBytesPerMs) : 0.0;
+     std::snprintf(title, sizeof title, "ps2-web-recomp  %.1f fps  CPU %.0f%%  GPU %.0f%%  RAM %.0f MB  audio %.0f ms", static_cast<double>(frames) / seconds,
+                   (cpu - cpu_start) / seconds * 100.0, (gpu - gpu_start) / (seconds * 10.0), resident_mb(), queued);
+-    SDL_SetWindowTitle(g_window, title);
++    const int render_scale = ps2::g_presentation_options.active_render_scale.load(std::memory_order_relaxed);
++    const int render_width = ps2::g_presentation_options.native_width.load(std::memory_order_relaxed) * render_scale;
++    const int render_height = ps2::g_presentation_options.native_height.load(std::memory_order_relaxed) * render_scale;
++    const auto used = std::strlen(title);
++    std::snprintf(title + used, sizeof title - used, "  render %dx%d (%dx)", render_width, render_height, render_scale);
++    if (SDL_GetTicks64() < g_notice_until)
++    {
++        SDL_SetWindowTitle(g_window, g_notice.c_str());
++    }
++    else
++    {
++        if (!g_preferences.show_stats) std::snprintf(title, sizeof title, "ps2-web-recomp | %s", scaling_name());
++        SDL_SetWindowTitle(g_window, title);
++    }
+     start = now;
+     frames = 0;
+     cpu_start = cpu;
+@@ -339,7 +599,20 @@
+ 
+ void queue_audio(const std::int16_t *samples, std::size_t frames) {
+     if (SDL_GetQueuedAudioSize(g_audio) > 500 * kAudioBytesPerMs) return;
+-    SDL_QueueAudio(g_audio, samples, static_cast<Uint32>(frames * 4));
++    const int volume = g_muted.load(std::memory_order_relaxed) ? 0 : g_output_volume.load(std::memory_order_relaxed);
++    if (volume == 100)
++    {
++        SDL_QueueAudio(g_audio, samples, static_cast<Uint32>(frames * 4));
++        return;
++    }
++    // Queue silence when muted so the audio clock still paces emulation.
++    thread_local std::vector<std::int16_t> adjusted;
++    adjusted.resize(frames * 2);
++    for (std::size_t i = 0; i < adjusted.size(); ++i)
++    {
++        adjusted[i] = static_cast<std::int16_t>(static_cast<int>(samples[i]) * volume / 100);
++    }
++    SDL_QueueAudio(g_audio, adjusted.data(), static_cast<Uint32>(frames * 4));
+ }
+ 
+ }
+@@ -349,13 +622,26 @@
+         std::fprintf(stderr, "SDL: %s\n", SDL_GetError());
+         return false;
+     }
+-    const Uint32 flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0u);
+-    g_window = SDL_CreateWindow("ps2-web-recomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, ps2::g_options.widescreen ? 1280 : 960, 720, flags);
++    load_preferences();
++    fullscreen = fullscreen || g_preferences.fullscreen != 0;
++    g_preferences.fullscreen = fullscreen;
++    const Uint32 flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | (fullscreen ? static_cast<Uint32>(SDL_WINDOW_FULLSCREEN_DESKTOP) : 0u);
++    SDL_Rect usable{};
++    if (SDL_GetDisplayUsableBounds(0, &usable) == 0)
++    {
++        g_preferences.width = std::clamp(g_preferences.width, 320, std::max(320, usable.w - 32));
++        g_preferences.height = std::clamp(g_preferences.height, 240, std::max(240, usable.h - 64));
++    }
++    g_window = SDL_CreateWindow("ps2-web-recomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, g_preferences.width, g_preferences.height, flags);
+     if (!g_window) {
+         std::fprintf(stderr, "SDL: %s\n", SDL_GetError());
+         return false;
+     }
+     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
++    SDL_SetWindowMinimumSize(g_window, 320, 240);
++    save_preferences();
++    std::fprintf(stderr, "[window] F5 GPU resolution | F6 scaling | Ctrl+2/3/4 aspect | Ctrl+Shift+2/3/4 pixels | F7 filter | F8 field blending | F9 stats | F10 mute | +/- volume | F11 / Alt+Enter fullscreen\n");
++    std::fprintf(stderr, "[window] settings: %s\n", g_preferences_path.c_str());
+     SDL_AudioSpec want{}, have{};
+     want.freq = 48000;
+     want.format = AUDIO_S16SYS;
+--- /dev/null
++++ b/host/window_preferences.hpp
+@@ -0,0 +1,90 @@
++#pragma once
++
++#include <cerrno>
++#include <cctype>
++#include <climits>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++
++struct s_window_preferences
++{
++    int scaling = 1;
++    int nearest = 1;
++    int field_blending = 1;
++    int show_stats = 1;
++    int muted = 0;
++    int volume = 100;
++    int fullscreen = 0;
++    int width = 960;
++    int height = 720;
++    int render_scale = 0;
++    int resize_with_scale = 1;
++    int widescreen = 0;
++};
++
++inline void read_window_preferences(std::FILE *file, s_window_preferences &settings)
++{
++    if (!file)
++    {
++        return;
++    }
++    char line[256];
++    while (std::fgets(line, sizeof line, file))
++    {
++        char key[64], text[64];
++        if (std::sscanf(line, "%63[^=]=%63s", key, text) != 2)
++        {
++            continue;
++        }
++        char *name = key;
++        while (std::isspace(static_cast<unsigned char>(*name))) ++name;
++        char *key_end = name + std::strlen(name);
++        while (key_end > name && std::isspace(static_cast<unsigned char>(key_end[-1]))) --key_end;
++        *key_end = '\0';
++        char *end = nullptr;
++        errno = 0;
++        const long parsed = std::strtol(text, &end, 10);
++        if (errno || end == text || *end || parsed < INT_MIN || parsed > INT_MAX)
++        {
++            continue;
++        }
++        const int value = static_cast<int>(parsed);
++        if (!std::strcmp(name, "scaling") && value >= 0 && value <= 8) settings.scaling = value;
++        if (!std::strcmp(name, "nearest") && value >= 0 && value <= 1) settings.nearest = value;
++        if (!std::strcmp(name, "field_blending") && value >= 0 && value <= 1) settings.field_blending = value;
++        if (!std::strcmp(name, "show_stats") && value >= 0 && value <= 1) settings.show_stats = value;
++        if (!std::strcmp(name, "muted") && value >= 0 && value <= 1) settings.muted = value;
++        if (!std::strcmp(name, "volume") && value >= 0 && value <= 100) settings.volume = value;
++        if (!std::strcmp(name, "fullscreen") && value >= 0 && value <= 1) settings.fullscreen = value;
++        if (!std::strcmp(name, "width") && value >= 320 && value <= 16384) settings.width = value;
++        if (!std::strcmp(name, "height") && value >= 240 && value <= 16384) settings.height = value;
++        if (!std::strcmp(name, "render_scale") && value >= 0 && value <= 4) settings.render_scale = value;
++        if (!std::strcmp(name, "resize_with_scale") && value >= 0 && value <= 1) settings.resize_with_scale = value;
++        if (!std::strcmp(name, "widescreen") && value >= 0 && value <= 1) settings.widescreen = value;
++    }
++}
++
++inline bool write_window_preferences(std::FILE *file, const s_window_preferences &settings)
++{
++    return file && std::fprintf(file,
++        "; ps2run window settings. Close the game before editing.\n"
++        "; Hotkeys save these settings back to this file.\n\n"
++        "; Scaling: 0=fit, 1=auto integer aspect, 2=auto integer pixels\n"
++        "; 3=aspect 2x, 4=aspect 3x, 5=aspect 4x\n"
++        "; 6=pixels 2x, 7=pixels 3x, 8=pixels 4x\n"
++        "; Fixed display multipliers reduce to fit the available desktop.\n"
++        "scaling=%d\n\n"
++        "; Filtering: 1=nearest, 0=smooth\nnearest=%d\n\n"
++        "; WebGPU field blending: 1=force on (jitter fix), 0=automatic\nfield_blending=%d\n\n"
++        "; Window title statistics: 1=show, 0=hide\nshow_stats=%d\n\n"
++        "; Audio: muted is 0 or 1; volume is 0..100 percent\nmuted=%d\nvolume=%d\n\n"
++        "; Desktop fullscreen: 1=on, 0=off\nfullscreen=%d\n\n"
++        "; Windowed client size in SDL window coordinates\nwidth=%d\nheight=%d\n\n"
++        "; GPU render scale: 0=follow fixed display scale (otherwise 1x), 1..4=override\nrender_scale=%d\n\n"
++        "; Resize the window when selecting a fixed scale: 1=yes, 0=no\nresize_with_scale=%d\n\n"
++        "; Aspect ratio: 0=4:3, 1=16:9\nwidescreen=%d\n",
++        settings.scaling, settings.nearest, settings.field_blending, settings.show_stats,
++        settings.muted, settings.volume, settings.fullscreen, settings.width, settings.height,
++        settings.render_scale, settings.resize_with_scale, settings.widescreen) >= 0;
++}
+--- /dev/null
++++ b/play_SuperDragonBallZ.cmd
+@@ -0,0 +1,13 @@
++@echo off
++setlocal
++pushd "%~dp0"
++rem Preferences now control field blending; clear the old diagnostic overrides.
++set "PS2_FORCE_DEINTERLACE="
++set "PS2_NO_DEINTERLACE="
++set "PS2_CONFIG=%~dp0ps2run.ini"
++set "ps2_disc_arg="
++if not exist games\SuperDragonBallZ\disc\.ps2-disc\layout.tsv if exist games\SuperDragonBallZ\disc.iso set "ps2_disc_arg=--disc games/SuperDragonBallZ/disc.iso"
++build\native-SuperDragonBallZ\ps2run.exe games/SuperDragonBallZ/disc/SLES_541.61 %ps2_disc_arg% --window %*
++set "ps2_exit_code=%errorlevel%"
++popd
++exit /b %ps2_exit_code%
+--- /dev/null
++++ b/ps2run.ini
+@@ -0,0 +1,37 @@
++; ps2run window settings. Close the game before editing.
++; Hotkeys save these settings back to this file.
++
++; Scaling: 0=fit, 1=auto integer aspect, 2=auto integer pixels
++; 3=aspect 2x, 4=aspect 3x, 5=aspect 4x
++; 6=pixels 2x, 7=pixels 3x, 8=pixels 4x
++; Fixed display multipliers reduce to fit the available desktop.
++scaling=1
++
++; Filtering: 1=nearest, 0=smooth
++nearest=1
++
++; WebGPU field blending: 1=force on (jitter fix), 0=automatic
++field_blending=1
++
++; Window title statistics: 1=show, 0=hide
++show_stats=1
++
++; Audio: muted is 0 or 1; volume is 0..100 percent
++muted=0
++volume=100
++
++; Desktop fullscreen: 1=on, 0=off
++fullscreen=0
++
++; Windowed client size in SDL window coordinates
++width=960
++height=720
++
++; GPU render scale: 0=follow fixed display scale (otherwise 1x), 1..4=override
++render_scale=0
++
++; Resize the window when selecting a fixed scale: 1=yes, 0=no
++resize_with_scale=1
++
++; Aspect ratio: 0=4:3, 1=16:9
++widescreen=0
+--- /dev/null
++++ b/runtime/include/ps2/presentation.hpp
+@@ -0,0 +1,111 @@
++#pragma once
++
++#include <algorithm>
++#include <atomic>
++#include <cstdint>
++
++namespace ps2
++{
++
++enum class e_window_scaling
++{
++    fit,
++    integer_aspect,
++    integer_pixels,
++    scale_2x,
++    scale_3x,
++    scale_4x,
++    pixels_2x,
++    pixels_3x,
++    pixels_4x
++};
++
++struct s_presentation_options
++{
++    std::atomic<e_window_scaling> scaling{e_window_scaling::fit};
++    std::atomic<bool> nearest{false};
++    std::atomic<bool> force_blend{false};
++    std::atomic<int> render_scale{1};
++    std::atomic<int> active_render_scale{1};
++    std::atomic<int> native_width{0};
++    std::atomic<int> native_height{0};
++};
++
++inline s_presentation_options g_presentation_options;
++
++inline int fixed_window_scale(e_window_scaling scaling)
++{
++    switch (scaling)
++    {
++    case e_window_scaling::scale_2x:
++    case e_window_scaling::pixels_2x: return 2;
++    case e_window_scaling::scale_3x:
++    case e_window_scaling::pixels_3x: return 3;
++    case e_window_scaling::scale_4x:
++    case e_window_scaling::pixels_4x: return 4;
++    default: return 0;
++    }
++}
++
++struct s_window_viewport
++{
++    int x = 0;
++    int y = 0;
++    int width = 1;
++    int height = 1;
++};
++
++// Integer modes use native display dimensions, independent of GPU render scale.
++// If one native image cannot fit, use a fractional fit instead of cropping it.
++inline s_window_viewport window_viewport(int window_width, int window_height,
++    int source_width, int source_height, bool widescreen, e_window_scaling scaling)
++{
++    window_width = std::max(window_width, 1);
++    window_height = std::max(window_height, 1);
++    source_width = std::max(source_width, 1);
++    source_height = std::max(source_height, 1);
++
++    const std::int64_t aspect_width = widescreen ? 16 : 4;
++    const std::int64_t aspect_height = widescreen ? 9 : 3;
++    int width = window_width;
++    int height = window_height;
++    const bool raw_pixels = scaling == e_window_scaling::integer_pixels ||
++        scaling == e_window_scaling::pixels_2x || scaling == e_window_scaling::pixels_3x || scaling == e_window_scaling::pixels_4x;
++    const std::int64_t numerator = raw_pixels ? source_width : aspect_width;
++    const std::int64_t denominator = raw_pixels ? source_height : aspect_height;
++
++    if (static_cast<std::int64_t>(width) * denominator > static_cast<std::int64_t>(height) * numerator)
++    {
++        width = std::max(1, static_cast<int>(height * numerator / denominator));
++    }
++    else
++    {
++        height = std::max(1, static_cast<int>(width * denominator / numerator));
++    }
++
++    if (scaling != e_window_scaling::fit)
++    {
++        const int base_width = raw_pixels ? source_width : std::max(1,
++            static_cast<int>((source_height * aspect_width + aspect_height / 2) / aspect_height));
++        int scale = std::min(window_width / base_width, window_height / source_height);
++        switch (scaling)
++        {
++        case e_window_scaling::scale_2x:
++        case e_window_scaling::pixels_2x: scale = std::min(scale, 2); break;
++        case e_window_scaling::scale_3x:
++        case e_window_scaling::pixels_3x: scale = std::min(scale, 3); break;
++        case e_window_scaling::scale_4x:
++        case e_window_scaling::pixels_4x: scale = std::min(scale, 4); break;
++        default: break;
++        }
++        if (scale >= 1)
++        {
++            width = base_width * scale;
++            height = source_height * scale;
++        }
++    }
++
++    return {(window_width - width) / 2, (window_height - height) / 2, width, height};
++}
++
++}
+--- /dev/null
++++ b/runtime/include/ps2/render_scale.hpp
+@@ -0,0 +1,34 @@
++#pragma once
++
++#include <cstddef>
++#include <cstdint>
++#include <vector>
++
++namespace ps2
++{
++
++// VRAM stores scale*scale subpixel samples for each native word. Remap the
++// sample grid without changing native addresses, including packed formats.
++inline std::vector<std::uint32_t> rescale_vram_samples(
++    const std::vector<std::uint32_t> &source, unsigned from, unsigned to)
++{
++    if (!from || !to || from > 4 || to > 4 || source.size() % (from * from)) return {};
++    if (from == to) return source;
++    const std::size_t words = source.size() / (from * from);
++    std::vector<std::uint32_t> result(words * to * to);
++    for (std::size_t word = 0; word < words; ++word)
++    {
++        for (unsigned y = 0; y < to; ++y)
++        {
++            const unsigned sy = ((2 * y + 1) * from) / (2 * to);
++            for (unsigned x = 0; x < to; ++x)
++            {
++                const unsigned sx = ((2 * x + 1) * from) / (2 * to);
++                result[word * to * to + y * to + x] = source[word * from * from + sy * from + sx];
++            }
++        }
++    }
++    return result;
++}
++
++}
+--- a/runtime/src/disc.cpp
++++ b/runtime/src/disc.cpp
+@@ -1,4 +1,5 @@
+ #include "ps2/disc.hpp"
++#include "disc_folder.hpp"
+ 
+ #include <algorithm>
+ #include <cctype>
+@@ -63,6 +64,15 @@
+ }
+ 
+ bool open(const std::string &path) {
++    g_reader = {};
++    g_probe = {};
++    g_index.clear();
++    g_size = 0;
++    g_layer1 = 0;
++    if (g_file) std::fclose(g_file);
++    g_file = nullptr;
++    std::error_code error;
++    if (std::filesystem::is_directory(std::filesystem::path(path), error)) return open_folder(path);
+     g_file = std::fopen(path.c_str(), "rb");
+     if (!g_file) return false;
+ #if defined(_WIN32)
+@@ -87,6 +97,7 @@
+     g_reader = std::move(reader);
+     g_probe = std::move(probe);
+     g_size = size;
++    g_layer1 = 0;
+     g_index.clear();
+     index_layer(16, 0);
+     std::uint8_t pvd[kSector];
+--- /dev/null
++++ b/runtime/src/disc_folder.cpp
+@@ -0,0 +1,321 @@
++#include "disc_folder.hpp"
++#include "ps2/disc.hpp"
++
++#include <algorithm>
++#include <cctype>
++#include <cstdio>
++#include <cstring>
++#include <fstream>
++#include <limits>
++#include <map>
++#include <memory>
++#include <sstream>
++#include <stdexcept>
++
++namespace ps2::disc
++{
++namespace
++{
++namespace fs = std::filesystem;
++
++std::string upper(std::string text)
++{
++    for (char &c : text) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
++    return text;
++}
++
++std::uint64_t sectors(std::uint64_t size) { return (size + kSector - 1) / kSector; }
++
++struct s_region
++{
++    std::uint64_t offset = 0;
++    std::uint64_t size = 0;
++    fs::path path;
++    std::vector<std::uint8_t> memory;
++    std::uint64_t end() const { return offset + sectors(size) * kSector; }
++};
++
++struct s_folder
++{
++    std::vector<s_region> regions;
++    std::uint64_t size = 0;
++    fs::path cached_path;
++    std::FILE *cached_file = nullptr;
++
++    ~s_folder() { if (cached_file) std::fclose(cached_file); }
++
++    std::size_t read(std::uint64_t offset, void *output, std::size_t count)
++    {
++        if (!count || offset >= size) return 0;
++        count = static_cast<std::size_t>(std::min<std::uint64_t>(count, size - offset));
++        auto *bytes = static_cast<std::uint8_t *>(output);
++        std::memset(bytes, 0, count);
++        auto it = std::upper_bound(regions.begin(), regions.end(), offset,
++            [](std::uint64_t value, const s_region &region) { return value < region.offset; });
++        if (it != regions.begin()) --it;
++        const std::uint64_t end = offset + count;
++        for (; it != regions.end() && it->offset < end; ++it)
++        {
++            const auto begin = std::max(offset, it->offset);
++            const auto finish = std::min(end, it->offset + it->size);
++            if (begin >= finish) continue;
++            const auto relative = begin - it->offset;
++            const auto length = static_cast<std::size_t>(finish - begin);
++            auto *destination = bytes + (begin - offset);
++            if (!it->memory.empty())
++            {
++                std::memcpy(destination, it->memory.data() + relative, length);
++                continue;
++            }
++            if (cached_path != it->path || !cached_file)
++            {
++                if (cached_file) std::fclose(cached_file);
++                cached_path = it->path;
++#ifdef _WIN32
++                cached_file = _wfopen(cached_path.c_str(), L"rb");
++#else
++                cached_file = std::fopen(cached_path.c_str(), "rb");
++#endif
++            }
++            bool seek_ok = false;
++            if (cached_file)
++            {
++#ifdef _WIN32
++                seek_ok = _fseeki64(cached_file, static_cast<long long>(relative), SEEK_SET) == 0;
++#else
++                seek_ok = fseeko(cached_file, static_cast<off_t>(relative), SEEK_SET) == 0;
++#endif
++            }
++            if (!seek_ok || std::fread(destination, 1, length, cached_file) != length)
++            {
++                std::fprintf(stderr, "[disc] cannot read extracted file %s\n", it->path.string().c_str());
++                return static_cast<std::size_t>(begin - offset);
++            }
++        }
++        return count;
++    }
++
++    void validate()
++    {
++        std::sort(regions.begin(), regions.end(), [](const auto &a, const auto &b) { return a.offset < b.offset; });
++        std::uint64_t previous = 0;
++        for (const auto &region : regions)
++        {
++            if (region.offset < previous || region.end() > size) throw std::runtime_error("overlapping or out-of-range folder extents");
++            previous = region.end();
++        }
++    }
++};
++
++void put32(std::uint8_t *out, std::uint32_t value, bool big = false)
++{
++    for (unsigned i = 0; i < 4; ++i) out[big ? 3 - i : i] = static_cast<std::uint8_t>(value >> (i * 8));
++}
++
++void both32(std::uint8_t *out, std::uint32_t value) { put32(out, value); put32(out + 4, value, true); }
++void both16(std::uint8_t *out, std::uint16_t value)
++{
++    out[0] = out[3] = static_cast<std::uint8_t>(value);
++    out[1] = out[2] = static_cast<std::uint8_t>(value >> 8);
++}
++
++struct s_node
++{
++    fs::path path;
++    std::string parent;
++    std::string name;
++    std::uint32_t lba = 0, size = 0;
++    bool directory = false;
++};
++
++std::vector<std::uint8_t> record(const s_node &node, const std::string &name)
++{
++    if (name.size() > 221) throw std::runtime_error("filename is too long for ISO 9660 directory records");
++    std::vector<std::uint8_t> data(34 + (name.size() & ~std::size_t(1)), 0);
++    data[0] = static_cast<std::uint8_t>(data.size());
++    both32(data.data() + 2, node.lba);
++    both32(data.data() + 10, node.size);
++    data[18] = 126; data[19] = 1; data[20] = 1;
++    data[25] = node.directory ? 2 : 0;
++    both16(data.data() + 28, 1);
++    data[32] = static_cast<std::uint8_t>(name.size());
++    std::memcpy(data.data() + 33, name.data(), name.size());
++    return data;
++}
++
++std::vector<std::uint8_t> directory(const std::string &key, const std::map<std::string, s_node> &nodes)
++{
++    std::vector<std::uint8_t> bytes;
++    const auto append = [&](const s_node &node, const std::string &name)
++    {
++        auto data = record(node, name);
++        if (bytes.size() % kSector + data.size() > kSector) bytes.resize(static_cast<std::size_t>(sectors(bytes.size()) * kSector));
++        bytes.insert(bytes.end(), data.begin(), data.end());
++    };
++    const auto &node = nodes.at(key);
++    append(node, std::string(1, '\0'));
++    append(nodes.at(node.parent), std::string(1, '\1'));
++    for (const auto &[child_key, child] : nodes)
++    {
++        if (!child_key.empty() && child.parent == key) append(child, child.name + (child.directory ? "" : ";1"));
++    }
++    bytes.resize(static_cast<std::size_t>(sectors(bytes.size()) * kSector));
++    return bytes;
++}
++
++void synthetic_layout(const fs::path &root, s_folder &folder)
++{
++    std::map<std::string, s_node> nodes;
++    nodes[""] = {root, "", "", 0, 0, true};
++    for (fs::recursive_directory_iterator it(root), end; it != end; ++it)
++    {
++        const auto relative = it->path().lexically_relative(root);
++        if (upper(relative.begin()->string()) == ".PS2-DISC" || it->is_symlink())
++        {
++            if (it->is_directory()) it.disable_recursion_pending();
++            continue;
++        }
++        if (!it->is_directory() && !it->is_regular_file()) continue;
++        const auto key = upper(relative.generic_string());
++        const auto size = it->is_directory() ? 0 : it->file_size();
++        if (size > std::numeric_limits<std::uint32_t>::max()) throw std::runtime_error("extracted file exceeds the PS2 disc file-size limit");
++        s_node node{it->path(), upper(relative.parent_path().generic_string()), upper(relative.filename().string()),
++            0, static_cast<std::uint32_t>(size), it->is_directory()};
++        if (!nodes.emplace(key, std::move(node)).second) throw std::runtime_error("case-insensitive filename collision in extracted folder");
++    }
++    std::vector<std::string> directories;
++    std::map<std::string, std::uint16_t> ordinals;
++    std::uint32_t path_bytes = 0;
++    for (auto &[key, node] : nodes)
++    {
++        if (!node.directory) continue;
++        if (directories.size() >= 65535) throw std::runtime_error("too many extracted directories");
++        ordinals[key] = static_cast<std::uint16_t>(directories.size() + 1);
++        directories.push_back(key);
++        path_bytes += static_cast<std::uint32_t>(8 + ((key.empty() ? 1 : node.name.size()) + 1) / 2 * 2);
++        node.size = static_cast<std::uint32_t>(directory(key, nodes).size());
++    }
++    const auto path_sectors = static_cast<std::uint32_t>(sectors(path_bytes));
++    std::uint32_t next = 18 + path_sectors * 2;
++    for (const auto &key : directories)
++    {
++        auto &node = nodes.at(key);
++        node.lba = next;
++        next += static_cast<std::uint32_t>(sectors(node.size));
++    }
++    next = std::max(next, 32u);
++    for (auto &[key, node] : nodes)
++    {
++        if (node.directory) continue;
++        node.lba = next;
++        next += static_cast<std::uint32_t>(std::max<std::uint64_t>(1, sectors(node.size)));
++        if (node.size) folder.regions.push_back({static_cast<std::uint64_t>(node.lba) * kSector, node.size, node.path, {}});
++    }
++    for (const auto &key : directories)
++    {
++        const auto &node = nodes.at(key);
++        folder.regions.push_back({static_cast<std::uint64_t>(node.lba) * kSector, node.size, {}, directory(key, nodes)});
++    }
++    for (bool big : {false, true})
++    {
++        std::vector<std::uint8_t> table(path_sectors * kSector, 0);
++        std::size_t at = 0;
++        for (const auto &key : directories)
++        {
++            const auto &node = nodes.at(key);
++            const std::string name = key.empty() ? std::string(1, '\0') : node.name;
++            table[at] = static_cast<std::uint8_t>(name.size());
++            put32(table.data() + at + 2, node.lba, big);
++            const auto parent = ordinals.at(node.parent);
++            table[at + (big ? 7 : 6)] = static_cast<std::uint8_t>(parent);
++            table[at + (big ? 6 : 7)] = static_cast<std::uint8_t>(parent >> 8);
++            std::memcpy(table.data() + at + 8, name.data(), name.size());
++            at += 8 + (name.size() + 1) / 2 * 2;
++        }
++        folder.regions.push_back({static_cast<std::uint64_t>(18 + (big ? path_sectors : 0)) * kSector,
++            static_cast<std::uint64_t>(table.size()), {}, std::move(table)});
++    }
++    std::vector<std::uint8_t> pvd(kSector, 0), terminator(kSector, 0);
++    pvd[0] = 1; terminator[0] = 255;
++    std::memcpy(pvd.data() + 1, "CD001", 5);
++    std::memcpy(terminator.data() + 1, "CD001", 5);
++    pvd[6] = terminator[6] = 1;
++    std::memset(pvd.data() + 8, ' ', 64);
++    std::memcpy(pvd.data() + 8, "PLAYSTATION", 11);
++    std::memcpy(pvd.data() + 40, "PS2_FOLDER", 10);
++    both32(pvd.data() + 80, next);
++    both16(pvd.data() + 120, 1); both16(pvd.data() + 124, 1); both16(pvd.data() + 128, kSector);
++    both32(pvd.data() + 132, path_bytes);
++    put32(pvd.data() + 140, 18);
++    put32(pvd.data() + 148, 18 + path_sectors, true);
++    for (unsigned date : {813u, 830u, 847u, 864u}) std::memset(pvd.data() + date, '0', 16);
++    pvd[881] = 1;
++    const auto root_record = record(nodes.at(""), std::string(1, '\0'));
++    std::memcpy(pvd.data() + 156, root_record.data(), root_record.size());
++    folder.regions.push_back({16 * kSector, kSector, {}, std::move(pvd)});
++    folder.regions.push_back({17 * kSector, kSector, {}, std::move(terminator)});
++    folder.size = static_cast<std::uint64_t>(next) * kSector;
++    std::fprintf(stderr, "[disc] folder uses synthetic sectors; use scripts/extract_disc_folder.py to preserve original file LBAs\n");
++}
++
++void original_layout(const fs::path &root, const fs::path &layout, s_folder &folder)
++{
++    std::ifstream input(layout);
++    std::string line;
++    if (!std::getline(input, line)) throw std::runtime_error("empty disc layout file");
++    std::istringstream header(line);
++    std::string magic;
++    unsigned version = 0;
++    std::uint64_t count = 0;
++    if (!(header >> magic >> version >> count) || magic != "PS2_DISC_LAYOUT" || version != 1 || !count || count > UINT32_MAX)
++        throw std::runtime_error("invalid disc layout header");
++    folder.size = count * kSector;
++    const auto canonical_root = fs::canonical(root);
++    while (std::getline(input, line))
++    {
++        if (!line.empty() && line.back() == '\r') line.pop_back();
++        if (line.empty()) continue;
++        const auto first = line.find('\t'), second = first == std::string::npos ? first : line.find('\t', first + 1);
++        if (first == std::string::npos || second == std::string::npos) throw std::runtime_error("invalid disc layout entry");
++        std::size_t used_lba = 0, used_size = 0;
++        const auto lba = std::stoull(line.substr(0, first), &used_lba);
++        const auto size = std::stoull(line.substr(first + 1, second - first - 1), &used_size);
++        if (used_lba != first || used_size != second - first - 1 || lba >= count || size > (count - lba) * kSector)
++            throw std::runtime_error("invalid disc layout extent");
++        const fs::path relative = line.substr(second + 1);
++        if (relative.empty() || relative.is_absolute()) throw std::runtime_error("invalid extracted path");
++        for (const auto &part : relative) if (part == "..") throw std::runtime_error("extracted path escapes disc folder");
++        const auto path = fs::canonical(root / relative);
++        const auto inside = path.lexically_relative(canonical_root);
++        if (inside.empty() || *inside.begin() == ".." || !fs::is_regular_file(path) || fs::file_size(path) != size)
++            throw std::runtime_error("missing, modified-size or outside-root extracted file: " + relative.string());
++        if (size) folder.regions.push_back({lba * kSector, size, path, {}});
++    }
++    if (!input.eof()) throw std::runtime_error("cannot read disc layout");
++    if (folder.regions.empty()) throw std::runtime_error("disc layout has no extents");
++    std::fprintf(stderr, "[disc] folder preserves original file LBAs and ISO directory metadata\n");
++}
++}
++
++bool open_folder(const fs::path &root)
++{
++    try
++    {
++        auto folder = std::make_shared<s_folder>();
++        const auto layout = root / ".ps2-disc" / "layout.tsv";
++        if (fs::exists(layout)) original_layout(root, layout, *folder);
++        else synthetic_layout(root, *folder);
++        folder->validate();
++        std::uint8_t pvd[kSector] = {};
++        if (folder->read(16 * kSector, pvd, kSector) != kSector || std::memcmp(pvd, "\x01" "CD001", 6) != 0)
++            throw std::runtime_error("folder metadata has no valid ISO 9660 primary descriptor");
++        return open(root.string(), folder->size,
++            [folder](std::uint64_t offset, void *out, std::size_t bytes) { return folder->read(offset, out, bytes); });
++    }
++    catch (const std::exception &error)
++    {
++        std::fprintf(stderr, "[disc] cannot mount folder %s: %s\n", root.string().c_str(), error.what());
++        return false;
++    }
++}
++}
+--- /dev/null
++++ b/runtime/src/disc_folder.hpp
+@@ -0,0 +1,8 @@
++#pragma once
++
++#include <filesystem>
++
++namespace ps2::disc
++{
++bool open_folder(const std::filesystem::path &root);
++}
+--- a/runtime/src/gs/gpu/blit.wgsl
++++ b/runtime/src/gs/gpu/blit.wgsl
+@@ -6,7 +6,7 @@
+     blend: u32,
+     out_width: u32,
+     out_height: u32,
+-    pad: u32,
++    nearest: u32,
+ }
+ 
+ @group(0) @binding(0) var<storage, read> pixels: array<u32>;
+@@ -34,6 +34,10 @@
+ 
+ fn sample(base: u32, uv: vec2<f32>) -> vec4<f32> {
+     let size = vec2<f32>(f32(blit.width), f32(blit.height));
++    if (blit.nearest != 0u) {
++        let p = vec2<i32>(floor(uv * size));
++        return texel(base, p.x, p.y);
++    }
+     let scale = max(floor(vec2<f32>(f32(blit.out_width), f32(blit.out_height)) / size), vec2<f32>(1.0));
+     let t = uv * size;
+     let d = fract(t) - 0.5;
+--- a/runtime/src/gs/gpu/gpu.cpp
++++ b/runtime/src/gs/gpu/gpu.cpp
+@@ -1,5 +1,7 @@
+ #include "gpu.hpp"
+ #include "ps2/system.hpp"
++#include "ps2/presentation.hpp"
++#include "ps2/render_scale.hpp"
+ 
+ #include <webgpu/webgpu.h>
+ #ifndef __EMSCRIPTEN__
+@@ -27,6 +29,8 @@
+ namespace ps2::gs::gpu {
+ 
+ namespace {
++
++ps2::s_window_viewport g_present_viewport;
+ 
+ enum Pipeline { kUpload, kCopyRead, kCopyWrite, kLoadClut, kDisplay, kRaster, kResolve, kSnapshot, kDecode, kPipelines };
+ const char *const kEntryPoints[kPipelines] = {"upload", "copy_read", "copy_write", "load_clut", "display", "raster", "resolve", "snapshot", "decode"};
+@@ -773,6 +777,34 @@
+         changed = true;
+     }
+     if (changed || !g_group) rebuild_group();
++}
++
++bool make_scaled_pipelines(std::uint32_t scale, WGPUComputePipeline *pipelines)
++{
++    WGPUShaderSourceWGSL source = WGPU_SHADER_SOURCE_WGSL_INIT;
++    source.code = view(kGsShader);
++    WGPUShaderModuleDescriptor md = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
++    md.nextInChain = &source.chain;
++    WGPUShaderModule module = wgpuDeviceCreateShaderModule(g_device, &md);
++    for (int i = 0; i < kPipelines; ++i) {
++        WGPUComputePipelineDescriptor cd = WGPU_COMPUTE_PIPELINE_DESCRIPTOR_INIT;
++        cd.layout = g_pipeline_layout;
++        cd.compute.module = module;
++        cd.compute.entryPoint = view(kEntryPoints[i]);
++        WGPUConstantEntry constant = WGPU_CONSTANT_ENTRY_INIT;
++        constant.key = view("SCALE");
++        constant.value = static_cast<double>(scale);
++        cd.compute.constantCount = 1;
++        cd.compute.constants = &constant;
++        pipelines[i] = wgpuDeviceCreateComputePipeline(g_device, &cd);
++        if (!pipelines[i])
++        {
++            wgpuShaderModuleRelease(module);
++            return false;
++        }
++    }
++    wgpuShaderModuleRelease(module);
++    return true;
+ }
+ 
+ void profile_submit() {
+@@ -904,10 +936,8 @@
+         rd.colorAttachmentCount = 1;
+         rd.colorAttachments = &color;
+         WGPURenderPassEncoder rp = wgpuCommandEncoderBeginRenderPass(enc, &rd);
+-        const float w = static_cast<float>(g_surface_width), h = static_cast<float>(g_surface_height);
+-        const float aspect = g_options.widescreen ? 16.0f / 9.0f : 4.0f / 3.0f;
+-        const float vw = std::min(w, h * aspect), vh = vw / aspect;
+-        wgpuRenderPassEncoderSetViewport(rp, (w - vw) * 0.5f, (h - vh) * 0.5f, vw, vh, 0.0f, 1.0f);
++        wgpuRenderPassEncoderSetViewport(rp, static_cast<float>(g_present_viewport.x), static_cast<float>(g_present_viewport.y),
++            static_cast<float>(g_present_viewport.width), static_cast<float>(g_present_viewport.height), 0.0f, 1.0f);
+         wgpuRenderPassEncoderSetPipeline(rp, g_blit);
+         wgpuRenderPassEncoderSetBindGroup(rp, 0, g_blit_group, 0, nullptr);
+         wgpuRenderPassEncoderDraw(rp, 3, 1, 0, 0);
+@@ -1096,6 +1126,20 @@
+ 
+ Mode mode() { return g_mode; }
+ 
++bool change_render_scale(std::uint32_t scale);
++
++void apply_requested_render_scale()
++{
++    const auto requested = static_cast<std::uint32_t>(std::clamp(
++        ps2::g_presentation_options.render_scale.load(std::memory_order_relaxed), 1, 4));
++    if (requested != g_scale && !change_render_scale(requested))
++    {
++        ps2::g_presentation_options.render_scale.store(static_cast<int>(g_scale), std::memory_order_relaxed);
++        std::fprintf(stderr, "[gpu] render scale change rejected; keeping %ux\n", g_scale);
++    }
++}
++
++
+ bool init(Mode m) {
+     if (m == Mode::off) return false;
+ #ifdef __EMSCRIPTEN__
+@@ -1172,7 +1216,11 @@
+             g_profile_to = z;
+         }
+     }
+-    if (const char *scale = std::getenv("PS2_SCALE")) g_scale = std::clamp<std::uint32_t>(static_cast<std::uint32_t>(std::atoi(scale)), 1u, 3u);
++    g_scale = static_cast<std::uint32_t>(std::clamp(ps2::g_presentation_options.render_scale.load(std::memory_order_relaxed), 1, 4));
++    if (const char *scale = std::getenv("PS2_SCALE")) g_scale = static_cast<std::uint32_t>(std::clamp(std::atoi(scale), 1, 4));
++    while (g_scale > 1 && (8ull << 20) * g_scale * g_scale > std::min(supported.maxBufferSize, supported.maxStorageBufferBindingSize)) --g_scale;
++    ps2::g_presentation_options.render_scale.store(static_cast<int>(g_scale), std::memory_order_relaxed);
++    ps2::g_presentation_options.active_render_scale.store(static_cast<int>(g_scale), std::memory_order_relaxed);
+     g_copy_words = (1u << 20) * g_scale * g_scale;
+     g_tiles_per_row = (2048 * static_cast<int>(g_scale) + 15) / 16;
+     g_tile_count.assign(static_cast<std::size_t>(g_tiles_per_row) * g_tiles_per_row, 0);
+@@ -1220,25 +1268,7 @@
+     pld.bindGroupLayouts = &g_layout;
+     g_pipeline_layout = wgpuDeviceCreatePipelineLayout(g_device, &pld);
+ 
+-    WGPUShaderSourceWGSL source = WGPU_SHADER_SOURCE_WGSL_INIT;
+-    source.code = view(kGsShader);
+-    WGPUShaderModuleDescriptor md = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
+-    md.nextInChain = &source.chain;
+-    WGPUShaderModule module = wgpuDeviceCreateShaderModule(g_device, &md);
+-    for (int i = 0; i < kPipelines; ++i) {
+-        WGPUComputePipelineDescriptor cd = WGPU_COMPUTE_PIPELINE_DESCRIPTOR_INIT;
+-        cd.layout = g_pipeline_layout;
+-        cd.compute.module = module;
+-        cd.compute.entryPoint = view(kEntryPoints[i]);
+-        WGPUConstantEntry constant = WGPU_CONSTANT_ENTRY_INIT;
+-        constant.key = view("SCALE");
+-        constant.value = static_cast<double>(g_scale);
+-        cd.compute.constantCount = 1;
+-        cd.compute.constants = &constant;
+-        g_pipelines[i] = wgpuDeviceCreateComputePipeline(g_device, &cd);
+-        if (!g_pipelines[i]) return false;
+-    }
+-    wgpuShaderModuleRelease(module);
++    if (!make_scaled_pipelines(g_scale, g_pipelines)) return false;
+     ensure_capacity();
+     g_mode = m;
+     return true;
+@@ -1747,28 +1777,22 @@
+ 
+ bool present(const DisplaySource &src) {
+     if (!g_surface) return false;
++    apply_requested_render_scale();
++    ps2::g_presentation_options.native_width.store(static_cast<int>(src.width), std::memory_order_relaxed);
++    ps2::g_presentation_options.native_height.store(static_cast<int>(src.height), std::memory_order_relaxed);
+     flush_all();
+     const std::uint32_t current = field_base(g_field), previous = field_base(g_field + 1);
+     static const bool weave_off = std::getenv("PS2_NO_DEINTERLACE") != nullptr;
+-    // Diagnostic override: full-height interlaced buffers can also alternate
+-    // their rendered vertical position between fields.
+-    static const bool force_blend = []()
+-    {
+-        const char *value = std::getenv("PS2_FORCE_DEINTERLACE");
+-        const bool enabled = value && std::strcmp(value, "1") == 0;
+-        if (enabled)
+-        {
+-            std::fprintf(stderr, "[gpu] forced field blending enabled\n");
+-        }
+-        return enabled;
+-    }();
++    const bool force_blend = ps2::g_presentation_options.force_blend.load(std::memory_order_relaxed);
+     const bool blend = (src.halved || force_blend) && g_have_previous && g_last_width == src.width && g_last_height == src.height && !weave_off;
+     const std::uint32_t param = push_params({src.fbp, src.fbw, src.psm, src.dbx, src.dby, src.width, src.height, src.halved ? 1u : 0u, current});
+     g_commands.push_back({kDisplay, (src.width * g_scale + 7) / 8, (src.height * g_scale + 7) / 8, param});
+-    const float sw = static_cast<float>(g_surface_width), sh = static_cast<float>(g_surface_height);
+-    const float aspect = g_options.widescreen ? 16.0f / 9.0f : 4.0f / 3.0f;
+-    const float vw = std::min(sw, sh * aspect), vh = vw / aspect;
+-    const std::uint32_t blit[8] = {src.width * g_scale, src.height * g_scale, current, previous, blend ? 1u : 0u, static_cast<std::uint32_t>(vw), static_cast<std::uint32_t>(vh), 0};
++    g_present_viewport = ps2::window_viewport(static_cast<int>(g_surface_width), static_cast<int>(g_surface_height),
++        static_cast<int>(src.width), static_cast<int>(src.height), g_options.widescreen,
++        ps2::g_presentation_options.scaling.load(std::memory_order_relaxed));
++    const std::uint32_t blit[8] = {src.width * g_scale, src.height * g_scale, current, previous, blend ? 1u : 0u,
++        static_cast<std::uint32_t>(g_present_viewport.width), static_cast<std::uint32_t>(g_present_viewport.height),
++        ps2::g_presentation_options.nearest.load(std::memory_order_relaxed) ? 1u : 0u};
+     wgpuQueueWriteBuffer(g_queue, g_blit_params, 0, blit, sizeof blit);
+     ++g_field;
+     g_have_previous = true;
+@@ -1807,6 +1831,7 @@
+ std::uint64_t g_copy_order = 0;
+ 
+ bool display_async(const DisplaySource &src, std::vector<std::uint32_t> &rgba, std::uint32_t &width, std::uint32_t &height) {
++    apply_requested_render_scale();
+ #ifdef __EMSCRIPTEN__
+     wgpuInstanceProcessEvents(g_instance);
+ #else
+@@ -1869,6 +1894,7 @@
+ }
+ 
+ bool display(const DisplaySource &src, std::vector<std::uint32_t> &rgba, std::uint32_t &width, std::uint32_t &height) {
++    apply_requested_render_scale();
+     flush_all();
+     const std::uint32_t param = push_params({src.fbp, src.fbw, src.psm, src.dbx, src.dby, src.width, src.height, src.halved ? 1u : 0u});
+     g_commands.push_back({kDisplay, (src.width * g_scale + 7) / 8, (src.height * g_scale + 7) / 8, param});
+@@ -1880,4 +1906,89 @@
+     return true;
+ }
+ 
+-}
++bool change_render_scale(std::uint32_t scale)
++{
++    scale = std::clamp(scale, 1u, 4u);
++    if (scale == g_scale) return true;
++    if (!g_device || g_mode == Mode::off) return false;
++    WGPULimits limits = WGPU_LIMITS_INIT;
++    if (wgpuDeviceGetLimits(g_device, &limits) != WGPUStatus_Success ||
++        (8ull << 20) * scale * scale > std::min(limits.maxBufferSize, limits.maxStorageBufferBindingSize)) return false;
++
++    // Finish all old-scale draws and pending reads before replacing resources.
++    // EE/IOP/game state is untouched; only the GPU sample grid is rebuilt.
++    wait_idle();
++    while (g_pending.busy && !g_pending.ready) pump();
++    collect_download();
++    for (Copy &copy : g_copies)
++    {
++        while (copy.busy && !copy.ready) pump();
++        if (copy.ready) wgpuBufferUnmap(copy.buffer);
++        if (copy.buffer) wgpuBufferRelease(copy.buffer);
++        copy = {};
++    }
++
++    std::vector<std::uint32_t> old_samples(static_cast<std::size_t>(kMemorySize / 4) * g_scale * g_scale);
++    read_back(g_vram, old_samples.size() * 4, old_samples.data());
++    const auto new_samples = ps2::rescale_vram_samples(old_samples, g_scale, scale);
++    const auto vram_bytes = static_cast<std::uint64_t>(kMemorySize) * scale * scale;
++    WGPUBuffer vram = make_buffer(vram_bytes, WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc | WGPUBufferUsage_CopyDst);
++    WGPUBuffer scratch = make_buffer(vram_bytes * 2, WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc);
++    WGPUBuffer readback = make_buffer(vram_bytes, WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst);
++    WGPUComputePipeline pipelines[kPipelines] = {};
++    if (!vram || !scratch || !readback || !make_scaled_pipelines(scale, pipelines))
++    {
++        if (vram) wgpuBufferRelease(vram);
++        if (scratch) wgpuBufferRelease(scratch);
++        if (readback) wgpuBufferRelease(readback);
++        for (auto pipeline : pipelines) if (pipeline) wgpuComputePipelineRelease(pipeline);
++        return false;
++    }
++    wgpuQueueWriteBuffer(g_queue, vram, 0, new_samples.data(), new_samples.size() * 4);
++
++    const auto old_vram = g_vram, old_scratch = g_scratch, old_readback = g_readback;
++    g_vram = vram;
++    g_scratch = scratch;
++    g_readback = readback;
++    g_scale = scale;
++    g_copy_words = (1u << 20) * scale * scale;
++    g_field_words = (1u << 19) * scale * scale;
++    g_tiles_per_row = (2048 * static_cast<int>(scale) + 15) / 16;
++    g_tile_count.assign(static_cast<std::size_t>(g_tiles_per_row) * g_tiles_per_row, 0);
++    g_tile_fill.assign(g_tile_count.size(), 0);
++    g_touched.clear();
++    for (int i = 0; i < kPipelines; ++i)
++    {
++        wgpuComputePipelineRelease(g_pipelines[i]);
++        g_pipelines[i] = pipelines[i];
++    }
++    rebuild_group();
++    if (g_blit)
++    {
++        const auto layout = wgpuRenderPipelineGetBindGroupLayout(g_blit, 0);
++        WGPUBindGroupEntry entries[2] = {WGPU_BIND_GROUP_ENTRY_INIT, WGPU_BIND_GROUP_ENTRY_INIT};
++        entries[0].binding = 0;
++        entries[0].buffer = g_scratch;
++        entries[0].size = WGPU_WHOLE_SIZE;
++        entries[1].binding = 1;
++        entries[1].buffer = g_blit_params;
++        entries[1].size = 32;
++        WGPUBindGroupDescriptor descriptor = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
++        descriptor.layout = layout;
++        descriptor.entryCount = 2;
++        descriptor.entries = entries;
++        if (g_blit_group) wgpuBindGroupRelease(g_blit_group);
++        g_blit_group = wgpuDeviceCreateBindGroup(g_device, &descriptor);
++        wgpuBindGroupLayoutRelease(layout);
++    }
++    wgpuBufferRelease(old_vram);
++    wgpuBufferRelease(old_scratch);
++    wgpuBufferRelease(old_readback);
++    g_have_previous = false;
++    g_field = 0;
++    ps2::g_presentation_options.active_render_scale.store(static_cast<int>(scale), std::memory_order_relaxed);
++    std::fprintf(stderr, "[gpu] internal render resolution %ux\n", scale);
++    return true;
++}
++
++}
+--- /dev/null
++++ b/scripts/extract_disc_folder.py
+@@ -0,0 +1,134 @@
++"""Extract every disc file and preserve original file/metadata sector locations."""
++import argparse
++import importlib.util
++from pathlib import Path, PurePosixPath
++import struct
++
++spec = importlib.util.spec_from_file_location("ps2_disc_tools", Path(__file__).with_name("disc.py"))
++disc = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(disc)
++SECTOR = disc.SECTOR
++
++
++class LayoutImage(disc.Image):
++    def __init__(self, path):
++        self.metadata = {}
++        super().__init__(path)
++
++    def read(self, sector, count):
++        data = super().read(sector, count)
++        if len(data) != count * SECTOR:
++            raise ValueError("truncated disc metadata")
++        for index in range(count):
++            self.metadata[sector + index] = data[index * SECTOR:(index + 1) * SECTOR]
++        return data
++
++
++def destination(root, name):
++    relative = PurePosixPath(name.replace("\\", "/"))
++    if relative.is_absolute() or ".." in relative.parts or not relative.parts or ":" in name or "\t" in name or "\n" in name:
++        raise ValueError("unsafe disc filename: " + name)
++    path = root.joinpath(*relative.parts)
++    path.resolve().relative_to(root.resolve())
++    return path
++
++
++def extract_folder(image_path, output):
++    image = LayoutImage(image_path)
++    root = Path(output)
++    root.mkdir(parents=True, exist_ok=True)
++    extents = []
++    used_names = set()
++    try:
++        entries = list(image.files())  # Captures all ISO directory sectors.
++        for layer in image.layers:
++            image.read(layer.base, 16)
++            for sector in range(layer.base + 16, min(layer.base + 80, image.size // SECTOR)):
++                descriptor = image.read(sector, 1)
++                if descriptor[1:6] != b"CD001" or descriptor[0] == 255:
++                    break
++            pvd = image.read(layer.base + 16, 1)
++            path_size = struct.unpack_from("<I", pvd, 132)[0]
++            for offset, endian in [(140, "<I"), (144, "<I"), (148, ">I"), (152, ">I")]:
++                lba = struct.unpack_from(endian, pvd, offset)[0]
++                if lba and path_size:
++                    image.read(layer.base + lba, (path_size + SECTOR - 1) // SECTOR)
++
++        for name, layer, lba, size in entries:
++            if name.split("/")[0].upper() == ".PS2-DISC":
++                raise ValueError("disc uses reserved .ps2-disc name")
++            storage = name
++            if name.upper() in used_names:
++                storage = ".ps2-disc/layers/%d/%08x/%s" % (layer.index, lba, name)
++            used_names.add(name.upper())
++            target = destination(root, storage)
++            if target.resolve() == Path(image_path).resolve():
++                raise ValueError("extraction would overwrite the source ISO")
++            if (lba * SECTOR + size > image.size):
++                raise ValueError("file extends beyond ISO: " + name)
++            target.parent.mkdir(parents=True, exist_ok=True)
++            print("extracting %s (%d bytes)" % (name, size), flush=True)
++            image.file.seek(lba * SECTOR)
++            with target.open("wb") as output_file:
++                remaining = size
++                while remaining:
++                    chunk = image.file.read(min(remaining, 4 << 20))
++                    if not chunk:
++                        raise ValueError("truncated ISO file: " + name)
++                    output_file.write(chunk)
++                    remaining -= len(chunk)
++            if size:
++                extents.append((lba, size, storage))
++
++        metadata_dir = root / ".ps2-disc" / "metadata"
++        metadata_dir.mkdir(parents=True, exist_ok=True)
++        pending = sorted(image.metadata)
++        at = 0
++        while at < len(pending):
++            start = pending[at]
++            end = at + 1
++            while end < len(pending) and pending[end] == pending[end - 1] + 1:
++                end += 1
++            storage = ".ps2-disc/metadata/%08x.bin" % start
++            data = b"".join(image.metadata[sector] for sector in pending[at:end])
++            destination(root, storage).write_bytes(data)
++            extents.append((start, len(data), storage))
++            at = end
++
++        # ISO hard links may give several names to one physical extent.
++        selected = []
++        previous_end = 0
++        for extent in sorted(extents, key=lambda item: (item[0], -item[1])):
++            lba, size, storage = extent
++            end = lba + (size + SECTOR - 1) // SECTOR
++            if lba < previous_end:
++                if selected and end <= previous_end and lba >= selected[-1][0]:
++                    continue
++                raise ValueError("partially overlapping ISO extents cannot be exported: " + storage)
++            selected.append(extent)
++            previous_end = end
++        layout = root / ".ps2-disc" / "layout.tsv"
++        temporary = layout.with_suffix(".tmp")
++        with temporary.open("w", encoding="utf-8", newline="\n") as out:
++            out.write("PS2_DISC_LAYOUT\t1\t%d\n" % ((image.size + SECTOR - 1) // SECTOR))
++            for lba, size, storage in selected:
++                out.write("%d\t%d\t%s\n" % (lba, size, storage))
++        temporary.replace(layout)
++        print("%d files extracted to %s; original file LBAs preserved" % (len(entries), root))
++    finally:
++        image.file.close()
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("image", help="source ISO, needed only for extraction")
++    parser.add_argument("destination", help="folder to hold the ELF and all disc files")
++    args = parser.parse_args()
++    try:
++        extract_folder(args.image, args.destination)
++    except (OSError, ValueError) as error:
++        parser.exit(1, str(error) + "\n")
++
++
++if __name__ == "__main__":
++    main()
+--- /dev/null
++++ b/tests/disc_folder_integration.py
+@@ -0,0 +1,70 @@
++"""Folder/ISO round trip and CLI precedence checks using the standalone C++ tests."""
++import argparse
++import os
++from pathlib import Path
++import shutil
++import subprocess
++import tempfile
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("binary", help="compiled disc_folder_test")
++    parser.add_argument("cli_binary", help="host/main.cpp linked with main_disc_defaults_stubs.cpp")
++    parser.add_argument("disc_tool", help="repository scripts/disc.py")
++    args = parser.parse_args()
++    binary, cli = str(Path(args.binary).resolve()), str(Path(args.cli_binary).resolve())
++    env = dict(os.environ, ASAN_OPTIONS="detect_leaks=0")
++    with tempfile.TemporaryDirectory(prefix="ps2 folder test ") as directory:
++        base = Path(directory)
++        source = base / "source"
++        (source / "Data").mkdir(parents=True)
++        (source / "Data" / "Mixed Name.bin").write_bytes(bytes((i * 37 + 13) & 255 for i in range(7001)))
++        (source / "SYSTEM.CNF").write_bytes(b"BOOT2 = cdrom0:\\SLES_541.61;1\r\n")
++        (source / "SLES_541.61").write_bytes(b"test ELF placeholder")
++        (source / "EMPTY.DAT").write_bytes(b"")
++        (source / "Many").mkdir()
++        for index in range(96):
++            (source / "Many" / ("ENTRY_%03d_LONG_FILENAME.DAT" % index)).write_bytes(b"")
++        image = base / "original.iso"
++        synthetic = subprocess.check_output([binary, str(source), str(image)], env=env, text=True)
++        tools = base / "tools"
++        tools.mkdir()
++        shutil.copyfile(args.disc_tool, tools / "disc.py")
++        shutil.copyfile(Path(__file__).parents[1] / "scripts/extract_disc_folder.py", tools / "extract_disc_folder.py")
++        extracted = base / "fully extracted"
++        extraction = subprocess.check_output([os.sys.executable, str(tools / "extract_disc_folder.py"), str(image), str(extracted)], text=True)
++        print(extraction.strip().splitlines()[-1])
++        roundtrip = base / "roundtrip.iso"
++        preserved = subprocess.check_output([binary, str(extracted), str(roundtrip)], env=env, text=True)
++        assert synthetic == preserved, "Original file LBAs must be preserved"
++        assert image.read_bytes() == roundtrip.read_bytes(), "Sector reads must reproduce the original test ISO"
++
++        layout = extracted / ".ps2-disc/layout.tsv"
++        valid = layout.read_text()
++        lines = valid.splitlines()
++        lba, size, _ = lines[1].split("\t", 2)
++        lines[1] = f"{lba}\t{size}\t../../escape"
++        layout.write_text("\n".join(lines) + "\n")
++        subprocess.run([binary, str(extracted), "--reject"], env=env, check=True)
++        layout.write_text(valid)
++        asset = extracted / "DATA/MIXED NAME.BIN"
++        saved = asset.read_bytes()
++        asset.unlink()
++        subprocess.run([binary, str(extracted), "--reject"], env=env, check=True)
++        asset.write_bytes(saved)
++        subprocess.run([binary, str(extracted)], env=env, check=True)
++
++        elf = extracted / "SLES_541.61"
++        output = subprocess.check_output([cli, str(elf)], text=True)
++        assert output.strip() == "disc=" + str(extracted)
++        for override in [str(image), str(source)]:
++            output = subprocess.check_output([cli, str(elf), "--disc", override], text=True)
++            assert output.strip() == "disc=" + override
++        output = subprocess.check_output([cli, "SLES_541.61"], cwd=extracted, text=True)
++        assert output.strip() == "disc=."
++    print("Folder ISO metadata, file reads, padding, extraction, LBA preservation, bad layouts and CLI defaults passed.")
++
++
++if __name__ == "__main__":
++    main()
+--- /dev/null
++++ b/tests/disc_folder_test.cpp
+@@ -0,0 +1,52 @@
++#include "ps2/disc.hpp"
++#include <cassert>
++#include <cstdio>
++#include <cstring>
++#include <vector>
++
++int main(int argc, char **argv)
++{
++    assert(argc >= 2);
++    using namespace ps2::disc;
++    if (argc >= 3 && std::strcmp(argv[2], "--reject") == 0)
++    {
++        assert(!open(argv[1]));
++        return 0;
++    }
++    assert(open(argv[1]));
++    const auto asset = find("cdrom0:\\data\\Mixed Name.bin;1");
++    assert(asset && !asset->directory && asset->size == 7001);
++    const auto nested = find("DATA");
++    assert(nested && nested->directory);
++    const auto empty = find("EMPTY.DAT");
++    assert(empty && empty->size == 0);
++    const auto late_directory_entry = find("MANY/ENTRY_095_LONG_FILENAME.DAT");
++    assert(late_directory_entry && late_directory_entry->size == 0);
++    const auto system = find("system.cnf;1");
++    assert(system && system->size > 0);
++    assert(!find("MISSING.FILE"));
++    std::vector<std::uint8_t> bytes(kSector * 4, 0xEE);
++    assert(read(asset->sector, 4, bytes.data()));
++    for (std::size_t i = 0; i < 7001; ++i) assert(bytes[i] == static_cast<std::uint8_t>(i * 37 + 13));
++    for (std::size_t i = 7001; i < bytes.size(); ++i) assert(bytes[i] == 0);
++    assert(read(asset->sector + 1, 1, bytes.data()));
++    for (std::size_t i = 0; i < kSector; ++i) assert(bytes[i] == static_cast<std::uint8_t>((i + kSector) * 37 + 13));
++    assert(read(16, 1, bytes.data()));
++    assert(bytes[0] == 1 && std::memcmp(bytes.data() + 1, "CD001", 5) == 0);
++    const auto lba = asset->sector;
++    if (argc >= 3)
++    {
++        std::FILE *output = std::fopen(argv[2], "wb");
++        assert(output);
++        for (std::uint64_t sector = 0; sector < sector_count(); ++sector)
++        {
++            assert(read(static_cast<std::uint32_t>(sector), 1, bytes.data()));
++            assert(std::fwrite(bytes.data(), 1, kSector, output) == kSector);
++        }
++        assert(std::fclose(output) == 0);
++        assert(open(argv[2]));
++        assert(find("DATA/MIXED NAME.BIN")->sector == lba);
++        assert(read(lba, 1, bytes.data()) && bytes[0] == 13);
++    }
++    std::printf("asset_lba=%u\n", lba);
++}
+--- /dev/null
++++ b/tests/game_boot_test.cpp
+@@ -0,0 +1,60 @@
++#include "game_boot.hpp"
++#include <cassert>
++#include <chrono>
++
++namespace fs = std::filesystem;
++
++void elf(const fs::path &path, unsigned type = 2)
++{
++    std::array<unsigned char, 52> header{};
++    header[0] = 0x7F; header[1] = 'E'; header[2] = 'L'; header[3] = 'F';
++    header[4] = 1; header[5] = 1; header[6] = 1;
++    header[16] = static_cast<unsigned char>(type); header[17] = static_cast<unsigned char>(type >> 8); header[18] = 8;
++    std::ofstream output(path, std::ios::binary);
++    output.write(reinterpret_cast<const char *>(header.data()), header.size());
++}
++
++void cnf(const fs::path &path, const std::string &text) { std::ofstream(path) << text; }
++
++void rejects(const fs::path &folder)
++{
++    bool rejected = false;
++    try { ps2::game::find_elf(folder); } catch (const std::runtime_error &) { rejected = true; }
++    assert(rejected);
++}
++
++int main()
++{
++    const auto folder = fs::temp_directory_path() / ("ps2 boot test " + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
++    fs::create_directories(folder);
++    try
++    {
++        rejects(folder);
++        elf(folder / "SLES_541.61");
++        elf(folder / "SIO2MAN.IRX", 0xFF80);
++        assert(ps2::game::find_elf(folder).filename() == "SLES_541.61");
++        elf(folder / "OTHER.ELF");
++        rejects(folder);
++        cnf(folder / "system.cnf", "BOOT = cdrom0:\\OTHER.ELF;1\r\nBOOT2 = cdrom0:\\SLES_541.61;1\r\n");
++        assert(ps2::game::find_elf(folder).filename() == "SLES_541.61");
++        cnf(folder / "system.cnf", "BOOT2 = cdrom0:\\MISSING.ELF;1\n");
++        rejects(folder);
++        cnf(folder / "system.cnf", "BOOT2 = cdrom0:\\SIO2MAN.IRX;1\n");
++        rejects(folder);
++        cnf(folder / "system.cnf", "BOOT2 = cdrom0:\\..\\OUTSIDE.ELF;1\n");
++        rejects(folder);
++        fs::create_directory(folder / "Sub folder");
++        elf(folder / "Sub folder" / "Core.ELF");
++        cnf(folder / "system.cnf", "  boot2 = \"cdrom0:\\Sub folder\\Core.ELF;1\"\r\n");
++        assert(ps2::game::find_elf(folder) == folder / "Sub folder" / "Core.ELF");
++        cnf(folder / "system.cnf", "BOOT2 = \"cdrom0:\\SLES_541.61;1\n");
++        rejects(folder);
++        fs::remove_all(folder);
++        std::puts("Automatic game ELF selection and SYSTEM.CNF handling passed.");
++    }
++    catch (...)
++    {
++        fs::remove_all(folder);
++        throw;
++    }
++}
+--- /dev/null
++++ b/tests/main_disc_defaults_stubs.cpp
+@@ -0,0 +1,16 @@
++// Link with host/main.cpp without PS2_WINDOW/PS2_PROFILE for CLI path tests.
++#include "ps2/system.hpp"
++#include <cstdio>
++namespace ps2
++{
++Options g_options;
++bool load_patches(const std::string &) { return true; }
++bool parse_press(const std::string &, Press &) { return true; }
++bool parse_axis(const std::string &, AxisPress &) { return true; }
++bool load_elf(const std::string &, std::uint32_t &entry) { entry = 0; return true; }
++void boot(std::uint32_t, const std::vector<std::string> &) {}
++bool load_state(const std::string &) { return true; }
++int run() { std::printf("disc=%s\n", g_options.disc_path.c_str()); return 0; }
++}
++void register_generated_code() {}
++void register_generated_vu() {}
+--- /dev/null
++++ b/tests/presentation_gpu_test.py
+@@ -0,0 +1,68 @@
++"""Optional offscreen shader test; requires the Python wgpu package."""
++from pathlib import Path
++import struct
++import wgpu
++
++root = Path(__file__).resolve().parents[1]
++adapter = wgpu.gpu.request_adapter_sync(power_preference="low-power")
++device = adapter.request_device_sync()
++module = device.create_shader_module(code=(root / "runtime/src/gs/gpu/blit.wgsl").read_text())
++pipeline = device.create_render_pipeline(
++    layout="auto",
++    vertex={"module": module, "entry_point": "vs", "buffers": []},
++    fragment={"module": module, "entry_point": "fs", "targets": [{"format": "rgba8unorm"}]},
++    primitive={"topology": "triangle-list"},
++)
++pixels = device.create_buffer_with_data(
++    data=struct.pack("8I", 0xFF0000FF, 0xFF00FF00, 0xFFFF0000, 0xFFFFFFFF, *([0xFF000000] * 4)),
++    usage=wgpu.BufferUsage.STORAGE,
++)
++
++
++def render(nearest, blend, size):
++    uniform = device.create_buffer_with_data(
++        data=struct.pack("8I", 2, 2, 0, 4, blend, size, size, nearest),
++        usage=wgpu.BufferUsage.UNIFORM,
++    )
++    group = device.create_bind_group(
++        layout=pipeline.get_bind_group_layout(0),
++        entries=[
++            {"binding": 0, "resource": {"buffer": pixels, "offset": 0, "size": 32}},
++            {"binding": 1, "resource": {"buffer": uniform, "offset": 0, "size": 32}},
++        ],
++    )
++    texture = device.create_texture(
++        size=(10, 10, 1), format="rgba8unorm",
++        usage=wgpu.TextureUsage.RENDER_ATTACHMENT | wgpu.TextureUsage.COPY_SRC,
++    )
++    encoder = device.create_command_encoder()
++    draw = encoder.begin_render_pass(color_attachments=[{
++        "view": texture.create_view(), "resolve_target": None,
++        "load_op": "clear", "store_op": "store", "clear_value": (0, 0, 0, 1),
++    }])
++    draw.set_viewport(2, 2, size, size, 0, 1)
++    draw.set_pipeline(pipeline)
++    draw.set_bind_group(0, group)
++    draw.draw(3)
++    draw.end()
++    device.queue.submit([encoder.finish()])
++    image = device.queue.read_texture({"texture": texture}, {"bytes_per_row": 256, "rows_per_image": 10}, (10, 10, 1))
++
++    def pixel(x, y):
++        offset = y * 256 + x * 4
++        return tuple(image[offset:offset + 4])
++
++    assert pixel(0, 0) == (0, 0, 0, 255), "Letterbox area must stay black"
++    return pixel
++
++
++nearest = render(1, 0, 4)
++assert nearest(2, 2) == (255, 0, 0, 255)
++assert nearest(5, 2) == (0, 255, 0, 255)
++assert nearest(2, 5) == (0, 0, 255, 255)
++assert nearest(5, 5) == (255, 255, 255, 255)
++blended = render(1, 1, 4)
++assert blended(2, 2)[0] in (127, 128) and blended(2, 2)[1:] == (0, 0, 255)
++smooth = render(0, 0, 5)
++assert all(126 <= channel <= 129 for channel in smooth(4, 4)[:3])
++print("Offscreen nearest, smooth, field blending and letterboxing tests passed.")
+--- /dev/null
++++ b/tests/presentation_tests.cpp
+@@ -0,0 +1,133 @@
++#include "ps2/presentation.hpp"
++#include "ps2/render_scale.hpp"
++#include "window_preferences.hpp"
++
++#include <cassert>
++#include <cstdio>
++
++int main()
++{
++    using ps2::e_window_scaling;
++    const auto raw = ps2::window_viewport(1920, 1080, 512, 448, false, e_window_scaling::integer_pixels);
++    assert(raw.width == 1024 && raw.height == 896 && raw.x == 448 && raw.y == 92);
++    const auto aspect = ps2::window_viewport(1920, 1080, 512, 448, false, e_window_scaling::integer_aspect);
++    assert(aspect.width == 1194 && aspect.height == 896);
++    const auto fit = ps2::window_viewport(1920, 1080, 512, 448, false, e_window_scaling::fit);
++    assert(fit.width == 1440 && fit.height == 1080);
++    const auto wide = ps2::window_viewport(1920, 1080, 640, 480, true, e_window_scaling::fit);
++    assert(wide.width == 1920 && wide.height == 1080);
++    const auto small = ps2::window_viewport(320, 240, 512, 448, false, e_window_scaling::integer_pixels);
++    assert(small.width <= 320 && small.height <= 240);
++    for (int multiplier = 2; multiplier <= 4; ++multiplier)
++    {
++        const auto mode = static_cast<e_window_scaling>(multiplier + 1);
++        const auto fixed = ps2::window_viewport(3840, 2160, 512, 448, false, mode);
++        assert(fixed.width == 597 * multiplier && fixed.height == 448 * multiplier);
++        const auto limited = ps2::window_viewport(1920, 1080, 512, 448, false, mode);
++        assert(limited.width == 1194 && limited.height == 896);
++        const auto pixel_mode = static_cast<e_window_scaling>(multiplier + 4);
++        const auto pixels = ps2::window_viewport(3840, 2160, 512, 448, false, pixel_mode);
++        assert(pixels.width == 512 * multiplier && pixels.height == 448 * multiplier);
++        const auto pixel_limited = ps2::window_viewport(1920, 1080, 512, 448, false, pixel_mode);
++        assert(pixel_limited.width == 1024 && pixel_limited.height == 896);
++        const auto wide_pixels = ps2::window_viewport(3840, 2160, 512, 448, true, pixel_mode);
++        assert(wide_pixels.width == pixels.width && wide_pixels.height == pixels.height);
++    }
++
++    // Exercise PAL/NTSC, widescreen, tiny windows and arbitrary desktop sizes.
++    for (int mode = 0; mode != 9; ++mode)
++    {
++        for (int w = 1; w < 4100; w += 17)
++        {
++            for (int h = 1; h < 2200; h += 37)
++            {
++                for (const int source_h : {448, 480, 512, 576})
++                {
++                    for (const bool widescreen : {false, true})
++                    {
++                        const auto v = ps2::window_viewport(w, h, 512, source_h, widescreen, static_cast<e_window_scaling>(mode));
++                        assert(v.width > 0 && v.height > 0 && v.x >= 0 && v.y >= 0);
++                        assert(v.x + v.width <= w && v.y + v.height <= h);
++                        assert(v.x * 2 + v.width <= w && w - (v.x * 2 + v.width) <= 1);
++                        if (mode >= 3 && mode <= 5)
++                        {
++                            assert(v.height <= source_h * (mode - 1));
++                        }
++                        if (mode >= 6) assert(v.height <= source_h * (mode - 4));
++                        if ((mode == 2 || mode >= 6) && w >= 512 && h >= source_h)
++                        {
++                            assert(v.width % 512 == 0 && v.height % source_h == 0);
++                            assert(v.width / 512 == v.height / source_h);
++                        }
++                    }
++                }
++            }
++        }
++    }
++
++    std::FILE *file = std::tmpfile();
++    assert(file);
++    s_window_preferences written;
++    written.scaling = 8;
++    written.nearest = 0;
++    written.field_blending = 0;
++    written.show_stats = 0;
++    written.volume = 35;
++    written.muted = 1;
++    written.fullscreen = 1;
++    written.width = 1440;
++    written.height = 900;
++    written.render_scale = 4;
++    written.resize_with_scale = 0;
++    written.widescreen = 1;
++    assert(write_window_preferences(file, written));
++    std::rewind(file);
++    s_window_preferences loaded;
++    read_window_preferences(file, loaded);
++    assert(loaded.scaling == 8 && loaded.nearest == 0 && loaded.field_blending == 0);
++    assert(loaded.show_stats == 0 && loaded.volume == 35 && loaded.muted == 1);
++    assert(loaded.fullscreen == 1 && loaded.width == 1440 && loaded.height == 900);
++    assert(loaded.render_scale == 4 && loaded.resize_with_scale == 0);
++    assert(loaded.widescreen == 1);
++    std::fclose(file);
++
++    file = std::tmpfile();
++    assert(file);
++    std::fputs("scaling=99\nvolume=-1\nwidth=0\nnearest=banana\nmuted=999999999999999999999999999999\nheight=oops\nunknown=1\n", file);
++    std::rewind(file);
++    s_window_preferences defaults;
++    read_window_preferences(file, defaults);
++    assert(defaults.scaling == 1 && defaults.volume == 100 && defaults.width == 960);
++    assert(defaults.nearest == 1 && defaults.muted == 0 && defaults.height == 720);
++    std::fclose(file);
++
++    file = std::tmpfile();
++    assert(file);
++    std::fputs("; Config comments are ignored\n  scaling = 6\n\tvolume = 75\n nearest = 0\n", file);
++    std::rewind(file);
++    s_window_preferences spaced;
++    read_window_preferences(file, spaced);
++    assert(spaced.scaling == 6 && spaced.volume == 75 && spaced.nearest == 0);
++    std::fclose(file);
++
++    for (unsigned from = 1; from <= 4; ++from)
++    {
++        std::vector<std::uint32_t> source(13 * from * from);
++        for (std::size_t word = 0; word < 13; ++word)
++            for (unsigned k = 0; k < from * from; ++k) source[word * from * from + k] = static_cast<unsigned>(word);
++        for (unsigned to = 1; to <= 4; ++to)
++        {
++            const auto resized = ps2::rescale_vram_samples(source, from, to);
++            assert(resized.size() == 13 * to * to);
++            for (std::size_t word = 0; word < 13; ++word)
++                for (unsigned k = 0; k < to * to; ++k) assert(resized[word * to * to + k] == word);
++        }
++    }
++    const std::vector<std::uint32_t> pattern{11, 12, 13, 14};
++    const std::vector<std::uint32_t> expected{11,11,12,12,11,11,12,12,13,13,14,14,13,13,14,14};
++    assert(ps2::rescale_vram_samples(pattern, 2, 4) == expected);
++    assert(ps2::fixed_window_scale(e_window_scaling::pixels_4x) == 4);
++    assert(ps2::fixed_window_scale(e_window_scaling::scale_3x) == 3);
++    assert(ps2::fixed_window_scale(e_window_scaling::fit) == 0);
++    std::puts("Viewport bounds, integer multiples and preferences tests passed.");
++}
+--- /dev/null
++++ b/tests/render_scale_state_test.cpp
+@@ -0,0 +1,86 @@
++// Standalone test: link with the embedded GS/blit shaders and wgpu-native.
++// No game code is needed. The swizzle-table stub is sufficient for this test's
++// buffer-only state transfers; it must never be used for game rendering.
++#include "ps2/system.hpp"
++#include "ps2/presentation.hpp"
++#include "ps2/render_scale.hpp"
++#include "gpu.hpp"
++#include "../runtime/src/gs/gpu/gpu.cpp"
++#include <cassert>
++#include <cstdio>
++
++namespace ps2
++{
++Options g_options;
++std::uint64_t frame_count() { return 0; }
++namespace gs
++{
++std::uint32_t g_setup_generation = 0;
++void swizzle_tables(std::vector<std::uint32_t> &tables) { tables.resize(45056); }
++namespace gpu
++{
++bool change_render_scale(std::uint32_t scale);
++}
++}
++}
++
++int main()
++{
++    using namespace ps2::gs::gpu;
++    assert(init(Mode::primary));
++    // Exercise recreation of the presentation bind group without a real window.
++    WGPUShaderSourceWGSL shader = WGPU_SHADER_SOURCE_WGSL_INIT;
++    shader.code = view(kBlitShader);
++    WGPUShaderModuleDescriptor module_descriptor = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
++    module_descriptor.nextInChain = &shader.chain;
++    const auto module = wgpuDeviceCreateShaderModule(g_device, &module_descriptor);
++    WGPUColorTargetState color = WGPU_COLOR_TARGET_STATE_INIT;
++    color.format = WGPUTextureFormat_RGBA8Unorm;
++    WGPUFragmentState fragment = WGPU_FRAGMENT_STATE_INIT;
++    fragment.module = module;
++    fragment.entryPoint = view("fs");
++    fragment.targetCount = 1;
++    fragment.targets = &color;
++    WGPURenderPipelineDescriptor pipeline = WGPU_RENDER_PIPELINE_DESCRIPTOR_INIT;
++    pipeline.vertex.module = module;
++    pipeline.vertex.entryPoint = view("vs");
++    pipeline.fragment = &fragment;
++    g_blit = wgpuDeviceCreateRenderPipeline(g_device, &pipeline);
++    g_blit_params = make_buffer(32, WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst);
++    wgpuShaderModuleRelease(module);
++    assert(g_blit);
++    std::vector<std::uint32_t> native(ps2::gs::kMemorySize / 4);
++    for (std::size_t i = 0; i < native.size(); ++i) native[i] = static_cast<std::uint32_t>(i * 101u + 0x55000000u);
++    std::vector<std::uint32_t> clut(512, 0x11223344u);
++    write_state(native, 1, clut);
++    for (unsigned scale : {2u, 3u, 4u, 1u})
++    {
++        assert(change_render_scale(scale));
++        ps2::g_presentation_options.render_scale.store(static_cast<int>(scale));
++        std::vector<std::uint32_t> samples, saved_clut;
++        std::uint32_t actual = 0;
++        read_state(samples, actual, saved_clut);
++        assert(actual == scale && samples.size() == native.size() * scale * scale);
++        for (std::size_t word = 0; word < native.size(); ++word)
++            for (unsigned k = 0; k < scale * scale; ++k)
++                assert(samples[word * scale * scale + k] == native[word]);
++        assert(saved_clut == clut);
++        std::vector<std::uint32_t> frame;
++        std::uint32_t width = 0, height = 0;
++        const DisplaySource source{0, 8, 0, 0, 0, 16, 16, false};
++        assert(display(source, frame, width, height));
++        assert(width == 16 * scale && height == 16 * scale);
++        for (auto pixel : frame) assert(pixel == (native[0] | 0xFF000000u));
++    }
++    // Distinct subpixel samples must survive a real upscale/downscale as well.
++    assert(change_render_scale(3));
++    auto detailed = ps2::rescale_vram_samples(native, 1, 3);
++    for (std::size_t i = 0; i < detailed.size(); ++i) detailed[i] ^= static_cast<std::uint32_t>(i % 9);
++    write_state(detailed, 3, clut);
++    assert(change_render_scale(4));
++    std::vector<std::uint32_t> actual, saved_clut;
++    std::uint32_t scale = 0;
++    read_state(actual, scale, saved_clut);
++    assert(scale == 4 && actual == ps2::rescale_vram_samples(detailed, 3, 4));
++    std::puts("Live GPU scale changes 1/2/3/4 preserve VRAM and CLUT state.");
++}
+--- /dev/null
++++ b/tests/window_scaling_test.cpp
+@@ -0,0 +1,40 @@
++// Standalone SDL test: compile with function sections and link with section GC.
++// This includes the actual host UI to exercise hotkeys and window resizing.
++#include "../host/window.cpp"
++#include <cassert>
++
++namespace ps2 { Options g_options; }
++
++int main()
++{
++    assert(SDL_Init(SDL_INIT_VIDEO) == 0);
++    g_window = SDL_CreateWindow("scaling test", 0, 0, 960, 720, SDL_WINDOW_RESIZABLE);
++    assert(g_window);
++    ps2::g_presentation_options.native_width.store(512);
++    ps2::g_presentation_options.native_height.store(448);
++    SDL_KeyboardEvent key{};
++    key.keysym.scancode = SDL_SCANCODE_2;
++    key.keysym.mod = KMOD_CTRL | KMOD_SHIFT;
++    assert(handle_hotkey(key));
++    assert(g_preferences.scaling == 6);
++    assert(ps2::g_presentation_options.render_scale.load() == 2);
++    resize_for_scaling();
++    int width = 0, height = 0;
++    SDL_GetWindowSize(g_window, &width, &height);
++    // The dummy test display is 1024x768, so the requested 2x falls back to 1x.
++    assert(width == 512 && height == 448);
++
++    key.keysym.mod = KMOD_CTRL;
++    assert(handle_hotkey(key));
++    resize_for_scaling();
++    SDL_GetWindowSize(g_window, &width, &height);
++    assert(width == 597 && height == 448);
++    g_preferences.render_scale = 4;
++    key.keysym.scancode = SDL_SCANCODE_3;
++    assert(handle_hotkey(key));
++    assert(g_preferences.scaling == 4);
++    assert(ps2::g_presentation_options.render_scale.load() == 4);
++    SDL_DestroyWindow(g_window);
++    SDL_Quit();
++    std::puts("SDL hotkeys resize the window and select matching or overridden GPU resolution.");
++}

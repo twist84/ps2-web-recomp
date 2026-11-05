@@ -1,4 +1,5 @@
 #include "ps2/disc.hpp"
+#include "disc_folder.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -63,6 +64,15 @@ void index_layer(std::uint32_t pvd_sector, std::uint32_t base) {
 }
 
 bool open(const std::string &path) {
+    g_reader = {};
+    g_probe = {};
+    g_index.clear();
+    g_size = 0;
+    g_layer1 = 0;
+    if (g_file) std::fclose(g_file);
+    g_file = nullptr;
+    std::error_code error;
+    if (std::filesystem::is_directory(std::filesystem::path(path), error)) return open_folder(path);
     g_file = std::fopen(path.c_str(), "rb");
     if (!g_file) return false;
 #if defined(_WIN32)
@@ -87,6 +97,7 @@ bool open(const std::string &name, std::uint64_t size, Reader reader, Probe prob
     g_reader = std::move(reader);
     g_probe = std::move(probe);
     g_size = size;
+    g_layer1 = 0;
     g_index.clear();
     index_layer(16, 0);
     std::uint8_t pvd[kSector];

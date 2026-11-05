@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "gif.hpp"
 
 #include "gs.hpp"

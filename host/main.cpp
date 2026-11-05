@@ -11,20 +11,21 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
-#include <set>
 #include <string>
 #include <vector>
 
 void register_generated_code();
 void register_generated_vu();
+#ifdef PS2_USE_SDBZ_RECONSTRUCTED
+namespace ps2 { void register_sdbz_reconstructed(); }
+#endif
 
 namespace {
 
 int usage() {
     std::fprintf(stderr,
                  "usage: ps2run <elf> [--arg text]... [--frames n] [--run n] [--ntsc] [--misses file]\n"
-                 "              [--disc image.iso] [--memcard card.ps2] [--pal | --ntsc] [--trace-syscalls] [--trace-io] [--trace-threads]\n"
+                 "              [--disc image.iso|folder] [--memcard card.ps2] [--pal | --ntsc] [--trace-syscalls] [--trace-io] [--trace-threads]\n"
                  "              [--trace-iop] [--trace-iop-hle] [--frames-dir dir] [--frame-every n]\n"
                  "              [--press frame:button[+button][:frames]]... [--window] [--fullscreen]\n"
                  "              [--save-state frame:file] [--load-state file] [--widescreen] [--patches file]\n"
@@ -67,6 +68,7 @@ int main(int argc, char **argv) {
     [[maybe_unused]] bool window = false, fullscreen = false;
     std::string load_path;
     std::uint64_t run_frames = 0;
+    bool disc_provided = false;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--arg" && i + 1 < argc) args.push_back(argv[++i]);
@@ -84,7 +86,10 @@ int main(int argc, char **argv) {
         }
         else if (a == "--trace-io") ps2::g_options.trace_io = true;
         else if (a == "--trace-threads") ps2::g_options.trace_threads = true;
-        else if (a == "--disc" && i + 1 < argc) ps2::g_options.disc_path = argv[++i];
+        else if (a == "--disc" && i + 1 < argc) {
+            ps2::g_options.disc_path = argv[++i];
+            disc_provided = true;
+        }
         else if (a == "--memcard" && i + 1 < argc) ps2::g_options.memcard_path = argv[++i];
         else if (a == "--trace-iop") ps2::g_options.trace_iop_modules = true;
         else if (a == "--trace-iop-hle") ps2::g_options.trace_iop_hle = true;
@@ -115,11 +120,21 @@ int main(int argc, char **argv) {
         else return usage();
     }
 
+    if (!disc_provided)
+    {
+        auto folder = std::filesystem::path(argv[1]).parent_path();
+        ps2::g_options.disc_path = folder.empty() ? "." : folder.string();
+        std::fprintf(stderr, "[disc] using ELF folder: %s\n", ps2::g_options.disc_path.c_str());
+    }
+
 #ifdef PS2_WINDOW
     if (window && !open_window(fullscreen)) return 1;
 #endif
     register_generated_code();
     register_generated_vu();
+#ifdef PS2_USE_SDBZ_RECONSTRUCTED
+    ps2::register_sdbz_reconstructed();
+#endif
     const auto emulate = [&]() -> int {
         std::uint32_t entry = 0;
         if (!ps2::load_elf(argv[1], entry)) {
