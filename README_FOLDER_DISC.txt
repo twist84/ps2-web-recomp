@@ -132,3 +132,27 @@ Keep INFO.DAT unchanged on disk. The modified index and ISO metadata exist only
 in memory for the mounted session; they are regenerated from the original
 INFO.DAT and loose file sizes each launch. Back up original assets before
 editing.
+
+
+Generated GAME.DAT manifest and independent discovery
+------------------------------------------------------
+The extractor now creates .ps2-disc/game_manifest.tsv from the decoded
+INFO.DAT image. The manifest stores the complete decoded INFO.DAT bytes and
+the INFO.DAT/GAME.DAT LBA and size pair from layout.tsv. Runtime mounting uses
+this manifest when present and falls back to parsing physical INFO.DAT when
+the manifest is absent. The physical INFO.DAT may be removed when the generated
+manifest is present; the runtime supplies its virtual contents to the game.
+Asset resizing still updates the in-memory INFO.DAT image and virtual overlay.
+
+To generate the manifest for an already-extracted folder:
+
+  python scripts/generate_game_manifest.py games/SuperDragonBallZ/disc
+
+Independent recovery (best effort)
+----------------------------------
+When the manifest is lost, scripts/discover_game_manifest.py can compare loose
+GAME/ files against sector-aligned bytes in the original GAME.DAT and write
+.ps2-disc/game_discovery.json. This is a candidate report only: it requires the
+original GAME.DAT and unchanged loose files, rejects duplicate matches, and
+does not prove that GAME/ contains every archive entry. It cannot recover an
+unknown INFO.DAT header template. Use the generated manifest for normal mounts.

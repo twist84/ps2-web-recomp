@@ -8,6 +8,7 @@ spec = importlib.util.spec_from_file_location("ps2_disc_tools", Path(__file__).w
 disc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(disc)
 SECTOR = disc.SECTOR
+from generate_game_manifest import generate_manifest
 
 
 class LayoutImage(disc.Image):
@@ -114,6 +115,10 @@ def extract_folder(image_path, output):
             for lba, size, storage in selected:
                 out.write("%d\t%d\t%s\n" % (lba, size, storage))
         temporary.replace(layout)
+        if any(name.upper() == "INFO.DAT" for name, _, _, _ in entries) and any(
+            name.upper() == "GAME.DAT" for name, _, _, _ in entries
+        ):
+            generate_manifest(root)
         print("%d files extracted to %s; original file LBAs preserved" % (len(entries), root))
     finally:
         image.file.close()
