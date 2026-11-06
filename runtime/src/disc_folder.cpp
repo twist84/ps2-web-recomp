@@ -133,6 +133,138 @@ fs::path archive_path(const std::string &raw_name)
     return relative;
 }
 
+std::vector<s_archive_entry> parse_info_entries(const std::vector<std::uint8_t> &decoded)
+{
+    if (decoded.size() < 0x30)
+    {
+        throw std::runtime_error("decoded INFO.DAT is smaller than its 0x30-byte header");
+    }
+    static constexpr char signature[] = "www.arika.co.jp";
+    if (std::memcmp(decoded.data() + 1, signature, sizeof(signature) - 1) != 0)
+    {
+        throw std::runtime_error("decoded INFO.DAT signature is not www.arika.co.jp");
+    }
+
+    const std::uint32_t count = read_u32_le(decoded.data() + 0x2C);
+    if (!count)
+    {
+        throw std::runtime_error("INFO.DAT contains no asset records");
+    }
+    const std::uint64_t table_end = 0x30ull + static_cast<std::uint64_t>(count) * 0x30ull;
+    if (table_end > decoded.size())
+    {
+        throw std::runtime_error("INFO.DAT record table exceeds the file size");
+    }
+
+    std::vector<s_archive_entry> entries;
+    entries.reserve(count);
+    std::set<std::string> names;
+    for (std::uint32_t index = 0; index < count; ++index)
+    {
+        const auto *record = decoded.data() + 0x30 + static_cast<std::size_t>(index) * 0x30;
+        const auto *name_end = static_cast<const std::uint8_t *>(std::memchr(record, 0, 0x20));
+        const std::size_t name_size = name_end ? static_cast<std::size_t>(name_end - record) : 0x20;
+        if (!name_size)
+        {
+            throw std::runtime_error("INFO.DAT contains an empty asset name");
+        }
+
+        s_archive_entry entry;
+        entry.name.assign(reinterpret_cast<const char *>(record), name_size);
+        entry.relative_path = archive_path(entry.name);
+        entry.sector_offset = read_u32_le(record + 0x24);
+        entry.sector_count = read_u32_le(record + 0x28);
+        entry.byte_size = read_u32_le(record + 0x2C);
+        if (!entry.sector_count || !entry.byte_size
+            || entry.byte_size > static_cast<std::uint64_t>(entry.sector_count) * kSector)
+        {
+            throw std::runtime_error("invalid INFO.DAT extent for " + entry.name);
+        }
+        if (!names.insert(archive_name_key(entry.name)).second)
+        {
+            throw std::runtime_error("duplicate asset path in INFO.DAT: " + entry.name);
+        }
+        entries.push_back(std::move(entry));
+    }
+
+    std::vector<const s_archive_entry *> extents;
+    extents.reserve(entries.size());
+    for (const auto &entry : entries) extents.push_back(&entry);
+    std::sort(extents.begin(), extents.end(), [](const auto *a, const auto *b)
+    {
+        return a->sector_offset < b->sector_offset;
+    });
+    std::uint64_t previous_end = 0;
+    for (const auto *entry : extents)
+    {
+        const std::uint64_t start = entry->sector_offset;
+        const std::uint64_t finish = start + entry->sector_count;
+        if (start < previous_end)
+        {
+            throw std::runtime_error("overlapping INFO.DAT extents near " + entry->name);
+        }
+        previous_end = finish;
+    }
+    return entries;
+}
+
+int manifest_hex_digit(char value)
+{
+    if (value >= '0' && value <= '9') return value - '0';
+    if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+    if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+    return -1;
+}
+
+void read_game_manifest(const fs::path &path, const s_layout_entry &info_entry,
+    const s_layout_entry &game_entry, std::vector<std::uint8_t> &decoded)
+{
+    std::ifstream input(path);
+    std::string header_line;
+    std::string info_line;
+    if (!input || !std::getline(input, header_line) || !std::getline(input, info_line))
+    {
+        throw std::runtime_error("cannot read GAME.DAT manifest: " + path.string());
+    }
+
+    std::istringstream header(header_line);
+    std::string magic;
+    std::uint32_t version = 0;
+    std::uint32_t sector_size = 0;
+    std::uint64_t info_lba = 0, info_size = 0, game_lba = 0, game_size = 0;
+    std::string extra;
+    if (!(header >> magic >> version >> sector_size >> info_lba >> info_size >> game_lba >> game_size)
+        || (header >> extra) || magic != "PS2_GAME_MANIFEST" || version != 1 || sector_size != kSector
+        || info_lba != info_entry.lba || info_size != info_entry.size
+        || game_lba != game_entry.lba || game_size != game_entry.size)
+    {
+        throw std::runtime_error("GAME.DAT manifest does not match this disc layout");
+    }
+
+    static constexpr char prefix[] = "INFO_HEX\t";
+    if (info_line.compare(0, sizeof(prefix) - 1, prefix) != 0)
+    {
+        throw std::runtime_error("GAME.DAT manifest has no decoded INFO.DAT image");
+    }
+    const std::string hex = info_line.substr(sizeof(prefix) - 1);
+    if (hex.size() != info_entry.size * 2 || (hex.size() & 1))
+    {
+        throw std::runtime_error("GAME.DAT manifest INFO.DAT image has an invalid size");
+    }
+    decoded.resize(static_cast<std::size_t>(info_entry.size));
+    for (std::size_t index = 0; index < decoded.size(); ++index)
+    {
+        const int high = manifest_hex_digit(hex[index * 2]);
+        const int low = manifest_hex_digit(hex[index * 2 + 1]);
+        if (high < 0 || low < 0)
+        {
+            throw std::runtime_error("GAME.DAT manifest contains invalid hexadecimal data");
+        }
+        decoded[index] = static_cast<std::uint8_t>((high << 4) | low);
+    }
+    (void)parse_info_entries(decoded); // Validate the embedded index before using it.
+}
+
 std::vector<s_archive_entry> read_info_entries(const fs::path &path, std::vector<std::uint8_t> &decoded)
 {
     std::ifstream input(path, std::ios::binary | std::ios::ate);
@@ -635,16 +767,28 @@ void original_layout(const fs::path &root, const fs::path &layout, s_folder &fol
     const auto loose_game = find_directory(root, "GAME");
     bool loose_game_active = info_entry && game_entry && !loose_game.empty();
     bool game_dat_exists = false;
+    bool info_dat_virtual = false;
     std::uint32_t expanded_game_size = 0;
     std::uint32_t expanded_volume_sectors = 0;
 
     if (loose_game_active)
     {
-        const auto info_path = fs::canonical(root / info_entry->relative_path);
-        if (!is_inside(canonical_root, info_path) || !fs::is_regular_file(info_path)
-            || fs::file_size(info_path) != info_entry->size)
+        const auto info_path = root / info_entry->relative_path;
+        std::error_code info_error;
+        const bool info_file_exists = fs::exists(info_path, info_error);
+        if (info_error)
         {
-            throw std::runtime_error("INFO.DAT is missing or does not match the preserved disc layout");
+            throw std::runtime_error("cannot inspect INFO.DAT: " + info_path.string());
+        }
+        fs::path canonical_info_path;
+        if (info_file_exists)
+        {
+            canonical_info_path = fs::canonical(info_path);
+            if (!is_inside(canonical_root, canonical_info_path) || !fs::is_regular_file(canonical_info_path)
+                || fs::file_size(canonical_info_path) != info_entry->size)
+            {
+                throw std::runtime_error("INFO.DAT does not match the preserved disc layout");
+            }
         }
         const auto loose_root = fs::canonical(loose_game);
         if (!is_inside(canonical_root, loose_root) || !fs::is_directory(loose_root))
@@ -674,7 +818,24 @@ void original_layout(const fs::path &root, const fs::path &layout, s_folder &fol
         }
 
         std::vector<std::uint8_t> decoded_info;
-        auto archive_entries = read_info_entries(info_path, decoded_info);
+        std::vector<s_archive_entry> archive_entries;
+        bool manifest_used = false;
+        const auto manifest_path = root / ".ps2-disc" / "game_manifest.tsv";
+        if (fs::is_regular_file(manifest_path))
+        {
+            read_game_manifest(manifest_path, *info_entry, *game_entry, decoded_info);
+            archive_entries = parse_info_entries(decoded_info);
+            manifest_used = true;
+        }
+        else
+        {
+            if (!info_file_exists)
+            {
+                throw std::runtime_error("INFO.DAT is missing and no generated GAME.DAT manifest is available");
+            }
+            archive_entries = read_info_entries(canonical_info_path, decoded_info);
+        }
+        info_dat_virtual = manifest_used && !info_file_exists;
         const std::uint64_t original_game_sector_count = sectors(game_entry->size);
         const std::uint64_t original_disc_sector_count = folder.size / kSector;
         std::uint64_t next_appended_lba = original_disc_sector_count;
@@ -800,7 +961,7 @@ void original_layout(const fs::path &root, const fs::path &layout, s_folder &fol
             throw std::runtime_error("GAME.DAT is absent and no complete loose GAME/ extraction was found");
         }
 
-        if (resized_count)
+        if (resized_count || info_dat_virtual)
         {
             auto encoded_info = encode_info(decoded_info);
             folder.overlays.push_back({info_entry->lba * kSector, encoded_info.size(), {}, std::move(encoded_info)});
@@ -838,6 +999,11 @@ void original_layout(const fs::path &root, const fs::path &layout, s_folder &fol
         }
         if (!exists && loose_game_active && !game_dat_exists
             && upper(entry.relative_path.generic_string()) == "GAME.DAT")
+        {
+            continue;
+        }
+        if (!exists && loose_game_active && info_dat_virtual
+            && upper(entry.relative_path.generic_string()) == "INFO.DAT")
         {
             continue;
         }
