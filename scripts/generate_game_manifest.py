@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Generate the runtime GAME.DAT manifest from an extracted disc's INFO.DAT.
+"""Generate the runtime GAME.DAT manifest and recovery template.
 
-The manifest stores the complete decoded INFO.DAT image, not merely a list of
-asset rows. This preserves header bytes that the runtime/game may also read.
+The manifest contains the complete decoded INFO.DAT image. The separate
+recovery template retains all opaque INFO.DAT bytes while clearing the three
+sector/size fields in each entry; the discovery tool can repopulate those
+fields from exact, sector-aligned matches in the original GAME.DAT.
 """
 
 import argparse
@@ -89,6 +91,27 @@ def decode_info(encoded):
     return bytes(decoded), count
 
 
+def manifest_text(decoded, info_lba, info_size, game_lba, game_size):
+    header = (
+        "PS2_GAME_MANIFEST\t1\t%d\t%d\t%d\t%d\t%d\n"
+        % (SECTOR_SIZE, info_lba, info_size, game_lba, game_size)
+    )
+    return header + "INFO_HEX\t" + decoded.hex() + "\n"
+
+
+def write_manifest(root, decoded, info_lba, info_size, game_lba, game_size):
+    metadata = root / ".ps2-disc"
+    metadata.mkdir(parents=True, exist_ok=True)
+    target = metadata / "game_manifest.tsv"
+    temporary = target.with_suffix(".tmp")
+    temporary.write_text(
+        manifest_text(decoded, info_lba, info_size, game_lba, game_size),
+        encoding="ascii", newline="\n"
+    )
+    temporary.replace(target)
+    return target
+
+
 def generate_manifest(disc_folder):
     root = Path(disc_folder).resolve()
     volume_sectors, entries = read_layout(root)
@@ -99,25 +122,29 @@ def generate_manifest(disc_folder):
 
     info_lba, info_size, info_relative = info
     game_lba, game_size, _ = game
-    info_path = root.joinpath(*Path(info_relative).parts)
+    info_path = root.joinpath(*Path(info_relative.replace("\\", "/")).parts)
     if not info_path.is_file() or info_path.stat().st_size != info_size:
         raise ValueError("INFO.DAT is missing or does not match layout.tsv")
     decoded, count = decode_info(info_path.read_bytes())
     if len(decoded) != info_size:
         raise ValueError("decoded INFO.DAT size differs from its layout extent")
 
-    header = (
-        "PS2_GAME_MANIFEST\t1\t%d\t%d\t%d\t%d\t%d\n"
-        % (SECTOR_SIZE, info_lba, info_size, game_lba, game_size)
-    )
-    payload = header + "INFO_HEX\t" + decoded.hex() + "\n"
-    target = root / ".ps2-disc" / "game_manifest.tsv"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_suffix(".tmp")
-    temporary.write_text(payload, encoding="ascii", newline="\n")
-    temporary.replace(target)
-    print("generated %d-entry GAME.DAT manifest: %s (volume %d sectors)" % (count, target, volume_sectors))
-    return target
+    # Keep the complete decoded structure, but clear only the fields that
+    # independent discovery must recover from GAME.DAT itself.
+    recovery_template = bytearray(decoded)
+    for index in range(count):
+        record_offset = 0x30 + index * 0x30
+        recovery_template[record_offset + 0x24:record_offset + 0x30] = b"\0" * 12
+
+    template_path = root / ".ps2-disc" / "game_manifest_template.bin"
+    template_tmp = template_path.with_suffix(".tmp")
+    template_tmp.write_bytes(recovery_template)
+    template_tmp.replace(template_path)
+
+    manifest_path = write_manifest(root, decoded, info_lba, info_size, game_lba, game_size)
+    print("generated %d-entry GAME.DAT manifest: %s (volume %d sectors)" % (count, manifest_path, volume_sectors))
+    print("saved independent-recovery template: %s" % template_path)
+    return manifest_path
 
 
 def main():
