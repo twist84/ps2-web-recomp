@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regression tests for the manifest generator and exact discovery utility."""
 
+import json
 import pathlib
 import struct
 import sys
@@ -75,20 +76,25 @@ class GameManifestTests(unittest.TestCase):
 
     def test_discovery_finds_unique_exact_sector_extent(self):
         _, payload = make_fixture(self.root)
-        report = discover_game_manifest.discover(self.root)
+        generate_game_manifest.generate_manifest(self.root)
+        discover_game_manifest.discover(self.root)
+        report = json.loads((self.root / ".ps2-disc" / "game_discovery.json").read_text(encoding="utf-8"))
         self.assertEqual(len(report["assets"]), 1)
         asset = report["assets"][0]
         self.assertEqual(asset["sector_offset"], 2)
         self.assertEqual(asset["byte_size"], len(payload))
-        self.assertTrue(report["complete_index_not_proven"])
+        self.assertTrue(report["complete"])
+        self.assertEqual(report["unindexed_loose_assets"], [])
 
     def test_discovery_rejects_ambiguous_exact_match(self):
         make_fixture(self.root, duplicate=True)
+        generate_game_manifest.generate_manifest(self.root)
         with self.assertRaisesRegex(ValueError, "multiple exact matches"):
             discover_game_manifest.discover(self.root)
 
     def test_discovery_rejects_modified_asset(self):
         _, _ = make_fixture(self.root)
+        generate_game_manifest.generate_manifest(self.root)
         path = self.root / "GAME/sub/test.bin"
         path.write_bytes(path.read_bytes() + b"edited")
         with self.assertRaisesRegex(ValueError, "no exact match"):

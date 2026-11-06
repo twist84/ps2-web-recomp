@@ -148,16 +148,6 @@ To generate the manifest for an already-extracted folder:
 
   python scripts/generate_game_manifest.py games/SuperDragonBallZ/disc
 
-Independent recovery (best effort)
-----------------------------------
-When the manifest is lost, scripts/discover_game_manifest.py can compare loose
-GAME/ files against sector-aligned bytes in the original GAME.DAT and write
-.ps2-disc/game_discovery.json. This is a candidate report only: it requires the
-original GAME.DAT and unchanged loose files, rejects duplicate matches, and
-does not prove that GAME/ contains every archive entry. It cannot recover an
-unknown INFO.DAT header template. Use the generated manifest for normal mounts.
-
-
 Independent GAME.DAT index recovery
 -----------------------------------
 The normal extractor creates both .ps2-disc/game_manifest.tsv and a
@@ -166,7 +156,7 @@ opaque INFO.DAT header, record names and reserved record bytes, but clears the
 sector offset/count/size fields that independent discovery must recover.
 
 To recover after INFO.DAT and game_manifest.tsv have both been removed, keep
-the original GAME.DAT, the complete unchanged GAME/ extraction, layout.tsv
+the original GAME.DAT, all originally indexed files under GAME/ unchanged (additional new files are allowed), layout.tsv
 and game_manifest_template.bin, then run:
 
   python scripts/discover_game_manifest.py games/SuperDragonBallZ/disc
@@ -174,7 +164,7 @@ and game_manifest_template.bin, then run:
 The tool scans GAME.DAT on 2048-byte boundaries, compares candidate files
 byte-for-byte, verifies that every template entry has exactly one match, and
 rebuilds the normal game_manifest.tsv consumed by the runtime. It also writes
- game_discovery.json as an audit report. It rejects missing, modified,
+game_discovery.json as an audit report. It rejects missing, modified,
 ambiguous, duplicated or overlapping files instead of guessing offsets.
 
 Discovery is an offline recovery command, not a per-launch scan. Generate the
@@ -183,3 +173,33 @@ before deleting INFO.DAT or the manifest. Normal modding should continue to
 use the generated manifest; discovery cannot locate files whose bytes have
 changed from the original archive.
 
+
+
+Adding new archive assets under GAME/
+-------------------------------------
+The runtime automatically indexes regular files under GAME/ that do not have
+an existing INFO.DAT entry. Preserve the directory structure used by the
+archive paths. New filenames must fit INFO.DAT's 32-byte CP932 name field.
+Existing entries are not moved. New files receive a sector extent from unused
+GAME.DAT sectors first, then from the virtual ISO append area. This works with
+GAME.DAT present or absent, provided the loose extraction is complete when the
+archive fallback is absent.
+
+The runtime appends new 0x30-byte records to its in-memory INFO.DAT image and
+updates the record count. It copies the four opaque bytes at record +0x20 from
+an existing entry with the same extension when possible, otherwise from the
+first existing record. This is a best-effort compatibility default because
+the meaning of those bytes is not yet fully understood. The physical
+INFO.DAT and generated manifest are never modified.
+
+If the larger record table still fits in the original INFO.DAT sector extent,
+the virtual file is updated in place and its ISO directory-record size is
+adjusted. If it needs more sectors, the complete virtual INFO.DAT is relocated
+to newly appended sectors, and its ISO directory record is updated with the new
+LBA and size. The PVD volume-space size is updated when sectors are appended.
+
+New paths are limited to 32 CP932 bytes. On Windows the runtime converts the
+Unicode host path to CP932 and rejects lossy conversions. On non-Windows builds,
+host path bytes are treated as CP932; use CP932-encoded filenames for non-ASCII
+paths. Empty files, symlinks, path traversal and case-insensitive collisions
+are rejected.

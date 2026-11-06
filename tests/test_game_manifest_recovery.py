@@ -113,10 +113,21 @@ class GameManifestRecoveryTests(unittest.TestCase):
             discover_game_manifest.discover(self.root)
         self.assertFalse((self.root / ".ps2-disc" / "game_manifest.tsv").exists())
 
+    def test_discovery_allows_new_unindexed_assets(self):
+        self.remove_primary_indexes()
+        (self.root / "GAME" / "new_asset.bin").write_bytes(b"new asset not present in original GAME.DAT")
+        target, count = discover_game_manifest.discover(self.root)
+        self.assertEqual(count, len(self.assets))
+        report = __import__("json").loads((self.root / ".ps2-disc" / "game_discovery.json").read_text(encoding="utf-8"))
+        self.assertEqual(report["unindexed_loose_assets"], ["new_asset.bin"])
+        lines = target.read_text(encoding="ascii").splitlines()
+        rebuilt = bytes.fromhex(lines[1].split("\t", 1)[1])
+        self.assertEqual(struct.unpack_from("<I", rebuilt, 0x2c)[0], len(self.assets))
+
     def test_rejects_incomplete_loose_game_directory(self):
         self.remove_primary_indexes()
         (self.root / "GAME" / "dir" / "other.bin").unlink()
-        with self.assertRaisesRegex(ValueError, "complete extraction"):
+        with self.assertRaisesRegex(ValueError, "missing indexed assets"):
             discover_game_manifest.discover(self.root)
         self.assertFalse((self.root / ".ps2-disc" / "game_manifest.tsv").exists())
 
