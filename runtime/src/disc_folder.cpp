@@ -317,63 +317,6 @@ std::vector<s_archive_entry> parse_info_entries(const std::vector<std::uint8_t> 
     return entries;
 }
 
-int manifest_hex_digit(char value)
-{
-    if (value >= '0' && value <= '9') return value - '0';
-    if (value >= 'a' && value <= 'f') return value - 'a' + 10;
-    if (value >= 'A' && value <= 'F') return value - 'A' + 10;
-    return -1;
-}
-
-void read_game_manifest(const fs::path &path, const s_layout_entry &info_entry,
-    const s_layout_entry &game_entry, std::vector<std::uint8_t> &decoded)
-{
-    std::ifstream input(path);
-    std::string header_line;
-    std::string info_line;
-    if (!input || !std::getline(input, header_line) || !std::getline(input, info_line))
-    {
-        throw std::runtime_error("cannot read GAME.DAT manifest: " + path.string());
-    }
-
-    std::istringstream header(header_line);
-    std::string magic;
-    std::uint32_t version = 0;
-    std::uint32_t sector_size = 0;
-    std::uint64_t info_lba = 0, info_size = 0, game_lba = 0, game_size = 0;
-    std::string extra;
-    if (!(header >> magic >> version >> sector_size >> info_lba >> info_size >> game_lba >> game_size)
-        || (header >> extra) || magic != "PS2_GAME_MANIFEST" || version != 1 || sector_size != kSector
-        || info_lba != info_entry.lba || info_size != info_entry.size
-        || game_lba != game_entry.lba || game_size != game_entry.size)
-    {
-        throw std::runtime_error("GAME.DAT manifest does not match this disc layout");
-    }
-
-    static constexpr char prefix[] = "INFO_HEX\t";
-    if (info_line.compare(0, sizeof(prefix) - 1, prefix) != 0)
-    {
-        throw std::runtime_error("GAME.DAT manifest has no decoded INFO.DAT image");
-    }
-    const std::string hex = info_line.substr(sizeof(prefix) - 1);
-    if (hex.size() != info_entry.size * 2 || (hex.size() & 1))
-    {
-        throw std::runtime_error("GAME.DAT manifest INFO.DAT image has an invalid size");
-    }
-    decoded.resize(static_cast<std::size_t>(info_entry.size));
-    for (std::size_t index = 0; index < decoded.size(); ++index)
-    {
-        const int high = manifest_hex_digit(hex[index * 2]);
-        const int low = manifest_hex_digit(hex[index * 2 + 1]);
-        if (high < 0 || low < 0)
-        {
-            throw std::runtime_error("GAME.DAT manifest contains invalid hexadecimal data");
-        }
-        decoded[index] = static_cast<std::uint8_t>((high << 4) | low);
-    }
-    (void)parse_info_entries(decoded); // Validate the embedded index before using it.
-}
-
 std::vector<s_archive_entry> read_info_entries(const fs::path &path, std::vector<std::uint8_t> &decoded)
 {
     std::ifstream input(path, std::ios::binary | std::ios::ate);
@@ -800,14 +743,18 @@ std::vector<std::uint8_t> directory(const std::string &key, const std::map<std::
     return bytes;
 }
 
-void synthetic_layout(const fs::path &root, s_folder &folder)
+void synthetic_layout(const fs::path &root, s_folder &folder, std::vector<s_layout_entry> &entries)
 {
     std::map<std::string, s_node> nodes;
     nodes[""] = {root, "", "", 0, 0, true};
-    for (fs::recursive_directory_iterator it(root), end; it != end; ++it)
+    std::error_code scan_error;
+    for (fs::recursive_directory_iterator it(root, scan_error), end;
+        !scan_error && it != end; it.increment(scan_error))
     {
         const auto relative = it->path().lexically_relative(root);
-        if (upper(relative.begin()->string()) == ".PS2-DISC" || it->is_symlink())
+        if (relative.empty()) continue;
+        const std::string first_component = upper(relative.begin()->string());
+        if (first_component == ".PS2-DISC" || first_component == "GAME" || it->is_symlink())
         {
             if (it->is_directory()) it.disable_recursion_pending();
             continue;
@@ -815,11 +762,36 @@ void synthetic_layout(const fs::path &root, s_folder &folder)
         if (!it->is_directory() && !it->is_regular_file()) continue;
         const auto key = upper(relative.generic_string());
         const auto size = it->is_directory() ? 0 : it->file_size();
-        if (size > std::numeric_limits<std::uint32_t>::max()) throw std::runtime_error("extracted file exceeds the PS2 disc file-size limit");
-        s_node node{it->path(), upper(relative.parent_path().generic_string()), upper(relative.filename().string()),
-            0, static_cast<std::uint32_t>(size), it->is_directory()};
-        if (!nodes.emplace(key, std::move(node)).second) throw std::runtime_error("case-insensitive filename collision in extracted folder");
+        if (size > std::numeric_limits<std::uint32_t>::max())
+            throw std::runtime_error("extracted file exceeds the PS2 disc file-size limit");
+        s_node node{it->path(), upper(relative.parent_path().generic_string()),
+            upper(relative.filename().string()), 0, static_cast<std::uint32_t>(size), it->is_directory()};
+        if (!nodes.emplace(key, std::move(node)).second)
+            throw std::runtime_error("case-insensitive filename collision in extracted folder");
     }
+    if (scan_error) throw std::runtime_error("cannot enumerate extracted disc folder: " + scan_error.message());
+
+    // GAME/ is an extraction/override directory, not an ISO directory. If the
+    // archive itself is absent, synthesize its file extent from INFO.DAT and
+    // let the complete loose extraction provide the bytes at runtime.
+    if (nodes.find("GAME.DAT") == nodes.end() && nodes.find("INFO.DAT") != nodes.end())
+    {
+        if (find_directory(root, "GAME").empty())
+            throw std::runtime_error("GAME.DAT is missing and no loose GAME/ extraction is available");
+        std::vector<std::uint8_t> decoded;
+        const auto archive_entries = read_info_entries(nodes.at("INFO.DAT").path, decoded);
+        std::uint64_t required_sectors = 0;
+        for (const auto &asset : archive_entries)
+        {
+            required_sectors = std::max(required_sectors,
+                static_cast<std::uint64_t>(asset.sector_offset) + asset.sector_count);
+        }
+        if (!required_sectors || required_sectors > std::numeric_limits<std::uint32_t>::max() / kSector)
+            throw std::runtime_error("cannot infer a valid virtual GAME.DAT size from INFO.DAT");
+        nodes.emplace("GAME.DAT", s_node{root / "GAME.DAT", "", "GAME.DAT", 0,
+            static_cast<std::uint32_t>(required_sectors * kSector), false});
+    }
+
     std::vector<std::string> directories;
     std::map<std::string, std::uint16_t> ordinals;
     std::uint32_t path_bytes = 0;
@@ -833,25 +805,41 @@ void synthetic_layout(const fs::path &root, s_folder &folder)
         node.size = static_cast<std::uint32_t>(directory(key, nodes).size());
     }
     const auto path_sectors = static_cast<std::uint32_t>(sectors(path_bytes));
-    std::uint32_t next = 18 + path_sectors * 2;
+    std::uint64_t next = 18ull + static_cast<std::uint64_t>(path_sectors) * 2;
+    if (next > std::numeric_limits<std::uint32_t>::max())
+        throw std::runtime_error("generated ISO path tables exceed the sector limit");
     for (const auto &key : directories)
     {
         auto &node = nodes.at(key);
-        node.lba = next;
-        next += static_cast<std::uint32_t>(sectors(node.size));
+        node.lba = static_cast<std::uint32_t>(next);
+        next += sectors(node.size);
+        if (next > std::numeric_limits<std::uint32_t>::max())
+            throw std::runtime_error("generated ISO directories exceed the sector limit");
     }
-    next = std::max(next, 32u);
-    for (auto &[key, node] : nodes)
+    next = std::max<std::uint64_t>(next, 32);
+
+    const auto assign_file = [&](const std::string &key)
     {
-        if (node.directory) continue;
-        node.lba = next;
-        next += static_cast<std::uint32_t>(std::max<std::uint64_t>(1, sectors(node.size)));
-        if (node.size) folder.regions.push_back({static_cast<std::uint64_t>(node.lba) * kSector, node.size, node.path, {}});
-    }
+        auto &node = nodes.at(key);
+        node.lba = static_cast<std::uint32_t>(next);
+        const auto allocated = std::max<std::uint64_t>(1, sectors(node.size));
+        if (allocated > std::numeric_limits<std::uint32_t>::max() - next)
+            throw std::runtime_error("generated ISO files exceed the sector limit");
+        next += allocated;
+        entries.push_back({node.lba, node.size, node.path.lexically_relative(root)});
+    };
+
+    // Place GAME.DAT last. The archive allocator can then append new sectors
+    // linearly after its original extent without covering unrelated files.
+    for (const auto &[key, node] : nodes)
+        if (!node.directory && key != "GAME.DAT") assign_file(key);
+    if (nodes.find("GAME.DAT") != nodes.end()) assign_file("GAME.DAT");
+
     for (const auto &key : directories)
     {
         const auto &node = nodes.at(key);
-        folder.regions.push_back({static_cast<std::uint64_t>(node.lba) * kSector, node.size, {}, directory(key, nodes)});
+        folder.regions.push_back({static_cast<std::uint64_t>(node.lba) * kSector,
+            node.size, {}, directory(key, nodes)});
     }
     for (bool big : {false, true})
     {
@@ -872,6 +860,8 @@ void synthetic_layout(const fs::path &root, s_folder &folder)
         folder.regions.push_back({static_cast<std::uint64_t>(18 + (big ? path_sectors : 0)) * kSector,
             static_cast<std::uint64_t>(table.size()), {}, std::move(table)});
     }
+    if (next > std::numeric_limits<std::uint32_t>::max())
+        throw std::runtime_error("generated ISO volume exceeds the sector limit");
     std::vector<std::uint8_t> pvd(kSector, 0), terminator(kSector, 0);
     pvd[0] = 1; terminator[0] = 255;
     std::memcpy(pvd.data() + 1, "CD001", 5);
@@ -880,7 +870,7 @@ void synthetic_layout(const fs::path &root, s_folder &folder)
     std::memset(pvd.data() + 8, ' ', 64);
     std::memcpy(pvd.data() + 8, "PLAYSTATION", 11);
     std::memcpy(pvd.data() + 40, "PS2_FOLDER", 10);
-    both32(pvd.data() + 80, next);
+    both32(pvd.data() + 80, static_cast<std::uint32_t>(next));
     both16(pvd.data() + 120, 1); both16(pvd.data() + 124, 1); both16(pvd.data() + 128, kSector);
     both32(pvd.data() + 132, path_bytes);
     put32(pvd.data() + 140, 18);
@@ -891,70 +881,30 @@ void synthetic_layout(const fs::path &root, s_folder &folder)
     std::memcpy(pvd.data() + 156, root_record.data(), root_record.size());
     folder.regions.push_back({16 * kSector, kSector, {}, std::move(pvd)});
     folder.regions.push_back({17 * kSector, kSector, {}, std::move(terminator)});
-    folder.size = static_cast<std::uint64_t>(next) * kSector;
-    std::fprintf(stderr, "[disc] folder uses synthetic sectors; use scripts/extract_disc_folder.py to preserve original file LBAs\n");
+    folder.size = next * kSector;
+    std::fprintf(stderr, "[disc] synthesized ISO directory and file extents in memory; GAME.DAT is resolved by filename\n");
 }
 
-void original_layout(const fs::path &root, const fs::path &layout, s_folder &folder)
+void build_disc_layout(const fs::path &root, s_folder &folder)
 {
-    std::ifstream input(layout);
-    std::string line;
-    if (!std::getline(input, line)) throw std::runtime_error("empty disc layout file");
-    std::istringstream header(line);
-    std::string magic;
-    unsigned version = 0;
-    std::uint64_t count = 0;
-    if (!(header >> magic >> version >> count) || magic != "PS2_DISC_LAYOUT" || version != 1 || !count || count > UINT32_MAX)
-    {
-        throw std::runtime_error("invalid disc layout header");
-    }
-    folder.size = count * kSector;
-    const auto canonical_root = fs::canonical(root);
-
     std::vector<s_layout_entry> entries;
-    while (std::getline(input, line))
-    {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.empty()) continue;
-        const auto first = line.find('\t');
-        const auto second = first == std::string::npos ? first : line.find('\t', first + 1);
-        if (first == std::string::npos || second == std::string::npos)
-        {
-            throw std::runtime_error("invalid disc layout entry");
-        }
-
-        std::size_t used_lba = 0;
-        std::size_t used_size = 0;
-        const auto lba = std::stoull(line.substr(0, first), &used_lba);
-        const auto size = std::stoull(line.substr(first + 1, second - first - 1), &used_size);
-        if (used_lba != first || used_size != second - first - 1 || lba >= count || size > (count - lba) * kSector)
-        {
-            throw std::runtime_error("invalid disc layout extent");
-        }
-
-        const fs::path relative = line.substr(second + 1);
-        if (relative.empty() || relative.is_absolute() || relative.has_root_name()) throw std::runtime_error("invalid extracted path");
-        for (const auto &part : relative)
-        {
-            if (part == "..") throw std::runtime_error("extracted path escapes disc folder");
-        }
-        entries.push_back({lba, size, relative});
-    }
-    if (!input.eof()) throw std::runtime_error("cannot read disc layout");
+    synthetic_layout(root, folder, entries);
+    const auto canonical_root = fs::canonical(root);
 
     const auto *info_entry = find_layout_entry(entries, "INFO.DAT");
     const auto *game_entry = find_layout_entry(entries, "GAME.DAT");
     const auto loose_game = find_directory(root, "GAME");
-    bool loose_game_active = info_entry && game_entry && !loose_game.empty();
+    if (!loose_game.empty() && (!info_entry || !game_entry))
+        throw std::runtime_error("loose GAME/ overrides require INFO.DAT and GAME.DAT metadata");
+    const bool loose_game_active = info_entry && game_entry && !loose_game.empty();
     bool game_dat_exists = false;
-    bool info_dat_virtual = false;
     bool expanded_info_extent = false;
     std::uint32_t expanded_info_lba = 0;
     std::uint32_t expanded_info_size = 0;
     std::uint32_t expanded_game_size = 0;
     std::uint32_t expanded_volume_sectors = 0;
 
-    if (loose_game_active)
+    if (loose_game_active)    if (loose_game_active)
     {
         const auto info_path = root / info_entry->relative_path;
         std::error_code info_error;
@@ -1000,25 +950,10 @@ void original_layout(const fs::path &root, const fs::path &layout, s_folder &fol
             }
         }
 
+        if (!info_file_exists)
+            throw std::runtime_error("INFO.DAT is missing; it is required to index GAME.DAT assets");
         std::vector<std::uint8_t> decoded_info;
-        std::vector<s_archive_entry> archive_entries;
-        bool manifest_used = false;
-        const auto manifest_path = root / ".ps2-disc" / "game_manifest.tsv";
-        if (fs::is_regular_file(manifest_path))
-        {
-            read_game_manifest(manifest_path, *info_entry, *game_entry, decoded_info);
-            archive_entries = parse_info_entries(decoded_info);
-            manifest_used = true;
-        }
-        else
-        {
-            if (!info_file_exists)
-            {
-                throw std::runtime_error("INFO.DAT is missing and no generated GAME.DAT manifest is available");
-            }
-            archive_entries = read_info_entries(canonical_info_path, decoded_info);
-        }
-        info_dat_virtual = manifest_used && !info_file_exists;
+        std::vector<s_archive_entry> archive_entries = read_info_entries(canonical_info_path, decoded_info);
         const std::uint64_t original_game_sector_count = sectors(game_entry->size);
         const std::uint64_t original_disc_sector_count = folder.size / kSector;
         std::uint64_t next_appended_lba = original_disc_sector_count;
@@ -1214,7 +1149,7 @@ void original_layout(const fs::path &root, const fs::path &layout, s_folder &fol
             throw std::runtime_error("cannot enumerate loose GAME directory: " + scan_error.message());
         }
 
-        if (resized_count || added_count || info_dat_virtual)
+        if (resized_count || added_count)
         {
             (void)parse_info_entries(decoded_info);
             auto encoded_info = encode_info(decoded_info);
@@ -1277,11 +1212,6 @@ void original_layout(const fs::path &root, const fs::path &layout, s_folder &fol
         {
             continue;
         }
-        if (!exists && loose_game_active && info_dat_virtual
-            && upper(entry.relative_path.generic_string()) == "INFO.DAT")
-        {
-            continue;
-        }
         if (!exists || !fs::is_regular_file(path))
         {
             throw std::runtime_error("missing or non-file extracted path: " + entry.relative_path.string());
@@ -1333,9 +1263,7 @@ bool open_folder(const fs::path &root)
     try
     {
         auto folder = std::make_shared<s_folder>();
-        const auto layout = root / ".ps2-disc" / "layout.tsv";
-        if (fs::exists(layout)) original_layout(root, layout, *folder);
-        else synthetic_layout(root, *folder);
+        build_disc_layout(root, *folder);
         folder->validate();
         std::uint8_t pvd[kSector] = {};
         if (folder->read(16 * kSector, pvd, kSector) != kSector || std::memcmp(pvd, "\x01" "CD001", 6) != 0)
