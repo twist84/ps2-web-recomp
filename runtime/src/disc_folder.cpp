@@ -84,16 +84,125 @@ struct s_archive_entry
     std::uint32_t byte_size = 0;
 };
 
+
+fs::path archive_path(const std::string &raw_name);
+
+bool is_cp932_lead(std::uint8_t value)
+{
+    return (value >= 0x81 && value <= 0x9F) || (value >= 0xE0 && value <= 0xFC);
+}
+
+void normalize_cp932_separators(std::string &name)
+{
+    for (std::size_t index = 0; index < name.size(); ++index)
+    {
+        const auto value = static_cast<std::uint8_t>(name[index]);
+        if (is_cp932_lead(value))
+        {
+            ++index; // A CP932 trail byte may itself be 0x5C ('\\').
+            continue;
+        }
+        if (name[index] == '\\') name[index] = '/';
+    }
+}
+
 std::string archive_name_key(std::string name)
 {
-    std::replace(name.begin(), name.end(), '\\', '/');
-    return upper(std::move(name));
+    normalize_cp932_separators(name);
+    for (std::size_t index = 0; index < name.size(); ++index)
+    {
+        const auto value = static_cast<std::uint8_t>(name[index]);
+        if (is_cp932_lead(value))
+        {
+            ++index;
+            continue;
+        }
+        if (value >= 'a' && value <= 'z') name[index] = static_cast<char>(value - ('a' - 'A'));
+    }
+    return name;
 }
+
+std::string archive_name_from_path(const fs::path &relative)
+{
+    std::string encoded;
+#ifdef _WIN32
+    std::wstring wide = relative.generic_wstring();
+    std::replace(wide.begin(), wide.end(), L'/', L'\\');
+    if (wide.empty() || wide.size() > static_cast<std::size_t>(INT_MAX))
+    {
+        throw std::runtime_error("new GAME asset path is empty or too long");
+    }
+    BOOL used_default = FALSE;
+    const int required = WideCharToMultiByte(932, WC_NO_BEST_FIT_CHARS, wide.data(),
+        static_cast<int>(wide.size()), nullptr, 0, nullptr, &used_default);
+    if (required <= 0 || used_default)
+    {
+        throw std::runtime_error("new GAME asset path cannot be represented in CP932: " + relative.string());
+    }
+    encoded.resize(static_cast<std::size_t>(required));
+    used_default = FALSE;
+    if (WideCharToMultiByte(932, WC_NO_BEST_FIT_CHARS, wide.data(), static_cast<int>(wide.size()),
+            encoded.data(), required, nullptr, &used_default) != required || used_default)
+    {
+        throw std::runtime_error("cannot convert new GAME asset path to CP932: " + relative.string());
+    }
+#else
+    encoded = relative.generic_string();
+    std::replace(encoded.begin(), encoded.end(), '/', '\\');
+#endif
+    if (encoded.empty() || encoded.size() > 0x20 || encoded.find('\0') != std::string::npos)
+    {
+        throw std::runtime_error("new GAME asset path does not fit INFO.DAT's 32-byte name field: " + relative.string());
+    }
+    (void)archive_path(encoded);
+    return encoded;
+}
+
+void append_info_record(std::vector<std::uint8_t> &decoded, std::size_t index,
+    const s_archive_entry &entry, const std::vector<s_archive_entry> &existing_entries)
+{
+    const std::uint64_t record_offset64 = 0x30ull + static_cast<std::uint64_t>(index) * 0x30ull;
+    if (record_offset64 + 0x30ull > UINT32_MAX)
+    {
+        throw std::runtime_error("INFO.DAT record table exceeds its 32-bit size limit");
+    }
+    const std::size_t record_offset = static_cast<std::size_t>(record_offset64);
+    if (decoded.size() < record_offset + 0x30) decoded.resize(record_offset + 0x30, 0);
+
+    std::uint8_t opaque[4] = {};
+    if (!existing_entries.empty())
+    {
+        const auto extension = upper(entry.relative_path.extension().string());
+        std::size_t template_index = 0;
+        for (std::size_t candidate = 0; candidate < existing_entries.size(); ++candidate)
+        {
+            if (upper(existing_entries[candidate].relative_path.extension().string()) == extension)
+            {
+                template_index = candidate;
+                break;
+            }
+        }
+        const std::size_t source_offset = 0x30 + template_index * 0x30 + 0x20;
+        if (source_offset + sizeof(opaque) <= decoded.size())
+        {
+            std::memcpy(opaque, decoded.data() + source_offset, sizeof(opaque));
+        }
+    }
+
+    auto *record = decoded.data() + record_offset;
+    std::memset(record, 0, 0x30);
+    std::memcpy(record, entry.name.data(), entry.name.size());
+    std::memcpy(record + 0x20, opaque, sizeof(opaque));
+    write_u32_le(record + 0x24, entry.sector_offset);
+    write_u32_le(record + 0x28, entry.sector_count);
+    write_u32_le(record + 0x2C, entry.byte_size);
+}
+
 
 fs::path archive_path(const std::string &raw_name)
 {
     std::string name = raw_name;
-    std::replace(name.begin(), name.end(), '\\', '/');
+    normalize_cp932_separators(name);
     if (name.empty() || name.front() == '/' || name.find(':') != std::string::npos)
     {
         throw std::runtime_error("unsafe path in INFO.DAT: " + raw_name);
@@ -576,6 +685,77 @@ void patch_iso_file_size(s_folder &folder, std::uint32_t file_lba,
         throw std::runtime_error("could not locate GAME.DAT in ISO directory tree");
 }
 
+
+void patch_iso_file_extent(s_folder &folder, const char *file_name,
+    std::uint32_t old_lba, std::uint32_t old_size,
+    std::uint32_t new_lba, std::uint32_t new_size)
+{
+    std::uint8_t pvd[kSector] = {};
+    if (folder.read(16ull * kSector, pvd, sizeof(pvd)) != sizeof(pvd)
+        || std::memcmp(pvd, "\x01" "CD001", 6) != 0)
+    {
+        throw std::runtime_error(std::string("cannot update ") + file_name + ": invalid ISO primary descriptor");
+    }
+
+    const std::uint32_t root_lba = read_both32(pvd + 158);
+    const std::uint32_t root_size = read_both32(pvd + 166);
+    std::set<std::uint32_t> visited;
+    const auto visit = [&](const auto &self, std::uint32_t lba, std::uint32_t size, unsigned depth) -> bool
+    {
+        if (depth > 32 || !visited.insert(lba).second) return false;
+        const std::uint64_t padded = sectors(size) * kSector;
+        if (padded > std::numeric_limits<std::size_t>::max()) return false;
+        std::vector<std::uint8_t> directory_data(static_cast<std::size_t>(padded), 0);
+        if (folder.read(static_cast<std::uint64_t>(lba) * kSector,
+                directory_data.data(), directory_data.size()) != directory_data.size()) return false;
+        std::size_t offset = 0;
+        while (offset < size)
+        {
+            const std::uint8_t length = directory_data[offset];
+            if (!length)
+            {
+                offset = ((offset / kSector) + 1) * kSector;
+                continue;
+            }
+            if (length < 34 || offset + length > directory_data.size())
+                throw std::runtime_error("invalid ISO directory record while updating file extent");
+            const auto *record = directory_data.data() + offset;
+            const std::uint8_t name_length = record[32];
+            if (33u + name_length > length) throw std::runtime_error("invalid ISO directory filename length");
+            std::string name(reinterpret_cast<const char *>(record + 33), name_length);
+            const bool is_directory = (record[25] & 2) != 0;
+            const std::uint32_t child_lba = read_both32(record + 2);
+            const std::uint32_t child_size = read_both32(record + 10);
+            const bool special = name_length == 1 && (name[0] == '\0' || name[0] == '\1');
+            if (!special)
+            {
+                const auto version = name.find(';');
+                if (version != std::string::npos) name.resize(version);
+                if (!is_directory && upper(name) == file_name)
+                {
+                    if (child_lba != old_lba || child_size != old_size)
+                    {
+                        throw std::runtime_error(std::string("ISO ") + file_name
+                            + " directory record does not match preserved layout");
+                    }
+                    std::vector<std::uint8_t> extent_field(16);
+                    both32(extent_field.data(), new_lba);
+                    both32(extent_field.data() + 8, new_size);
+                    folder.overlays.push_back({static_cast<std::uint64_t>(lba) * kSector + offset + 2,
+                        extent_field.size(), {}, std::move(extent_field)});
+                    return true;
+                }
+                if (is_directory && self(self, child_lba, child_size, depth + 1)) return true;
+            }
+            offset += length;
+        }
+        return false;
+    };
+
+    if (!visit(visit, root_lba, root_size, 0))
+        throw std::runtime_error(std::string("could not locate ") + file_name + " in ISO directory tree");
+}
+
 struct s_node
 {
     fs::path path;
@@ -768,6 +948,9 @@ void original_layout(const fs::path &root, const fs::path &layout, s_folder &fol
     bool loose_game_active = info_entry && game_entry && !loose_game.empty();
     bool game_dat_exists = false;
     bool info_dat_virtual = false;
+    bool expanded_info_extent = false;
+    std::uint32_t expanded_info_lba = 0;
+    std::uint32_t expanded_info_size = 0;
     std::uint32_t expanded_game_size = 0;
     std::uint32_t expanded_volume_sectors = 0;
 
@@ -895,6 +1078,12 @@ void original_layout(const fs::path &root, const fs::path &layout, s_folder &fol
         std::size_t mapped_count = 0;
         std::size_t missing_count = 0;
         std::size_t resized_count = 0;
+        std::size_t added_count = 0;
+        std::set<std::string> indexed_names;
+        for (const auto &asset : archive_entries)
+        {
+            indexed_names.insert(archive_name_key(asset.name));
+        }
         for (std::size_t index = 0; index < archive_entries.size(); ++index)
         {
             auto &asset = archive_entries[index];
@@ -961,10 +1150,94 @@ void original_layout(const fs::path &root, const fs::path &layout, s_folder &fol
             throw std::runtime_error("GAME.DAT is absent and no complete loose GAME/ extraction was found");
         }
 
-        if (resized_count || info_dat_virtual)
+        // New files below GAME/ are appended to INFO.DAT in memory. Original
+        // entries and their extents remain untouched; the allocator uses only
+        // unindexed GAME.DAT sectors or the existing appended-volume path.
+        std::set<std::string> added_names;
+        std::error_code scan_error;
+        for (fs::recursive_directory_iterator it(loose_root, scan_error), end;
+            !scan_error && it != end; it.increment(scan_error))
         {
+            if (it->is_symlink())
+            {
+                throw std::runtime_error("symlinks are not supported under GAME/: " + it->path().string());
+            }
+            if (it->is_directory()) continue;
+            if (!it->is_regular_file()) continue;
+
+            const auto relative_path = it->path().lexically_relative(loose_root);
+            const std::string encoded_name = archive_name_from_path(relative_path);
+            const std::string name_key = archive_name_key(encoded_name);
+            if (indexed_names.find(name_key) != indexed_names.end()) continue;
+            if (!added_names.insert(name_key).second)
+            {
+                throw std::runtime_error("case-insensitive filename collision in GAME/: " + relative_path.string());
+            }
+
+            const auto canonical_asset = fs::canonical(it->path());
+            if (!is_inside(loose_root, canonical_asset) || !fs::is_regular_file(canonical_asset))
+            {
+                throw std::runtime_error("new GAME asset resolves outside GAME/: " + relative_path.string());
+            }
+            const std::uint64_t replacement_size = fs::file_size(canonical_asset);
+            if (!replacement_size || replacement_size > UINT32_MAX)
+            {
+                throw std::runtime_error("new GAME asset has an unsupported size: " + relative_path.string());
+            }
+            const std::uint64_t replacement_sectors = sectors(replacement_size);
+            if (!replacement_sectors || replacement_sectors > UINT32_MAX)
+            {
+                throw std::runtime_error("new GAME asset requires an unsupported sector count: " + relative_path.string());
+            }
+            if (archive_entries.size() >= UINT32_MAX)
+            {
+                throw std::runtime_error("INFO.DAT asset record count limit exceeded");
+            }
+
+            s_archive_entry asset;
+            asset.name = encoded_name;
+            asset.relative_path = relative_path;
+            asset.sector_offset = static_cast<std::uint32_t>(allocate_sectors(replacement_sectors, asset.name));
+            asset.sector_count = static_cast<std::uint32_t>(replacement_sectors);
+            asset.byte_size = static_cast<std::uint32_t>(replacement_size);
+            append_info_record(decoded_info, archive_entries.size(), asset, archive_entries);
+            archive_entries.push_back(asset);
+            write_u32_le(decoded_info.data() + 0x2C, static_cast<std::uint32_t>(archive_entries.size()));
+
+            const std::uint64_t asset_lba = game_entry->lba + asset.sector_offset;
+            folder.overlays.push_back({asset_lba * kSector, replacement_size, canonical_asset, {}});
+            ++mapped_count;
+            ++added_count;
+        }
+        if (scan_error)
+        {
+            throw std::runtime_error("cannot enumerate loose GAME directory: " + scan_error.message());
+        }
+
+        if (resized_count || added_count || info_dat_virtual)
+        {
+            (void)parse_info_entries(decoded_info);
             auto encoded_info = encode_info(decoded_info);
-            folder.overlays.push_back({info_entry->lba * kSector, encoded_info.size(), {}, std::move(encoded_info)});
+            if (encoded_info.size() > UINT32_MAX)
+            {
+                throw std::runtime_error("expanded INFO.DAT exceeds the ISO 9660 32-bit file-size limit");
+            }
+            const std::uint64_t info_sectors = sectors(encoded_info.size());
+            const std::uint64_t original_info_sectors = sectors(info_entry->size);
+            expanded_info_lba = static_cast<std::uint32_t>(info_entry->lba);
+            expanded_info_size = static_cast<std::uint32_t>(encoded_info.size());
+            if (info_sectors > original_info_sectors)
+            {
+                if (next_appended_lba > UINT32_MAX || info_sectors > UINT32_MAX - next_appended_lba)
+                {
+                    throw std::runtime_error("ISO volume sector limit exceeded while relocating expanded INFO.DAT");
+                }
+                expanded_info_lba = static_cast<std::uint32_t>(next_appended_lba);
+                next_appended_lba += info_sectors;
+            }
+            expanded_info_extent = expanded_info_lba != info_entry->lba || expanded_info_size != info_entry->size;
+            folder.overlays.push_back({static_cast<std::uint64_t>(expanded_info_lba) * kSector,
+                encoded_info.size(), {}, std::move(encoded_info)});
         }
 
         if (required_game_sectors > original_game_sector_count)
@@ -972,19 +1245,21 @@ void original_layout(const fs::path &root, const fs::path &layout, s_folder &fol
             const std::uint64_t expanded_size = required_game_sectors * kSector;
             if (expanded_size > UINT32_MAX)
                 throw std::runtime_error("expanded GAME.DAT exceeds the ISO 9660 32-bit file-size limit");
-            if (next_appended_lba > UINT32_MAX)
-                throw std::runtime_error("expanded ISO volume exceeds the ISO 9660 32-bit sector limit");
-            folder.size = next_appended_lba * kSector;
-
             expanded_game_size = static_cast<std::uint32_t>(expanded_size);
-            expanded_volume_sectors = static_cast<std::uint32_t>(next_appended_lba);
             std::fprintf(stderr, "[disc] virtual GAME.DAT expanded from %llu to %llu bytes (%llu appended sectors)\n",
                 static_cast<unsigned long long>(game_entry->size), static_cast<unsigned long long>(expanded_size),
                 static_cast<unsigned long long>(next_appended_lba - original_disc_sector_count));
         }
+        if (next_appended_lba > original_disc_sector_count)
+        {
+            if (next_appended_lba > UINT32_MAX)
+                throw std::runtime_error("expanded ISO volume exceeds the ISO 9660 32-bit sector limit");
+            folder.size = next_appended_lba * kSector;
+            expanded_volume_sectors = static_cast<std::uint32_t>(next_appended_lba);
+        }
 
-        std::fprintf(stderr, "[disc] loose GAME assets: %zu/%zu mapped; %zu missing; %zu resized (%s)\n",
-            mapped_count, archive_entries.size(), missing_count, resized_count,
+        std::fprintf(stderr, "[disc] loose GAME assets: %zu indexed/mapped; %zu added; %zu missing; %zu resized (%s)\n",
+            mapped_count, added_count, missing_count, resized_count,
             game_dat_exists ? "GAME.DAT fallback" : "zero-filled");
     }
 
@@ -1024,17 +1299,28 @@ void original_layout(const fs::path &root, const fs::path &layout, s_folder &fol
         if (entry.size) folder.regions.push_back({entry.lba * kSector, entry.size, canonical_path, {}});
     }
 
-    if (expanded_game_size)
+    if (expanded_game_size || expanded_info_extent || expanded_volume_sectors)
     {
         std::sort(folder.regions.begin(), folder.regions.end(),
             [](const auto &a, const auto &b) { return a.offset < b.offset; });
         std::sort(folder.overlays.begin(), folder.overlays.end(),
             [](const auto &a, const auto &b) { return a.offset < b.offset; });
-        patch_iso_file_size(folder, static_cast<std::uint32_t>(game_entry->lba),
-            static_cast<std::uint32_t>(game_entry->size), expanded_game_size);
-        std::vector<std::uint8_t> pvd_patch(8);
-        both32(pvd_patch.data(), expanded_volume_sectors);
-        folder.overlays.push_back({16ull * kSector + 80, pvd_patch.size(), {}, std::move(pvd_patch)});
+        if (expanded_game_size)
+        {
+            patch_iso_file_size(folder, static_cast<std::uint32_t>(game_entry->lba),
+                static_cast<std::uint32_t>(game_entry->size), expanded_game_size);
+        }
+        if (expanded_info_extent)
+        {
+            patch_iso_file_extent(folder, "INFO.DAT", static_cast<std::uint32_t>(info_entry->lba),
+                static_cast<std::uint32_t>(info_entry->size), expanded_info_lba, expanded_info_size);
+        }
+        if (expanded_volume_sectors)
+        {
+            std::vector<std::uint8_t> pvd_patch(8);
+            both32(pvd_patch.data(), expanded_volume_sectors);
+            folder.overlays.push_back({16ull * kSector + 80, pvd_patch.size(), {}, std::move(pvd_patch)});
+        }
     }
 
     if (folder.regions.empty() && folder.overlays.empty()) throw std::runtime_error("disc layout has no extents");

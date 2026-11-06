@@ -6,9 +6,10 @@ Requirements:
 - a complete unchanged loose GAME/ extraction;
 - game_manifest_template.bin, created by generate_game_manifest.py.
 
-Every asset is matched byte-for-byte at a sector boundary. All template entries
-must be recovered exactly once. The result is the same game_manifest.tsv format
-consumed by the runtime, not merely a diagnostic candidate report.
+Every originally indexed asset is matched byte-for-byte at a sector boundary.
+All template entries must be recovered exactly once. Additional files under
+GAME/ are accepted and listed as unindexed; the runtime allocates and adds
+those files when it mounts the disc.
 """
 
 import argparse
@@ -151,13 +152,9 @@ def discover(disc_folder, signature_size=16):
 
     missing = sorted(set(expected) - set(loose_files))
     extra = sorted(set(loose_files) - set(expected))
-    if missing or extra:
-        details = []
-        if missing:
-            details.append("missing: " + ", ".join(expected[key][1] for key in missing[:8]))
-        if extra:
-            details.append("unindexed: " + ", ".join(key for key in extra[:8]))
-        raise ValueError("GAME/ is not a complete extraction (" + "; ".join(details) + ")")
+    if missing:
+        raise ValueError("GAME/ is missing indexed assets: "
+            + ", ".join(expected[key][1] for key in missing[:8]))
 
     prefix_index = build_prefix_index(game_path, game_size, signature_size)
     discovered = []
@@ -210,6 +207,9 @@ def discover(disc_folder, signature_size=16):
         "match_method": "sector-aligned signature plus full byte comparison",
         "manifest": str(manifest_path.relative_to(root)),
         "assets": discovered,
+        "unindexed_loose_assets": [
+            loose_files[key].relative_to(loose_root).as_posix() for key in extra
+        ],
     }
     report_path = root / ".ps2-disc" / "game_discovery.json"
     temporary = report_path.with_suffix(".tmp")
