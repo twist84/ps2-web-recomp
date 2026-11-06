@@ -156,3 +156,30 @@ GAME/ files against sector-aligned bytes in the original GAME.DAT and write
 original GAME.DAT and unchanged loose files, rejects duplicate matches, and
 does not prove that GAME/ contains every archive entry. It cannot recover an
 unknown INFO.DAT header template. Use the generated manifest for normal mounts.
+
+
+Independent GAME.DAT index recovery
+-----------------------------------
+The normal extractor creates both .ps2-disc/game_manifest.tsv and a
+.ps2-disc/game_manifest_template.bin sidecar. The template preserves the
+opaque INFO.DAT header, record names and reserved record bytes, but clears the
+sector offset/count/size fields that independent discovery must recover.
+
+To recover after INFO.DAT and game_manifest.tsv have both been removed, keep
+the original GAME.DAT, the complete unchanged GAME/ extraction, layout.tsv
+and game_manifest_template.bin, then run:
+
+  python scripts/discover_game_manifest.py games/SuperDragonBallZ/disc
+
+The tool scans GAME.DAT on 2048-byte boundaries, compares candidate files
+byte-for-byte, verifies that every template entry has exactly one match, and
+rebuilds the normal game_manifest.tsv consumed by the runtime. It also writes
+ game_discovery.json as an audit report. It rejects missing, modified,
+ambiguous, duplicated or overlapping files instead of guessing offsets.
+
+Discovery is an offline recovery command, not a per-launch scan. Generate the
+template during extraction (or regenerate it while INFO.DAT is still present)
+before deleting INFO.DAT or the manifest. Normal modding should continue to
+use the generated manifest; discovery cannot locate files whose bytes have
+changed from the original archive.
+
