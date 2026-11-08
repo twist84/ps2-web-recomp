@@ -33,6 +33,8 @@ int main()
         SetEnvironmentVariableW(L"PS2_FORCE_DEINTERLACE", nullptr);
         SetEnvironmentVariableW(L"PS2_NO_DEINTERLACE", nullptr);
         ps2::g_options.disc_path = folder.string();
+        std::filesystem::create_directories(folder / "memcards");
+        ps2::g_options.memcard_path = (folder / "memcards" / "Mcd001.ps2").string();
         std::fprintf(stderr, "[game] ELF: %s\n[game] disc folder: %s\n", elf.string().c_str(), folder.string().c_str());
 
         if (!open_window(false)) return 1;
