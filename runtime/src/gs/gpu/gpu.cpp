@@ -3,6 +3,7 @@
 #include "ps2/video.hpp"
 #include "ps2/presentation.hpp"
 #include "ps2/render_scale.hpp"
+#include "font.hpp"
 
 #include <webgpu/webgpu.h>
 #ifndef __EMSCRIPTEN__
@@ -25,6 +26,10 @@ extern const char kBlitShader[];
 
 namespace ps2::gs {
 void swizzle_tables(std::vector<std::uint32_t> &out);
+}
+
+namespace ps2 {
+char g_stats_text[256] = {};
 }
 
 namespace ps2::gs::gpu {
@@ -1009,6 +1014,10 @@ void submit(WGPUTextureView present_view = nullptr) {
         wgpuRenderPassEncoderSetPipeline(rp, g_blit);
         wgpuRenderPassEncoderSetBindGroup(rp, 0, g_blit_group, 0, nullptr);
         wgpuRenderPassEncoderDraw(rp, 3, 1, 0, 0);
+        // Draw stats overlay text in the same render pass so it composites
+        // over the game frame without needing LoadOp_Load on a separate pass.
+        font_draw_text_in_pass(rp, present_view, g_surface_width, g_surface_height,
+            g_stats_text, 10.f, 10.f, 1.f, 255, 255, 0);
         wgpuRenderPassEncoderEnd(rp);
         wgpuRenderPassEncoderRelease(rp);
     }
@@ -1274,6 +1283,9 @@ bool init(Mode m) {
     g_adapter = adapter;
     if (!g_device) return false;
     g_queue = wgpuDeviceGetQueue(g_device);
+
+    std::string font_path = g_options.disc_path + "/GAME/font/5-24-2.fon";
+    font_init(g_device, g_queue, font_path.c_str());
 
     if (const char *spec = std::getenv("PS2_GPU_PROFILE")) {
         char path[512] = {};
@@ -1835,6 +1847,7 @@ bool attach_surface(const SurfaceTarget &target) {
     bd.entries = be;
     g_blit_group = wgpuDeviceCreateBindGroup(g_device, &bd);
     wgpuBindGroupLayoutRelease(layout);
+    font_create_pipeline(g_device, g_surface_format);
     return g_blit != nullptr;
 }
 

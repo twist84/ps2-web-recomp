@@ -637,6 +637,7 @@ void show_speed() {
     {
         if (!g_preferences.show_stats) std::snprintf(title, sizeof title, "ps2-web-recomp | %s", scaling_name());
         SDL_SetWindowTitle(g_window, title);
+        std::snprintf(ps2::g_stats_text, sizeof(ps2::g_stats_text), "%.1f fps", static_cast<double>(frames) / seconds);
     }
     start = now;
     frames = 0;

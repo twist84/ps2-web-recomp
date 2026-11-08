@@ -3,9 +3,13 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 
 namespace ps2
 {
+
+// Last stats line computed by host::show_speed(); drawn on-screen by gpu::present()
+extern char g_stats_text[256];
 
 enum class e_window_scaling
 {
