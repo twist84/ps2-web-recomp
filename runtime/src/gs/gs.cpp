@@ -1066,6 +1066,14 @@ double gpu_busy_ms() {
 #endif
 }
 
+double gpu_vram_mb() {
+#ifdef PS2_GPU
+    return gpu::vram_mb();
+#else
+    return 0.0;
+#endif
+}
+
 std::uint32_t shown_lines(std::uint32_t dh, std::uint32_t dy, std::uint64_t smode2) {
     const std::uint32_t scale = (smode2 & 1u) ? 2u : 1u;
     const std::uint32_t lines = (ps2::g_options.pal ? 288u : 240u) * scale;

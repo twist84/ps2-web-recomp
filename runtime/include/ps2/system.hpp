@@ -131,6 +131,7 @@ bool parse_press(const std::string &spec, Press &press);
 bool parse_axis(const std::string &spec, AxisPress &press);
 bool load_patches(const std::string &path);
 double gpu_busy_ms();
+double gpu_vram_mb();
 void browser_yield();
 std::uint64_t frames_run();
 std::uint64_t primitives_drawn();

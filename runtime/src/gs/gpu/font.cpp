@@ -420,11 +420,17 @@ void font_draw_text_in_pass(WGPURenderPassEncoder rp, WGPUTextureView target,
     CharData chars[kMaxChars];
     int char_count = 0;
     float cursor_x = x;
-    const float top = y;
+    float top = y;
+    const float line_h = f_height * scale;
 
     for (const char* p = text; *p; ++p) {
         if (char_count + 2 > kMaxChars) break;
         unsigned char ch = static_cast<unsigned char>(*p);
+        if (ch == '\n') {
+            cursor_x = x;
+            top += line_h;
+            continue;
+        }
         if (ch < kFirstChar || ch > kLastChar) ch = kFirstChar;
         const int idx = ch - kFirstChar;
 

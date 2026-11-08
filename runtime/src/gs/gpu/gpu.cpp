@@ -1916,6 +1916,10 @@ double busy_ms() {
     return static_cast<double>(g_measured_ns) / static_cast<double>(g_measured) * static_cast<double>(g_total_passes) / 1e6;
 }
 
+double vram_mb() {
+    return static_cast<double>(kMemorySize) * static_cast<double>(g_scale) * static_cast<double>(g_scale) / (1024.0 * 1024.0);
+}
+
 struct Copy {
     WGPUBuffer buffer = nullptr;
     std::uint64_t size = 0, order = 0;
