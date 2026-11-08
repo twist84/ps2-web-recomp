@@ -109,6 +109,7 @@ void apply_preferences()
     g_output_volume.store(g_preferences.volume, std::memory_order_relaxed);
     g_muted.store(g_preferences.muted != 0, std::memory_order_relaxed);
     ps2::g_presentation_options.render_scale.store(g_preferences.render_scale ? g_preferences.render_scale : 1, std::memory_order_relaxed);
+    ps2::g_presentation_options.force_square.store(g_preferences.force_square != 0, std::memory_order_relaxed);
 }
 
 void load_preferences()
@@ -596,6 +597,7 @@ void show_speed() {
     const std::uint64_t interpreted = ps2::vu1_interpreted_calls();
     char title[192];
     const double queued = g_audio ? SDL_GetQueuedAudioSize(g_audio) / static_cast<double>(kAudioBytesPerMs) : 0.0;
+    const double vram_mb = ps2::gpu_vram_mb();
     const int render_width = ps2::g_presentation_options.native_width.load(std::memory_order_relaxed) * ps2::g_presentation_options.active_render_scale.load(std::memory_order_relaxed);
     const int render_height = ps2::g_presentation_options.native_height.load(std::memory_order_relaxed) * ps2::g_presentation_options.active_render_scale.load(std::memory_order_relaxed);
 #ifdef _WIN32
@@ -622,13 +624,13 @@ void show_speed() {
     {
         if (g_preferences.show_stats)
         {
-            SDL_SetWindowTitle(g_window, title);
+            SDL_SetWindowTitle(g_window, "Super Dragon Ball Z (EU BETA) - recomp");
             std::strncpy(ps2::g_stats_text, title, sizeof(ps2::g_stats_text) - 1);
             ps2::g_stats_text[sizeof(ps2::g_stats_text) - 1] = '\0';
         }
         else
         {
-            SDL_SetWindowTitle(g_window, "ps2-web-recomp | fit");
+            SDL_SetWindowTitle(g_window, "Super Dragon Ball Z (EU BETA) - recomp");
             ps2::g_stats_text[0] = '\0';
         }
     }
@@ -691,9 +693,14 @@ bool open_window(bool fullscreen) {
     if (SDL_GetDisplayUsableBounds(0, &usable) == 0)
     {
         g_preferences.width = std::clamp(g_preferences.width, 320, std::max(320, usable.w - 32));
-        g_preferences.height = std::clamp(g_preferences.height, 240, std::max(240, usable.h - 64));
+        g_preferences.height = std::clamp(g_preferences.height, 240, std::max(240, usable.h - 32));
+        // Make internal bounds square: use the smaller of the two clamped
+        // dimensions so width == height regardless of display bounds.
+        const int square = std::min(g_preferences.width, g_preferences.height);
+        g_preferences.width = square;
+        g_preferences.height = square;
     }
-    g_window = SDL_CreateWindow("ps2-web-recomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, g_preferences.width, g_preferences.height, flags);
+    g_window = SDL_CreateWindow("Super Dragon Ball Z (EU BETA) - recomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, g_preferences.width, g_preferences.height, flags);
     if (!g_window) {
         std::fprintf(stderr, "SDL: %s\n", SDL_GetError());
         return false;

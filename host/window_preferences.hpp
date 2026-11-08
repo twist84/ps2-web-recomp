@@ -19,6 +19,7 @@ struct s_window_preferences
     int height = 720;
     int render_scale = 0;
     int widescreen = 0;
+    int force_square = 0;
 };
 
 inline void read_window_preferences(std::FILE *file, s_window_preferences &settings)
@@ -58,6 +59,7 @@ inline void read_window_preferences(std::FILE *file, s_window_preferences &setti
         if (!std::strcmp(name, "height") && value >= 240 && value <= 16384) settings.height = value;
         if (!std::strcmp(name, "render_scale") && value >= 0 && value <= 4) settings.render_scale = value;
         if (!std::strcmp(name, "widescreen") && value >= 0 && value <= 1) settings.widescreen = value;
+        if (!std::strcmp(name, "force_square") && value >= 0 && value <= 1) settings.force_square = value;
     }
 }
 
@@ -73,8 +75,9 @@ inline bool write_window_preferences(std::FILE *file, const s_window_preferences
         "; Desktop fullscreen: 1=on, 0=off\nfullscreen=%d\n\n"
         "; Windowed client size in SDL window coordinates\nwidth=%d\nheight=%d\n\n"
         "; GPU render scale: 0=follow fixed display scale (otherwise 1x), 1..4=override\nrender_scale=%d\n\n"
-        "; Aspect ratio: 0=4:3, 1=16:9\nwidescreen=%d\n",
+        "; Aspect ratio: 0=4:3, 1=16:9\nwidescreen=%d\n\n"
+        "; Force square output (448x448 NTSC): 1=on, 0=off\nforce_square=%d\n",
         settings.nearest, settings.field_blending, settings.show_stats,
         settings.muted, settings.volume, settings.fullscreen, settings.width, settings.height,
-        settings.render_scale, settings.widescreen) >= 0;
+        settings.render_scale, settings.widescreen, settings.force_square) >= 0;
 }
