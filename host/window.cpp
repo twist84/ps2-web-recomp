@@ -88,24 +88,7 @@ std::atomic<bool> g_muted{false};
 std::string g_notice;
 Uint64 g_notice_until = 0;
 bool g_fullscreen_enter = false;
-bool g_scaling_shortcut_2 = false;
 bool g_resize_pending = true;
-
-const char *scaling_name()
-{
-    switch (ps2::g_presentation_options.scaling.load(std::memory_order_relaxed))
-    {
-    case ps2::e_window_scaling::integer_aspect: return "integer aspect";
-    case ps2::e_window_scaling::integer_pixels: return "integer pixels";
-    case ps2::e_window_scaling::scale_2x: return "2x aspect (limited to window size)";
-    case ps2::e_window_scaling::scale_3x: return "3x aspect (limited to window size)";
-    case ps2::e_window_scaling::scale_4x: return "4x aspect (limited to window size)";
-    case ps2::e_window_scaling::pixels_2x: return "2x pixels (limited to window size)";
-    case ps2::e_window_scaling::pixels_3x: return "3x pixels (limited to window size)";
-    case ps2::e_window_scaling::pixels_4x: return "4x pixels (limited to window size)";
-    default: return "fit";
-    }
-}
 
 void notify(const char *message)
 {
@@ -117,50 +100,11 @@ void notify(const char *message)
 
 void apply_preferences()
 {
-    ps2::g_presentation_options.scaling.store(static_cast<ps2::e_window_scaling>(g_preferences.scaling), std::memory_order_relaxed);
     ps2::g_presentation_options.nearest.store(g_preferences.nearest != 0, std::memory_order_relaxed);
     ps2::g_presentation_options.force_blend.store(g_preferences.field_blending != 0, std::memory_order_relaxed);
     g_output_volume.store(g_preferences.volume, std::memory_order_relaxed);
     g_muted.store(g_preferences.muted != 0, std::memory_order_relaxed);
-    const int fixed = ps2::fixed_window_scale(static_cast<ps2::e_window_scaling>(g_preferences.scaling));
-    ps2::g_presentation_options.render_scale.store(g_preferences.render_scale ? g_preferences.render_scale : std::max(1, fixed), std::memory_order_relaxed);
-}
-
-void resize_for_scaling()
-{
-    static int last_width = 0, last_height = 0;
-    const int source_width = ps2::g_presentation_options.native_width.load(std::memory_order_relaxed);
-    const int source_height = ps2::g_presentation_options.native_height.load(std::memory_order_relaxed);
-    if (source_width <= 0 || source_height <= 0) return;
-    if (!g_resize_pending && source_width == last_width && source_height == last_height) return;
-    g_resize_pending = false;
-    last_width = source_width;
-    last_height = source_height;
-    const auto mode = static_cast<ps2::e_window_scaling>(g_preferences.scaling);
-    if (!g_preferences.resize_with_scale || !ps2::fixed_window_scale(mode) ||
-        (SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN)) return;
-
-    const int display = std::max(0, SDL_GetWindowDisplayIndex(g_window));
-    SDL_Rect usable{};
-    if (SDL_GetDisplayUsableBounds(display, &usable) != 0) return;
-    int logical_width = 0, logical_height = 0, pixel_width = 0, pixel_height = 0;
-    SDL_GetWindowSize(g_window, &logical_width, &logical_height);
-    SDL_GetWindowSizeInPixels(g_window, &pixel_width, &pixel_height);
-    const double dpi_x = static_cast<double>(std::max(pixel_width, 1)) / std::max(logical_width, 1);
-    const double dpi_y = static_cast<double>(std::max(pixel_height, 1)) / std::max(logical_height, 1);
-    int top = 32, left = 0, bottom = 0, right = 0;
-    SDL_GetWindowBordersSize(g_window, &top, &left, &bottom, &right);
-    const auto viewport = ps2::window_viewport(
-        std::max(1, static_cast<int>((usable.w - left - right) * dpi_x)),
-        std::max(1, static_cast<int>((usable.h - top - bottom) * dpi_y)),
-        source_width, source_height, ps2::g_options.widescreen, mode);
-    const int width = std::max(320, static_cast<int>(std::lround(viewport.width / dpi_x)));
-    const int height = std::max(240, static_cast<int>(std::lround(viewport.height / dpi_y)));
-    if (SDL_GetWindowFlags(g_window) & SDL_WINDOW_MAXIMIZED) SDL_RestoreWindow(g_window);
-    SDL_SetWindowSize(g_window, width, height);
-    SDL_SetWindowPosition(g_window, SDL_WINDOWPOS_CENTERED_DISPLAY(display), SDL_WINDOWPOS_CENTERED_DISPLAY(display));
-    g_preferences.width = width;
-    g_preferences.height = height;
+    ps2::g_presentation_options.render_scale.store(g_preferences.render_scale ? g_preferences.render_scale : 1, std::memory_order_relaxed);
 }
 
 void load_preferences()
@@ -225,6 +169,17 @@ void toggle_fullscreen()
     SDL_ShowCursor(full ? SDL_ENABLE : SDL_DISABLE);
     g_resize_pending = true;
     save_preferences();
+
+    // SDL_WINDOWEVENT_SIZE_CHANGED often does not fire when toggling
+    // fullscreen on Windows, so explicitly resize the surface to match
+    // the desktop resolution. SDL_GetWindowSizeInPixels can return stale
+    // data immediately after SDL_SetWindowFullscreen, so query the
+    // display bounds directly.
+    SDL_Rect bounds{};
+    if (SDL_GetDisplayBounds(0, &bounds) == 0 && bounds.w > 0 && bounds.h > 0)
+    {
+        ps2::resize_window(static_cast<std::uint32_t>(bounds.w), static_cast<std::uint32_t>(bounds.h));
+    }
 }
 
 bool handle_hotkey(const SDL_KeyboardEvent &key)
@@ -239,24 +194,6 @@ bool handle_hotkey(const SDL_KeyboardEvent &key)
     case SDL_SCANCODE_F11:
         toggle_fullscreen();
         return true;
-    case SDL_SCANCODE_F6:
-        g_preferences.scaling = (g_preferences.scaling + 1) % 9;
-        apply_preferences();
-        g_resize_pending = true;
-        notify(scaling_name());
-        break;
-    case SDL_SCANCODE_2:
-    case SDL_SCANCODE_3:
-    case SDL_SCANCODE_4:
-        if (!(key.keysym.mod & KMOD_CTRL)) return false;
-        if (key.keysym.scancode == SDL_SCANCODE_2) g_scaling_shortcut_2 = true;
-        g_preferences.scaling = key.keysym.scancode == SDL_SCANCODE_2 ? 3 :
-            key.keysym.scancode == SDL_SCANCODE_3 ? 4 : 5;
-        if (key.keysym.mod & KMOD_SHIFT) g_preferences.scaling += 3;
-        apply_preferences();
-        g_resize_pending = true;
-        notify(scaling_name());
-        break;
     case SDL_SCANCODE_F5:
     {
         g_preferences.render_scale = (g_preferences.render_scale + 1) % 5;
@@ -322,7 +259,22 @@ bool attach_gpu() {
     if (!SDL_GetWindowWMInfo(g_window, &info)) return false;
     ps2::WindowTarget target;
     int w = 0, h = 0;
-    SDL_GetWindowSizeInPixels(g_window, &w, &h);
+    // When starting in fullscreen, SDL_GetWindowSizeInPixels can return the
+    // requested windowed size rather than the actual desktop resolution.
+    // Query display bounds directly when fullscreen is active.
+    if (SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN)
+    {
+        SDL_Rect bounds{};
+        if (SDL_GetDisplayBounds(0, &bounds) == 0 && bounds.w > 0 && bounds.h > 0)
+        {
+            w = bounds.w;
+            h = bounds.h;
+        }
+    }
+    if (w == 0 || h == 0)
+    {
+        SDL_GetWindowSizeInPixels(g_window, &w, &h);
+    }
     target.width = static_cast<std::uint32_t>(w);
     target.height = static_cast<std::uint32_t>(h);
     switch (info.subsystem) {
@@ -401,8 +353,7 @@ void poll_port(int port) {
     if (port == 0 && (SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS)) {
         const Uint8 *keys = SDL_GetKeyboardState(nullptr);
         for (const KeyBinding &b : kKeys)
-            if (keys[b.key] && !(b.key == SDL_SCANCODE_RETURN && (g_fullscreen_enter || (SDL_GetModState() & KMOD_ALT))) &&
-                !(b.key == SDL_SCANCODE_2 && (g_scaling_shortcut_2 || (SDL_GetModState() & KMOD_CTRL)))) pressed |= b.button;
+            if (keys[b.key] && !(b.key == SDL_SCANCODE_RETURN && (g_fullscreen_enter || (SDL_GetModState() & KMOD_ALT)))) pressed |= b.button;
         if (keys[SDL_SCANCODE_LEFT]) lx = 0x00;
         if (keys[SDL_SCANCODE_RIGHT]) lx = 0xFF;
         if (keys[SDL_SCANCODE_UP]) ly = 0x00;
@@ -445,9 +396,7 @@ void poll() {
         if (e.type == SDL_QUIT) { save_preferences(); ps2::halt("window closed"); }
         if (e.type == SDL_KEYDOWN) handle_hotkey(e.key);
         if (e.type == SDL_KEYUP && e.key.keysym.scancode == SDL_SCANCODE_RETURN) g_fullscreen_enter = false;
-        if (e.type == SDL_KEYUP && e.key.keysym.scancode == SDL_SCANCODE_2) g_scaling_shortcut_2 = false;
         if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) g_fullscreen_enter = false;
-        if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) g_scaling_shortcut_2 = false;
         if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED &&
             !(SDL_GetWindowFlags(g_window) & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MAXIMIZED | SDL_WINDOW_MINIMIZED)))
         {
@@ -473,7 +422,6 @@ void poll() {
     }
     poll_port(0);
     poll_port(1);
-    resize_for_scaling();
 }
 
 void show_pixels(const std::uint32_t *rgba, std::uint32_t w, std::uint32_t h) {
@@ -513,8 +461,7 @@ void show_pixels(const std::uint32_t *rgba, std::uint32_t w, std::uint32_t h) {
     SDL_SetTextureScaleMode(g_texture, ps2::g_presentation_options.nearest.load(std::memory_order_relaxed) ? SDL_ScaleModeNearest : SDL_ScaleModeLinear);
     int output_width = 0, output_height = 0;
     SDL_GetRendererOutputSize(g_renderer, &output_width, &output_height);
-    const auto viewport = ps2::window_viewport(output_width, output_height, static_cast<int>(native_w), static_cast<int>(native_h),
-        ps2::g_options.widescreen, ps2::g_presentation_options.scaling.load(std::memory_order_relaxed));
+    const auto viewport = ps2::window_viewport(output_width, output_height, static_cast<int>(native_w), static_cast<int>(native_h));
     const SDL_Rect destination{viewport.x, viewport.y, viewport.width, viewport.height};
     SDL_SetRenderDrawColor(g_renderer, 0, 0, 0, 255);
     SDL_RenderClear(g_renderer);
@@ -635,7 +582,7 @@ void show_speed() {
     }
     else
     {
-        if (!g_preferences.show_stats) std::snprintf(title, sizeof title, "ps2-web-recomp | %s", scaling_name());
+        if (!g_preferences.show_stats) std::snprintf(title, sizeof title, "ps2-web-recomp | fit");
         SDL_SetWindowTitle(g_window, title);
         std::snprintf(ps2::g_stats_text, sizeof(ps2::g_stats_text), "%.1f fps", static_cast<double>(frames) / seconds);
     }
@@ -704,7 +651,7 @@ bool open_window(bool fullscreen) {
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
     SDL_SetWindowMinimumSize(g_window, 320, 240);
     save_preferences();
-    std::fprintf(stderr, "[window] F5 GPU resolution | F6 scaling | Ctrl+2/3/4 aspect | Ctrl+Shift+2/3/4 pixels | F7 filter | F8 field blending | F9 stats | F10 mute | +/- volume | F11 / Alt+Enter fullscreen\n");
+    std::fprintf(stderr, "[window] F5 GPU render scale | F7 filter | F8 field blending | F9 stats | F10 mute | +/- volume | F11 / Alt+Enter fullscreen\n");
     std::fprintf(stderr, "[window] settings: %s\n", g_preferences_path.c_str());
     SDL_AudioSpec want{}, have{};
     want.freq = 48000;
