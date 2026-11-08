@@ -643,6 +643,8 @@ bool parse_axis(const std::string &spec, AxisPress &press) {
 
 double gpu_busy_ms() { return gs::gpu_busy_ms(); }
 
+double gpu_vram_mb() { return gs::gpu_vram_mb(); }
+
 #ifdef __EMSCRIPTEN__
 EM_ASYNC_JS(void, ps2_browser_yield, (), {
     if (!Module.yieldPort) {

@@ -35,6 +35,10 @@
 
 namespace {
 
+#ifdef _WIN32
+HANDLE g_vu_thread_handle = nullptr;
+#endif
+
 enum Button : std::uint16_t {
     kSelect = 1u << 0, kL3 = 1u << 1, kR3 = 1u << 2, kStart = 1u << 3,
     kUp = 1u << 4, kRight = 1u << 5, kDown = 1u << 6, kLeft = 1u << 7,
@@ -216,6 +220,7 @@ bool handle_hotkey(const SDL_KeyboardEvent &key)
         break;
     case SDL_SCANCODE_F9:
         g_preferences.show_stats = !g_preferences.show_stats;
+        if (!g_preferences.show_stats) ps2::g_stats_text[0] = '\0';
         notify(g_preferences.show_stats ? "performance title on" : "performance title off");
         break;
     case SDL_SCANCODE_F10:
@@ -525,6 +530,21 @@ double process_cpu_seconds() {
 #endif
 }
 
+#ifdef _WIN32
+double thread_cpu_seconds(HANDLE h) {
+    FILETIME creation_time{}, exit_time{}, kernel_time{}, user_time{};
+    if (!GetThreadTimes(h, &creation_time, &exit_time, &kernel_time, &user_time)) return 0.0;
+    ULARGE_INTEGER kernel_ticks{}, user_ticks{};
+    kernel_ticks.LowPart = kernel_time.dwLowDateTime;
+    kernel_ticks.HighPart = kernel_time.dwHighDateTime;
+    user_ticks.LowPart = user_time.dwLowDateTime;
+    user_ticks.HighPart = user_time.dwHighDateTime;
+    return (static_cast<double>(kernel_ticks.QuadPart) + static_cast<double>(user_ticks.QuadPart)) / 10000000.0;
+}
+#else
+double thread_cpu_seconds(void*) { return 0.0; }
+#endif
+
 double resident_mb() {
 #ifdef __APPLE__
     mach_task_basic_info_data_t task{};
@@ -550,6 +570,9 @@ double resident_mb() {
 void show_speed() {
     static std::uint64_t start = 0, frames = 0;
     static double cpu_start = 0.0, gpu_start = 0.0, emu_start = 0.0, vu_start = 0.0, gs_start = 0.0;
+#ifdef _WIN32
+    static double main_cpu_start = 0.0, vu_cpu_start = 0.0;
+#endif
     static std::uint64_t interpreted_start = 0;
     const auto emu_idle = [] { return ps2::thread_waited_ms(0) + g_paced_ms.load(); };
     const std::uint64_t now = SDL_GetPerformanceCounter();
@@ -561,6 +584,10 @@ void show_speed() {
         vu_start = ps2::vu_thread_idle_ms();
         gs_start = ps2::thread_waited_ms(2);
         interpreted_start = ps2::vu1_interpreted_calls();
+#ifdef _WIN32
+        main_cpu_start = thread_cpu_seconds(GetCurrentThread());
+        vu_cpu_start = g_vu_thread_handle ? thread_cpu_seconds(g_vu_thread_handle) : 0.0;
+#endif
     }
     ++frames;
     const double seconds = static_cast<double>(now - start) / static_cast<double>(SDL_GetPerformanceFrequency());
@@ -569,22 +596,41 @@ void show_speed() {
     const std::uint64_t interpreted = ps2::vu1_interpreted_calls();
     char title[192];
     const double queued = g_audio ? SDL_GetQueuedAudioSize(g_audio) / static_cast<double>(kAudioBytesPerMs) : 0.0;
-    std::snprintf(title, sizeof title, "ps2-web-recomp  %.1f fps  CPU %.0f%%  GPU %.0f%%  RAM %.0f MB  audio %.0f ms", static_cast<double>(frames) / seconds,
-                  (cpu - cpu_start) / seconds * 100.0, (gpu - gpu_start) / (seconds * 10.0), resident_mb(), queued);
-    const int render_scale = ps2::g_presentation_options.active_render_scale.load(std::memory_order_relaxed);
-    const int render_width = ps2::g_presentation_options.native_width.load(std::memory_order_relaxed) * render_scale;
-    const int render_height = ps2::g_presentation_options.native_height.load(std::memory_order_relaxed) * render_scale;
-    const auto used = std::strlen(title);
-    std::snprintf(title + used, sizeof title - used, "  render %dx%d (%dx)", render_width, render_height, render_scale);
+    const int render_width = ps2::g_presentation_options.native_width.load(std::memory_order_relaxed) * ps2::g_presentation_options.active_render_scale.load(std::memory_order_relaxed);
+    const int render_height = ps2::g_presentation_options.native_height.load(std::memory_order_relaxed) * ps2::g_presentation_options.active_render_scale.load(std::memory_order_relaxed);
+#ifdef _WIN32
+    const double main_cpu = thread_cpu_seconds(GetCurrentThread()) - main_cpu_start;
+    const double vu_cpu = g_vu_thread_handle ? thread_cpu_seconds(g_vu_thread_handle) - vu_cpu_start : 0.0;
+    std::snprintf(title, sizeof title, "render %dx%d (%dx)\naudio %.0f ms\n%.1f fps\nMain %.0f%%\nVU %.0f%%\nRAM %.0f MB\nGPU %.0f%%\nVRAM %.0f MB",
+#else
+    std::snprintf(title, sizeof title, "render %dx%d (%dx)\naudio %.0f ms\n%.1f fps\nCPU %.0f%%\nRAM %.0f MB\nGPU %.0f%%\nVRAM %.0f MB",
+#endif
+        render_width, render_height, ps2::g_presentation_options.active_render_scale.load(std::memory_order_relaxed),
+        queued,
+        static_cast<double>(frames) / seconds,
+#ifdef _WIN32
+        main_cpu / seconds * 100.0, vu_cpu / seconds * 100.0, resident_mb(),
+#else
+        (cpu - cpu_start) / seconds * 100.0, resident_mb(),
+#endif
+        (gpu - gpu_start) / (seconds * 10.0), vram_mb);
     if (SDL_GetTicks64() < g_notice_until)
     {
         SDL_SetWindowTitle(g_window, g_notice.c_str());
     }
     else
     {
-        if (!g_preferences.show_stats) std::snprintf(title, sizeof title, "ps2-web-recomp | fit");
-        SDL_SetWindowTitle(g_window, title);
-        std::snprintf(ps2::g_stats_text, sizeof(ps2::g_stats_text), "%.1f fps", static_cast<double>(frames) / seconds);
+        if (g_preferences.show_stats)
+        {
+            SDL_SetWindowTitle(g_window, title);
+            std::strncpy(ps2::g_stats_text, title, sizeof(ps2::g_stats_text) - 1);
+            ps2::g_stats_text[sizeof(ps2::g_stats_text) - 1] = '\0';
+        }
+        else
+        {
+            SDL_SetWindowTitle(g_window, "ps2-web-recomp | fit");
+            ps2::g_stats_text[0] = '\0';
+        }
     }
     start = now;
     frames = 0;
@@ -594,6 +640,10 @@ void show_speed() {
     interpreted_start = interpreted;
     cpu_start = cpu;
     gpu_start = gpu;
+#ifdef _WIN32
+    main_cpu_start = thread_cpu_seconds(GetCurrentThread());
+    vu_cpu_start = g_vu_thread_handle ? thread_cpu_seconds(g_vu_thread_handle) : 0.0;
+#endif
 }
 
 void on_vblank() {
@@ -686,7 +736,13 @@ int run_window(const std::function<int()> &emulate) {
     ps2::start_render_thread();
     if (!std::getenv("PS2_NO_VU_THREAD")) {
         ps2::start_vu_thread();
+#ifdef _WIN32
+        std::thread vu_thread(ps2::run_vu_thread);
+        g_vu_thread_handle = vu_thread.native_handle();
+        vu_thread.detach();
+#else
         std::thread(ps2::run_vu_thread).detach();
+#endif
     }
     std::atomic<bool> done{false};
     int result = 0;

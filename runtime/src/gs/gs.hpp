@@ -87,6 +87,7 @@ void flush_and_wait();
 void post_present();
 Rendered render_pending(const std::function<void(const DisplayRegs &)> &on_present, double budget_ms);
 double gpu_busy_ms();
+double gpu_vram_mb();
 std::uint64_t primitives_drawn();
 void stats();
 
