@@ -1,25 +1,13 @@
-Optional field-blending diagnostic for the Windows WebGPU build
+Fixes in this build
+-------------------
+1. Upstream syntax error: if (loose_game_active) if (loose_game_active)
+2. Windows Unicode crash: no path::string() while enumerating disc files
+3. Virtual INFO.DAT/GAME.DAT no longer require host files (was throwing
+   "missing or non-file extracted path")
+4. Rebuild INFO.DAT from GAME/ (Arika format from arika_tooling_sdbz)
+5. Map all GAME/ files onto virtual GAME.DAT
 
-Extract into C:/dev/ps2-web-recomp, replacing runtime/src/gs/gpu/gpu.cpp.
-This file includes the earlier Windows WebGPU surface changes.
-Other source files (including the SPU2 fixes) are not included.
-
-In CLANG64, from the repository root:
-
-touch runtime/src/gs/gpu/gpu.cpp
-cmake --build build/native-SuperDragonBallZ --target ps2run
-unset PS2_NO_DEINTERLACE PS2_TRACE_DISPLAY
-export PS2_FORCE_DEINTERLACE=1
-build/native-SuperDragonBallZ/ps2run games/SuperDragonBallZ/disc/SLES_541.61 --disc games/SuperDragonBallZ/disc.iso --window
-
-Choose 60 Hz in the game and compare the vertical movement.
-The console should say: [gpu] forced field blending enabled
-
-To disable the diagnostic, close the game and run:
-unset PS2_FORCE_DEINTERLACE
-Then launch it again. No rebuild is required to toggle it.
-
-This averages the current and previous images. It can soften motion or
-introduce ghosting. It is a diagnostic workaround, not a verified correction
-to GS field alignment. It does not change game timing or framebuffer height.
-Full Windows/game validation must be performed on your machine.
+Expected log without host INFO.DAT:
+  [disc] rebuilt INFO.DAT from GAME/ (N assets, M sectors)
+  [disc] synthesized ISO directory and file extents in memory
+  [disc] INFO.DAT is virtual; host-INFO overlay pass skipped
