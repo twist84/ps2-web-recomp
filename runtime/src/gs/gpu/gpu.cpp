@@ -1883,8 +1883,7 @@ bool present(const DisplaySource &src) {
     const std::uint32_t param = push_params({src.fbp, src.fbw, src.psm, src.dbx, src.dby, src.width, src.height, src.halved ? 1u : 0u, current});
     g_commands.push_back({kDisplay, (src.width * g_scale + 7) / 8, (src.height * g_scale + 7) / 8, param});
     g_present_viewport = ps2::window_viewport(static_cast<int>(g_surface_width), static_cast<int>(g_surface_height),
-        static_cast<int>(src.width), static_cast<int>(src.height), g_options.widescreen,
-        ps2::g_presentation_options.scaling.load(std::memory_order_relaxed));
+        static_cast<int>(src.width), static_cast<int>(src.height));
     const std::uint32_t blit[9] = {src.width * g_scale, src.height * g_scale, current, previous, blend ? 1u : 0u,
         static_cast<std::uint32_t>(g_present_viewport.width), static_cast<std::uint32_t>(g_present_viewport.height),
         ps2::g_presentation_options.nearest.load(std::memory_order_relaxed) ? 1u : 0u,
