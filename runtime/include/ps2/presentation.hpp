@@ -15,6 +15,7 @@ struct s_presentation_options
 {
     std::atomic<bool> nearest{false};
     std::atomic<bool> force_blend{false};
+    std::atomic<bool> force_square{false};
     std::atomic<int> render_scale{1};
     std::atomic<int> active_render_scale{1};
     std::atomic<int> native_width{0};
