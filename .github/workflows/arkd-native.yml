@@ -41,6 +41,12 @@ jobs:
             runtime/src/iop/arika_dvd.cpp \
             runtime/src/iop/kernel.cpp \
             runtime/src/iop/cdvd.cpp
+      - name: Build the complete ps2runtime static library
+        env:
+          CXX: ${{ matrix.cxx }}
+        run: |
+          cmake -S . -B build-native -DCMAKE_CXX_COMPILER="$CXX"
+          cmake --build build-native --target ps2runtime --parallel 2
       - name: Check existing folder-disc regressions
         env:
           CXX: ${{ matrix.cxx }}
