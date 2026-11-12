@@ -7,6 +7,8 @@
 #include <string>
 #include <string_view>
 
+namespace ps2::state { class Stream; }
+
 namespace ps2::iop::arkd
 {
 struct s_asset
@@ -33,4 +35,5 @@ private:
 bool native_requested();
 bool intercept_module(const std::string &path);
 void install();
+void state(ps2::state::Stream &stream);
 }
