@@ -67,6 +67,49 @@ The EU beta IRX is byte-identical to the US IRX. The EE game passes
 `file=2047`, but the native catalog does not use this artificial table
 capacity bound.
 
+## Protocol implementation progress
+
+The latest draft includes the following **statically recovered** handlers:
+
+| Server | Native methods | Important limitation |
+| --- | --- | --- |
+| `0x500` | `1`, `3`, `0x10`, `0x11`, `0x12` | Some initialization side effects remain unmapped |
+| `0x501` | `1`, `2`, `3`, `0x11`, `0x12`, `0x13`, `0x14`, `0x81`, `0x82` | Buffer/control state is stored; sound worker and per-voice update are incomplete |
+| `0x502` | `1`–`5`, `0x101`–`0x103` | Stream control flags and packet storage, not full SPU2 playback |
+| `0x503` | `1`–`4`, `0x81`, `0x101`, `0x102` | File copy and CDVD initialization use approximate native timing |
+
+The `0x501/0x11` handler forwards both real 16-byte `sceSdEffectAttr`
+structures to **the game's own `LIBSD.IRX` export ordinal 23** via the
+existing IOP guest-library call bridge. There is no need to duplicate
+the SPU2 device implementation.
+
+The `0x503/0x102` request queues a bounded file read into EE RAM and
+exposes the 0x10000000/0x20000000/0x30000000 transfer phases. The
+`0x503/0x101` request prepares the CDVD worker and completes a separate
+queued job. The actual original-IRX timing and interrupts still require
+comparison before declaring equivalence.
+
+**Still unimplemented:** `0x501/0x101`–`0x103` sound/stream worker,
+`0x503/0x103` CDVD worker, complete sound-buffer consumption and per-voice
+`libsd` updates, exact SIF DMA/interrupt callbacks, and serialization of
+the native module's pending state. The driver replacement is not yet
+ready for end-to-end gameplay validation. The native module is deliberately
+opt-in and PR #2 remains a draft.
+
+The original EU executable's client bindings are:
+
+```text
+SLES_541.61 EE address 0x1BCD90:
+server 0x500 -> client 0x005A55B0
+server 0x501 -> client 0x005A5600
+server 0x502 -> client 0x005A5628
+server 0x503 -> client 0x005A55D8
+
+EE SifCallRpc wrapper: 0x1789E8
+0x503/0x101 call site: 0x1C0778 (input 0x30, reply 0x10)
+0x503/0x102 call site: 0x1C0BA8 (input 0x30, reply 0x10)
+```
+
 ## Validation
 
 Run the synthetic native catalog and RPC test:
