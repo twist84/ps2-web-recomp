@@ -1,4 +1,5 @@
 #include "kernel.hpp"
+#include "arika_dvd.hpp"
 
 #include "hw.hpp"
 #include "io.hpp"
@@ -552,6 +553,7 @@ void boot() {
     install_io();
     install_cdvd();
     install_sif();
+    arkd::install();
 }
 
 }
