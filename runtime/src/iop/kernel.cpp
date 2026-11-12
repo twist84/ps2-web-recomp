@@ -867,6 +867,7 @@ void state(ps2::state::Stream &s) {
     sio2::state(s);
     spu2::state(s);
     io::state(s);
+    arkd::state(s);
 }
 
 }
