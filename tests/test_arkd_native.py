@@ -74,11 +74,19 @@ int main(int argc, char **argv)
     if (catalog.read(*entry, 4996, fragment, sizeof(fragment)) != 4) return 9;
     if (catalog.read(*entry, 5000, fragment, sizeof(fragment)) != 0) return 10;
 
+#ifdef _WIN32
+    _putenv_s("SDBZ_ARKD_NATIVE", "");
+#else
     unsetenv("SDBZ_ARKD_NATIVE");
+#endif
     if (arkd::native_requested() || arkd::intercept_module("cdrom0:\\ARKD_DVD.IRX;1"))
         return 11;
 
+#ifdef _WIN32
+    _putenv_s("SDBZ_ARKD_NATIVE", "1");
+#else
     setenv("SDBZ_ARKD_NATIVE", "1", 1);
+#endif
     if (!arkd::native_requested() || !arkd::intercept_module("cdrom0:\\ARKD_DVD.IRX;1")
         || arkd::intercept_module("cdrom0:\\OTHER.IRX;1")) return 12;
     arkd::install();
