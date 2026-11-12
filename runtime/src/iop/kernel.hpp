@@ -98,6 +98,11 @@ std::uint32_t hle_stub(const HleFunction &function);
 void register_library(const std::string &name, std::uint32_t table);
 void register_hle_library(const std::string &name, std::uint32_t version);
 bool library_exists(const std::string &name);
+// Invoke an exported guest IOP library function by ordinal. This is used
+// by native HLE drivers which must still call the game's actual LIBSD.IRX.
+bool call_library_export(const std::string &name, std::uint32_t ordinal,
+    std::uint32_t a0, std::uint32_t a1, std::uint32_t a2,
+    std::uint32_t a3, std::uint32_t &result);
 
 struct Module {
     int id;
