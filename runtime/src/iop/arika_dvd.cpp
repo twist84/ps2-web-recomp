@@ -730,4 +730,47 @@ void install()
         "unset SDBZ_ARKD_NATIVE to restore original IRX\n");
 }
 
+void state(ps2::state::Stream &stream)
+{
+    // Existing v2-v6 state files have no native ARKD section. A new v7
+    // section includes the selected backend, in-flight transfer serial,
+    // pending destination, and the complete alternating sound buffers.
+    if (stream.version() < 7)
+    {
+        if (stream.loading())
+        {
+            g_pending = {};
+            g_transfer_state = 0x30000000u;
+            g_transfer_serial = 0;
+            g_control_value = g_transfer_block_bytes = 0;
+            g_sound = {};
+            if (native_requested() && !g_catalog.open())
+                throw std::runtime_error("cannot restore native ARKD asset catalog");
+        }
+        return;
+    }
+
+    stream.tag("arkd");
+    bool native = native_requested();
+    stream.pod(native);
+    if (stream.loading() && native != native_requested())
+        throw std::runtime_error(
+            "ARKD native backend must match the savestate's SDBZ_ARKD_NATIVE setting");
+
+    stream.pod(g_transfer_state);
+    stream.pod(g_transfer_serial);
+    stream.pod(g_control_value);
+    stream.pod(g_transfer_block_bytes);
+    stream.pod(g_pending.asset.relative_sector);
+    stream.pod(g_pending.asset.file_size);
+    stream.pod(g_pending.destination);
+    stream.pod(g_pending.serial);
+    stream.pod(g_pending.valid);
+    stream.pod(g_pending.initialize);
+    stream.pod(g_sound);
+
+    if (stream.loading() && native && !g_catalog.open())
+        throw std::runtime_error("cannot restore native ARKD asset catalog");
+}
+
 }
