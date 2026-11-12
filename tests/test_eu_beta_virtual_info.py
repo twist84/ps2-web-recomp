@@ -76,7 +76,7 @@ int main(int argc, char **argv)
     if (game->size != expected_count * 2048) return 10;
     if (argc == 4 && expected_count == 3)
     {
-        if (previous != "trc\\\\z_last.bin") return 11;
+        if (previous != "trc\\z_last.bin") return 11;
         std::vector<std::uint8_t> bytes(2048);
         if (!ps2::disc::read(game->sector + 2, 1, bytes.data())) return 12;
         if (std::memcmp(bytes.data(), argv[3], 13) != 0) return 13;
