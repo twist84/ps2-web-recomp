@@ -5,6 +5,7 @@
 
 #include "ps2/disc.hpp"
 #include "ps2/memory.hpp"
+#include "ps2/state.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <stdexcept>
 #include <vector>
 
 namespace ps2::iop::arkd
