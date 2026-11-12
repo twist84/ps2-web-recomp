@@ -481,6 +481,21 @@ void register_hle_library(const std::string &name, std::uint32_t version) { g_hl
 
 bool library_exists(const std::string &name) { return g_libraries.count(name) || g_hle_versions.count(name); }
 
+bool call_library_export(const std::string &name, std::uint32_t ordinal,
+    std::uint32_t a0, std::uint32_t a1, std::uint32_t a2,
+    std::uint32_t a3, std::uint32_t &result)
+{
+    const auto found = g_libraries.find(name);
+    if (found == g_libraries.end() || ordinal > 1024) return false;
+    const std::uint64_t table = phys(found->second);
+    const std::uint64_t entry = table + 20ull + ordinal * 4ull;
+    if (entry + 4 > kRamSize) return false;
+    const std::uint32_t address = ram32(static_cast<std::uint32_t>(entry));
+    if (!address || (phys(address) >= kRamSize)) return false;
+    result = call_guest(address, a0, a1, a2, a3);
+    return true;
+}
+
 const std::map<int, Module> &modules() { return g_modules; }
 
 void register_hle_module(const std::string &name, HleModuleStart start) { g_hle_modules[name] = std::move(start); }
