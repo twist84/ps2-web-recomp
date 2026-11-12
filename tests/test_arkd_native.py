@@ -16,6 +16,7 @@ HARNESS = r'''#include "iop/arika_dvd.hpp"
 #include "iop/sif.hpp"
 #include "ps2/disc.hpp"
 #include "ps2/memory.hpp"
+#include "ps2/state.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -213,6 +214,32 @@ int main(int argc, char **argv)
     kernel::g_read_job(kernel::g_queued_read);
     ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
     if (word(0x180) != 0x30000000u) return 42;
+
+    // Save an unfinished native DMA, cancel it, then restore. The
+    // in-flight job must still match the preserved request serial.
+    std::memset(ps2::g_ram + 0x100, 0, 0x24);
+    std::memcpy(ps2::g_ram + 0x100, &target, 4);
+    std::memcpy(ps2::g_ram + 0x104, "ply\\small.bin", 14);
+    if (!ps2::sif::g_handlers.at(0x503)(0x102, 0x100, 0x24, 0x180, 4)
+        || word(0x180) != 0) return 43;
+    const auto saved_job = kernel::g_queued_read;
+    ps2::state::Writer writer;
+    writer.set_version(7);
+    arkd::state(writer);
+    if (!ps2::sif::g_handlers.at(0x503)(0x81, 0, 0, 0x180, 4))
+        return 44;
+    kernel::g_read_job(saved_job); // Canceled transfer should not run.
+    ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
+    if (word(0x180) != 0x40000065u) return 45;
+
+    ps2::state::Reader reader(writer.out.data(), writer.out.size());
+    reader.set_version(7);
+    arkd::state(reader);
+    ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
+    if (word(0x180) != 0x10000000u) return 46;
+    kernel::g_read_job(saved_job);
+    ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
+    if (word(0x180) != 0x30000000u) return 47;
     return 0;
 }
 '''
