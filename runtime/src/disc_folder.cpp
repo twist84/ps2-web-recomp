@@ -523,7 +523,11 @@ s_virtual_archive build_virtual_archive_from_game(const fs::path &loose_root)
     constexpr std::size_t kEuInfoSize = 0x18000;
     if (result.encoded_info.size() < kEuInfoSize)
         result.encoded_info.resize(kEuInfoSize, 0x40);
-    if (result.assets.size() >= 2005)
+    if (result.assets.size() >= 2047)
+        std::fprintf(stderr,
+            "[disc] warning: INFO has %zu records; ARKD_DVD.IRX rejects "
+            "entry_count >= file=2047\n", result.assets.size());
+    else if (result.assets.size() >= 2005)
         std::fprintf(stderr,
             "[disc] warning: INFO has %zu records; ARKD_DVD.IRX may only read "
             "47 table sectors with file=2047 (record 2005 not yet verified)\n",
@@ -1359,7 +1363,11 @@ void build_disc_layout(const fs::path &root, s_folder &folder)
                 std::memcpy(decoded_info.data() + 0x30, records.data(), records.size());
                 archive_entries = std::move(sorted_entries);
             }
-            if (archive_entries.size() >= 2005)
+            if (archive_entries.size() >= 2047)
+                std::fprintf(stderr,
+                    "[disc] warning: INFO has %zu records; ARKD_DVD.IRX rejects "
+                    "entry_count >= file=2047\n", archive_entries.size());
+            else if (archive_entries.size() >= 2005)
                 std::fprintf(stderr,
                     "[disc] warning: INFO has %zu records; ARKD_DVD.IRX may only read "
                     "47 table sectors with file=2047 (record 2005 not yet verified)\n",
