@@ -201,9 +201,53 @@ bool native_full_file_read(std::uint32_t args, std::uint32_t args_size,
     return true;
 }
 
+bool sound_effect_rpc(std::uint32_t args, std::uint32_t args_size,
+    std::uint32_t ret, std::uint32_t ret_size)
+{
+    // IRX 0x4C84 (0x501/0x11): two 16-byte sceSdEffectAttr records,
+    // one per SPU2 core. It calls the libsd export #23
+    // (sceSdSetEffectAttr) with (core, address_of_attribute).
+    if (args_size < 32 || !ee_range(args, 32))
+    {
+        reply_u32(ret, ret_size, 0x80000064u);
+        return true;
+    }
+    if (!kernel::library_exists("libsd"))
+    {
+        std::fprintf(stderr,
+            "[arkd-native] 0x501/0x11: libsd export unavailable\n");
+        reply_u32(ret, ret_size, 0x80000064u);
+        return true;
+    }
+    const std::uint32_t staging = kernel::alloc(16);
+    if (!staging || (iop::phys(staging) & (iop::kRamSize - 1)) > iop::kRamSize - 16)
+    {
+        reply_u32(ret, ret_size, 0x80000064u);
+        return true;
+    }
+    bool success = true;
+    const auto *input = ps2::g_ram + (args & (ps2::kRamSize - 1));
+    for (std::uint32_t core = 0; core < 2; ++core)
+    {
+        std::memcpy(iop::ram_ptr(staging), input + core * 16, 16);
+        std::uint32_t result = 0;
+        if (!kernel::call_library_export("libsd", 23, core, staging, 0, 0, result))
+        {
+            success = false;
+            break;
+        }
+    }
+    kernel::free(staging);
+    reply_u32(ret, ret_size, success ? 0 : 0x80000064u);
+    return true;
+}
+
 bool rpc(std::uint32_t server, std::uint32_t method, std::uint32_t args,
     std::uint32_t args_size, std::uint32_t ret, std::uint32_t ret_size)
 {
+    if (server == 0x501 && method == 0x11)
+        return sound_effect_rpc(args, args_size, ret, ret_size);
+
     if (server == 0x503)
     {
         switch (method)
