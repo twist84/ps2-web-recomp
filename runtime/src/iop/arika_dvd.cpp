@@ -39,6 +39,7 @@ struct s_pending_transfer
     std::uint32_t destination = 0;
     std::uint32_t serial = 0;
     bool valid = false;
+    bool initialize = false;
 };
 
 s_pending_transfer g_pending;
@@ -157,6 +158,14 @@ void complete_native_read(const kernel::Job &job)
     const s_pending_transfer transfer = g_pending;
     g_pending.valid = false;
 
+    // 0x503/0x101 prepares the CDVD worker; unlike 0x102 it does not
+    // address an INFO filename or copy a file into EE memory.
+    if (transfer.initialize)
+    {
+        g_transfer_state = disc::is_open() ? 0x30000000u : 0x40000064u;
+        return;
+    }
+
     if (!ee_range(transfer.destination, transfer.asset.file_size))
     {
         g_transfer_state = 0x40000064u;
@@ -215,7 +224,7 @@ bool native_full_file_read(std::uint32_t args, std::uint32_t args_size,
         return true;
     }
 
-    g_pending = {*asset, destination, ++g_transfer_serial, true};
+    g_pending = {*asset, destination, ++g_transfer_serial, true, false};
     g_transfer_state = 0x10000000u;
     const auto duration = kernel::usec_to_cycles(400)
         + static_cast<std::uint64_t>(
@@ -434,6 +443,29 @@ bool stream_control_rpc(std::uint32_t method, std::uint32_t args,
     return true;
 }
 
+bool native_initialize_disc(std::uint32_t args, std::uint32_t args_size,
+    std::uint32_t ret, std::uint32_t ret_size)
+{
+    // IRX 0x250C / 0x1DA4: a 36-byte command primes the CDVD worker
+    // without transferring a file. The EE polls 0x503/2 for completion.
+    if (args_size < 0x24 || !ee_range(args, 0x24))
+    {
+        reply_u32(ret, ret_size, 0x80000064u);
+        return true;
+    }
+    if (g_pending.valid)
+    {
+        reply_u32(ret, ret_size, 0x80000065u);
+        return true;
+    }
+    g_pending = {{}, 0, ++g_transfer_serial, true, true};
+    g_transfer_state = 0x10000000u;
+    kernel::schedule(kernel::now() + kernel::usec_to_cycles(400),
+        kernel::Job{kernel::kJobArkdRead, g_pending.serial});
+    reply_u32(ret, ret_size, 0);
+    return true;
+}
+
 bool rpc(std::uint32_t server, std::uint32_t method, std::uint32_t args,
     std::uint32_t args_size, std::uint32_t ret, std::uint32_t ret_size)
 {
@@ -453,17 +485,36 @@ bool rpc(std::uint32_t server, std::uint32_t method, std::uint32_t args,
     {
         switch (method)
         {
+        case 1: // IRX 0x16A4, CDVD status request.
+            reply_u32(ret, ret_size, disc::is_open() ? 1u : 0u);
+            return true;
         case 2:  // IRX 0x1714, returns its global transfer state.
             reply_u32(ret, ret_size, g_transfer_state);
             return true;
         case 3:
             return file_size_rpc(args, args_size, ret, ret_size);
+        case 4: // IRX 0x1A10, diagnostic message.
+            if (args_size && ee_range(args, args_size))
+            {
+                const auto *input = ps2::g_ram + (args & (ps2::kRamSize - 1));
+                const std::size_t n = std::min<std::size_t>(args_size, 128);
+                const auto *end = static_cast<const std::uint8_t *>(
+                    std::memchr(input, 0, n));
+                if (end)
+                    std::fprintf(stderr, "[arkd-native] %.*s\n",
+                        static_cast<int>(end - input),
+                        reinterpret_cast<const char *>(input));
+            }
+            reply_u32(ret, ret_size, 0);
+            return true;
         case 0x81: // IRX 0x183C, cancel the current transfer.
             g_pending.valid = false;
             ++g_transfer_serial;
             g_transfer_state = 0x40000065u;
             reply_u32(ret, ret_size, 0);
             return true;
+        case 0x101:
+            return native_initialize_disc(args, args_size, ret, ret_size);
         case 0x102:
             return native_full_file_read(args, args_size, ret, ret_size);
         default:
