@@ -31,10 +31,31 @@ std::uint8_t g_ram[kRamSize] = {};
 void watch_span(std::uint32_t, std::uint32_t, const char *) {}
 }
 
+namespace ps2::iop {
+std::uint8_t g_ram[kRamSize] = {};
+}
+
 namespace ps2::iop::kernel {
 HleModuleStart g_start;
 JobHandler g_read_job = nullptr;
 Job g_queued_read;
+std::vector<std::vector<std::uint8_t>> g_effect_calls;
+std::vector<std::uint32_t> g_effect_cores;
+bool library_exists(const std::string &name) { return name == "libsd"; }
+std::uint32_t alloc(std::uint32_t, int, std::uint32_t) { return 0x1000; }
+void free(std::uint32_t) {}
+bool call_library_export(const std::string &name, std::uint32_t ordinal,
+    std::uint32_t a0, std::uint32_t a1, std::uint32_t,
+    std::uint32_t, std::uint32_t &result)
+{
+    if (name != "libsd" || ordinal != 23 || a0 > 1 || a1 != 0x1000)
+        return false;
+    g_effect_cores.push_back(a0);
+    const auto *bytes = ps2::iop::ram_ptr(a1);
+    g_effect_calls.emplace_back(bytes, bytes + 16);
+    result = 0;
+    return true;
+}
 void register_hle_module(const std::string &name, HleModuleStart callback)
 {
     if (name == "ARKD_DVD") g_start = std::move(callback);
@@ -133,6 +154,20 @@ int main(int argc, char **argv)
     if (word(0x180) != 0x30000000u) return 24;
     for (unsigned i = 0; i < 5000; ++i)
         if (ps2::g_ram[0x200 + i] != 'S') return 25;
+
+    // The IRX's 0x501/0x11 method passes two 16-byte effect descriptors
+    // through libsd export 23, one invocation for each SPU2 core.
+    for (unsigned i = 0; i < 32; ++i)
+        ps2::g_ram[0x400 + i] = static_cast<std::uint8_t>(i + 1);
+    if (!ps2::sif::g_handlers.at(0x501)(0x11, 0x400, 32, 0x180, 4))
+        return 26;
+    if (word(0x180) != 0 || kernel::g_effect_calls.size() != 2
+        || kernel::g_effect_cores != std::vector<std::uint32_t>({0, 1}))
+        return 27;
+    for (unsigned core = 0; core < 2; ++core)
+        for (unsigned i = 0; i < 16; ++i)
+            if (kernel::g_effect_calls[core][i] != core * 16 + i + 1)
+                return 28;
     return 0;
 }
 '''
