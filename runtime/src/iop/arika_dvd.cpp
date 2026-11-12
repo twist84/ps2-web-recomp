@@ -7,6 +7,7 @@
 #include "ps2/memory.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -41,6 +42,31 @@ struct s_pending_transfer
 };
 
 s_pending_transfer g_pending;
+
+struct s_sound_rpc_state
+{
+    // Original IRX 0x4A10 / 0x4BB8: alternating copies of two command
+    // structures. Each update selects one of two buffers.
+    std::array<std::array<std::uint8_t, 0x2E0>, 2> voice_commands{};
+    std::array<std::array<std::uint8_t, 0x33C>, 2> sound_commands{};
+    std::array<std::array<std::uint32_t, 2>, 2> command_flags{};
+    std::array<std::uint8_t, 0x17C> stream_commands{};
+
+    std::uint32_t buffer_generation = 0;
+    std::uint32_t submitted_generation = 0;
+    std::uint32_t control_flags = 0;
+    std::uint32_t streaming_flags = 0;
+    std::uint32_t stream_control = 0;
+    std::uint32_t stream_status = 0;
+    std::uint16_t master_volume = 0;
+    std::uint16_t channel_volume_left = 0;
+    std::uint16_t channel_volume_right = 0;
+    std::uint16_t current_stream = 0;
+    std::uint16_t pending_stream = 0;
+    std::uint16_t stream_pair_left = 0;
+    std::uint16_t stream_pair_right = 0;
+};
+s_sound_rpc_state g_sound;
 
 std::uint32_t read_u32(const std::uint8_t *bytes)
 {
@@ -242,11 +268,186 @@ bool sound_effect_rpc(std::uint32_t args, std::uint32_t args_size,
     return true;
 }
 
+bool sound_command_rpc(std::uint32_t method, std::uint32_t args,
+    std::uint32_t args_size, std::uint32_t ret, std::uint32_t ret_size)
+{
+    const auto copy_input = [&](void *destination, std::uint32_t amount) -> bool
+    {
+        if (args_size < amount || !ee_range(args, amount)) return false;
+        std::memcpy(destination, ps2::g_ram + (args & (ps2::kRamSize - 1)), amount);
+        return true;
+    };
+    std::uint32_t value = 0;
+    const auto read_input = [&](std::uint32_t amount) -> bool
+    {
+        if (args_size < amount || !ee_range(args, amount)) return false;
+        value = read_u32(ps2::g_ram + (args & (ps2::kRamSize - 1)));
+        return true;
+    };
+
+    switch (method)
+    {
+    case 1: // IRX 0x4A10, copy 0x2E0 voice command bytes to alternating buffer.
+    {
+        const std::uint32_t next = (g_sound.buffer_generation + 1) & 1;
+        if (!copy_input(g_sound.voice_commands[next].data(), 0x2E0)) break;
+        ++g_sound.buffer_generation;
+        ++g_sound.submitted_generation;
+        reply_u32(ret, ret_size, 0);
+        return true;
+    }
+    case 2: // IRX 0x4AC0, OR the two command flag words.
+        if (!read_input(8)) break;
+        for (std::uint32_t index = 0; index < 2; ++index)
+        {
+            const auto *source = ps2::g_ram
+                + (args & (ps2::kRamSize - 1)) + 4 * index;
+            g_sound.command_flags[(g_sound.buffer_generation + 1) & 1][index]
+                |= read_u32(source);
+        }
+        ++g_sound.submitted_generation;
+        reply_u32(ret, ret_size, 0);
+        return true;
+    case 3: // IRX 0x4BB8, copy 0x33C stream command bytes.
+    {
+        const std::uint32_t next = (g_sound.buffer_generation + 1) & 1;
+        if (!copy_input(g_sound.sound_commands[next].data(), 0x33C)) break;
+        ++g_sound.buffer_generation;
+        ++g_sound.submitted_generation;
+        reply_u32(ret, ret_size, 0);
+        return true;
+    }
+    case 0x12: // IRX 0x505C, master volume u16, then update 46 voices.
+        if (args_size < 2 || !ee_range(args, 2)) break;
+        std::memcpy(&g_sound.master_volume,
+            ps2::g_ram + (args & (ps2::kRamSize - 1)), 2);
+        reply_u32(ret, ret_size, 0);
+        return true;
+    case 0x13: // IRX 0x5108, enable/disable mixing by request u32.
+        if (!read_input(4)) break;
+        if (value) g_sound.streaming_flags &= ~0x10000u;
+        else g_sound.streaming_flags |= 0x10000u;
+        reply_u32(ret, ret_size, 0);
+        return true;
+    case 0x14: // IRX 0x50A8, left/right u16 volume controls.
+        if (!copy_input(&g_sound.channel_volume_left, 2)) break;
+        std::memcpy(&g_sound.channel_volume_right,
+            ps2::g_ram + (args & (ps2::kRamSize - 1)) + 2, 2);
+        reply_u32(ret, ret_size, 0);
+        return true;
+    case 0x81: // IRX 0x5194, set control bit 0.
+        g_sound.streaming_flags |= 1u;
+        reply_u32(ret, ret_size, 0);
+        return true;
+    case 0x82: // IRX 0x51C8 returns 2 live stream-status words.
+        reply_pair(ret, ret_size, g_sound.stream_status,
+            g_sound.stream_control);
+        return true;
+    default:
+        return false;
+    }
+    reply_u32(ret, ret_size, 0x80000064u);
+    return true;
+}
+
+bool stream_control_rpc(std::uint32_t method, std::uint32_t args,
+    std::uint32_t args_size, std::uint32_t ret, std::uint32_t ret_size)
+{
+    const auto read16 = [&](std::uint32_t byte_offset, std::uint16_t &out) -> bool
+    {
+        if (args_size < byte_offset + 2 || !ee_range(args, args_size))
+            return false;
+        std::memcpy(&out,
+            ps2::g_ram + (args & (ps2::kRamSize - 1)) + byte_offset, 2);
+        return true;
+    };
+    const auto read32 = [&](std::uint32_t &out) -> bool
+    {
+        if (args_size < 4 || !ee_range(args, 4)) return false;
+        out = read_u32(ps2::g_ram + (args & (ps2::kRamSize - 1)));
+        return true;
+    };
+
+    switch (method)
+    {
+    case 1: // IRX 0x96C4, store requested stream number + 1.
+    {
+        std::uint16_t stream = 0;
+        if (!read16(0, stream)) break;
+        g_sound.current_stream = static_cast<std::uint16_t>(stream + 1);
+        reply_u32(ret, ret_size, 0);
+        return true;
+    }
+    case 2: // IRX 0x9754, store stream configuration.
+        if (!read16(0, g_sound.pending_stream)) break;
+        reply_u32(ret, ret_size, 0);
+        return true;
+    case 3: // IRX 0x9878, toggles stream flag based on request u32.
+    {
+        std::uint32_t enabled = 0;
+        if (!read32(enabled)) break;
+        g_sound.streaming_flags = (g_sound.streaming_flags & ~0x2u)
+            | (enabled ? 0u : 0x2u);
+        reply_u32(ret, ret_size, 0);
+        return true;
+    }
+    case 4: // IRX 0x991C copies a status u32 to response buffer.
+        reply_u32(ret, ret_size, g_sound.stream_status);
+        return true;
+    case 5: // IRX 0x97DC copies two stream-channel u16 controls.
+        if (!read16(0, g_sound.stream_pair_left)
+            || !read16(2, g_sound.stream_pair_right)) break;
+        reply_u32(ret, ret_size, 0);
+        return true;
+    case 0x101: // IRX 0x9548, 0x17C-byte command and update bitfield.
+        if (args_size < 0x17C || !ee_range(args, 0x17C)) break;
+        std::memcpy(g_sound.stream_commands.data(),
+            ps2::g_ram + (args & (ps2::kRamSize - 1)), 0x17C);
+        g_sound.control_flags = (g_sound.control_flags | 1u) & ~6u;
+        reply_u32(ret, ret_size, 0);
+        return true;
+    case 0x102: // IRX 0x95C0, stores word, sets bit 1 and clears 0/2.
+    {
+        std::uint32_t value = 0;
+        if (!read32(value)) break;
+        g_sound.stream_control = value;
+        g_sound.control_flags = (g_sound.control_flags | 2u) & ~5u;
+        reply_u32(ret, ret_size, 0);
+        return true;
+    }
+    case 0x103: // IRX 0x9628, toggles stream flag and marks change.
+    {
+        std::uint32_t enabled = 0;
+        if (!read32(enabled)) break;
+        const bool previous = (g_sound.streaming_flags & 4u) != 0;
+        if (enabled) g_sound.streaming_flags &= ~4u;
+        else g_sound.streaming_flags |= 4u;
+        if (previous != ((g_sound.streaming_flags & 4u) != 0))
+            g_sound.control_flags |= 4u;
+        reply_u32(ret, ret_size, 0);
+        return true;
+    }
+    default:
+        return false;
+    }
+    reply_u32(ret, ret_size, 0x80000064u);
+    return true;
+}
+
 bool rpc(std::uint32_t server, std::uint32_t method, std::uint32_t args,
     std::uint32_t args_size, std::uint32_t ret, std::uint32_t ret_size)
 {
-    if (server == 0x501 && method == 0x11)
-        return sound_effect_rpc(args, args_size, ret, ret_size);
+    if (server == 0x501)
+    {
+        if (method == 0x11)
+            return sound_effect_rpc(args, args_size, ret, ret_size);
+        if (sound_command_rpc(method, args, args_size, ret, ret_size))
+            return true;
+    }
+
+    if (server == 0x502
+        && stream_control_rpc(method, args, args_size, ret, ret_size))
+        return true;
 
     if (server == 0x503)
     {
@@ -467,6 +668,7 @@ void install()
     g_transfer_state = 0x30000000u;
     g_transfer_serial = 0;
     g_control_value = g_transfer_block_bytes = 0;
+    g_sound = {};
     if (!native_requested()) return;
     kernel::register_job(kernel::kJobArkdRead, complete_native_read);
     kernel::register_hle_module("ARKD_DVD", start_module);
