@@ -25,6 +25,23 @@ constexpr std::size_t k_read_chunk_sectors = 16;
 
 c_catalog g_catalog;
 
+// ARKD_DVD.IRX (module offsets 0x1A58 and 0x21B0) executes full-file
+// requests asynchronously. These phases are observable through 0x503/2.
+std::uint32_t g_transfer_state = 0x30000000u;
+std::uint32_t g_transfer_serial = 0;
+std::uint32_t g_control_value = 0;
+std::uint32_t g_transfer_block_bytes = 0;
+
+struct s_pending_transfer
+{
+    s_asset asset;
+    std::uint32_t destination = 0;
+    std::uint32_t serial = 0;
+    bool valid = false;
+};
+
+s_pending_transfer g_pending;
+
 std::uint32_t read_u32(const std::uint8_t *bytes)
 {
     return static_cast<std::uint32_t>(bytes[0])
@@ -108,22 +125,145 @@ bool file_size_rpc(std::uint32_t args, std::uint32_t args_size,
     return true;
 }
 
-bool rpc(std::uint32_t server, std::uint32_t method, std::uint32_t args,
-    std::uint32_t args_size, std::uint32_t ret, std::uint32_t ret_size)
+void complete_native_read(const kernel::Job &job)
 {
-    if (server == 0x503 && method == 3)
-        return file_size_rpc(args, args_size, ret, ret_size);
+    if (!g_pending.valid || job.a != g_pending.serial) return;
+    const s_pending_transfer transfer = g_pending;
+    g_pending.valid = false;
 
-    // 0x500 / 1 calls IRX initialization (0x0030); acknowledge its
-    // startup control request without running the guest module.
-    if (server == 0x500 && method == 1)
+    if (!ee_range(transfer.destination, transfer.asset.file_size))
     {
-        reply_u32(ret, ret_size, 0);
+        g_transfer_state = 0x40000064u;
+        return;
+    }
+    g_transfer_state = 0x20000000u;
+    auto *destination = ps2::g_ram + (transfer.destination & (ps2::kRamSize - 1));
+    const std::size_t got = g_catalog.read(
+        transfer.asset, 0, destination, transfer.asset.file_size);
+    if (got != transfer.asset.file_size)
+    {
+        g_transfer_state = 0x40000064u;
+        return;
+    }
+    ps2::watch_span(transfer.destination, transfer.asset.file_size,
+        "arkd:native_file_dma");
+    g_transfer_state = 0x30000000u;
+}
+
+bool native_full_file_read(std::uint32_t args, std::uint32_t args_size,
+    std::uint32_t ret, std::uint32_t ret_size)
+{
+    // 0x503/0x102 -> IRX 0x2410 -> worker 0x21B0 -> 0x1A58.
+    // At 0x2410 the IRX copies 0x24 bytes: EE destination (u32) and
+    // the 32-byte INFO filename. At 0x1A58 it opens that filename,
+    // reads it in chunks and DMAs the result to the EE destination.
+    if (args_size < 0x24 || !ee_range(args, 0x24))
+    {
+        reply_u32(ret, ret_size, 0x80000064u);
+        return true;
+    }
+    if (g_pending.valid)
+    {
+        reply_u32(ret, ret_size, 0x80000065u);
         return true;
     }
 
-    // Do not claim unsupported audio, streaming or DMA operations worked.
-    // This HLE remains opt-in until every protocol method is reconstructed.
+    const auto *request = ps2::g_ram + (args & (ps2::kRamSize - 1));
+    const auto *name = request + 4;
+    const auto *end = static_cast<const std::uint8_t *>(std::memchr(name, 0, 32));
+    const auto name_size = end ? static_cast<std::size_t>(end - name) : 32;
+    const auto asset = g_catalog.find(
+        std::string_view(reinterpret_cast<const char *>(name), name_size));
+    if (!asset)
+    {
+        g_transfer_state = 0x40000064u;
+        reply_u32(ret, ret_size, 0x80000064u);
+        return true;
+    }
+
+    const std::uint32_t destination = read_u32(request);
+    if (!ee_range(destination, asset->file_size))
+    {
+        g_transfer_state = 0x40000064u;
+        reply_u32(ret, ret_size, 0x80000064u);
+        return true;
+    }
+
+    g_pending = {*asset, destination, ++g_transfer_serial, true};
+    g_transfer_state = 0x10000000u;
+    const auto duration = kernel::usec_to_cycles(400)
+        + static_cast<std::uint64_t>(
+            (asset->file_size + k_sector_bytes - 1) / k_sector_bytes)
+            * kernel::usec_to_cycles(200);
+    kernel::schedule(kernel::now() + duration,
+        kernel::Job{kernel::kJobArkdRead, g_pending.serial});
+    reply_u32(ret, ret_size, 0);
+    return true;
+}
+
+bool rpc(std::uint32_t server, std::uint32_t method, std::uint32_t args,
+    std::uint32_t args_size, std::uint32_t ret, std::uint32_t ret_size)
+{
+    if (server == 0x503)
+    {
+        switch (method)
+        {
+        case 2:  // IRX 0x1714, returns its global transfer state.
+            reply_u32(ret, ret_size, g_transfer_state);
+            return true;
+        case 3:
+            return file_size_rpc(args, args_size, ret, ret_size);
+        case 0x81: // IRX 0x183C, cancel the current transfer.
+            g_pending.valid = false;
+            ++g_transfer_serial;
+            g_transfer_state = 0x40000065u;
+            reply_u32(ret, ret_size, 0);
+            return true;
+        case 0x102:
+            return native_full_file_read(args, args_size, ret, ret_size);
+        default:
+            break;
+        }
+    }
+
+    if (server == 0x500)
+    {
+        switch (method)
+        {
+        case 1: // IRX 0x0030, subsystem initialisation.
+            g_transfer_state = 0x30000000u;
+            g_pending.valid = false;
+            reply_u32(ret, ret_size, 0);
+            return true;
+        case 3: // IRX 0x00D8, reinitialisation.
+            g_pending.valid = false;
+            g_transfer_state = 0x30000000u;
+            reply_u32(ret, ret_size, 0);
+            return true;
+        case 0x10: // IRX 0x0110, enable control flag.
+            g_control_value |= 1u;
+            reply_u32(ret, ret_size, 0);
+            return true;
+        case 0x11: // IRX 0x0138, store the requested control value.
+        case 0x12: // IRX 0x017C, round requested block size to 128 bytes.
+            if (args_size < 4 || !ee_range(args, 4)) break;
+            if (method == 0x11)
+                g_control_value = read_u32(
+                    ps2::g_ram + (args & (ps2::kRamSize - 1)));
+            else
+                g_transfer_block_bytes = (
+                    read_u32(ps2::g_ram + (args & (ps2::kRamSize - 1)))
+                    + 127u) & ~127u;
+            reply_u32(ret, ret_size, 0);
+            return true;
+        default:
+            break;
+        }
+    }
+
+    // The original 0x501/0x502 services include streaming buffers, DMA
+    // chains and playback state machines. Unsupported methods report errors
+    // until packet-level parity is established; they must not return success.
     std::fprintf(stderr,
         "[arkd-native] unsupported RPC server 0x%03X method 0x%X "
         "args %u recv %u\n", server, method, args_size, ret_size);
@@ -279,7 +419,12 @@ bool intercept_module(const std::string &path)
 void install()
 {
     g_catalog.clear();
+    g_pending = {};
+    g_transfer_state = 0x30000000u;
+    g_transfer_serial = 0;
+    g_control_value = g_transfer_block_bytes = 0;
     if (!native_requested()) return;
+    kernel::register_job(kernel::kJobArkdRead, complete_native_read);
     kernel::register_hle_module("ARKD_DVD", start_module);
     std::fprintf(stderr,
         "[arkd-native] experimental native module selected; "
