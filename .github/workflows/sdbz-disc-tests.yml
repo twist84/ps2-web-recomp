@@ -1,0 +1,48 @@
+name: SDBZ folder-disc regression tests
+
+on:
+  pull_request:
+    branches: [SDBZ]
+    paths:
+      - "runtime/src/disc.cpp"
+      - "runtime/src/disc_folder.cpp"
+      - "runtime/src/disc_folder.hpp"
+      - "runtime/include/ps2/disc.hpp"
+      - "tests/test_game_dat_loose_assets.py"
+      - "tests/test_disc_folder_expansion.py"
+      - "tests/test_eu_beta_virtual_info.py"
+      - ".github/workflows/sdbz-disc-tests.yml"
+  push:
+    branches: [SDBZ]
+    paths:
+      - "runtime/src/disc.cpp"
+      - "runtime/src/disc_folder.cpp"
+      - "runtime/src/disc_folder.hpp"
+      - "runtime/include/ps2/disc.hpp"
+      - "tests/test_game_dat_loose_assets.py"
+      - "tests/test_disc_folder_expansion.py"
+      - "tests/test_eu_beta_virtual_info.py"
+      - ".github/workflows/sdbz-disc-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  folder-disc:
+    name: Folder disc / ${{ matrix.compiler }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Run archive and ISO regression harnesses
+        env:
+          CXX: ${{ matrix.compiler }}
+        run: |
+          python3 -m unittest discover -s tests -p 'test_game_dat_loose_assets.py' -v
+          python3 -m unittest discover -s tests -p 'test_disc_folder_expansion.py' -v
+          python3 -m unittest discover -s tests -p 'test_eu_beta_virtual_info.py' -v
