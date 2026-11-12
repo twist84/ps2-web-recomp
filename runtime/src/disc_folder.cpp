@@ -517,6 +517,17 @@ s_virtual_archive build_virtual_archive_from_game(const fs::path &loose_root)
         append_info_record(decoded, i, result.assets[i], result.assets);
     (void)parse_info_entries(decoded);
     result.encoded_info = encode_info(decoded);
+    // The EU beta INFO.DAT occupies exactly 0x18000 bytes: one 0x30-byte
+    // header followed by 2047 physical record slots. Original unused
+    // encoded slots contain 0x40, not an encoding of decoded zeroes.
+    constexpr std::size_t kEuInfoSize = 0x18000;
+    if (result.encoded_info.size() < kEuInfoSize)
+        result.encoded_info.resize(kEuInfoSize, 0x40);
+    if (result.assets.size() >= 2005)
+        std::fprintf(stderr,
+            "[disc] warning: INFO has %zu records; ARKD_DVD.IRX may only read "
+            "47 table sectors with file=2047 (record 2005 not yet verified)\n",
+            result.assets.size());
     result.active = true;
     std::fprintf(stderr, "[disc] rebuilt INFO.DAT from GAME/ (%zu assets, %llu sectors)\n",
         result.assets.size(), static_cast<unsigned long long>(next));
@@ -1322,6 +1333,37 @@ void build_disc_layout(const fs::path &root, s_folder &folder)
 
         if (resized_count || added_count)
         {
+            if (added_count)
+            {
+                // ARKD_DVD.IRX constructs its 26 filename buckets from
+                // contiguous first-letter groups. Appending arbitrary loose
+                // filenames after the existing table can hide them from
+                // lookup. Reorder only INFO records; sector assignments and
+                // the existing GAME.DAT payload layout remain unchanged.
+                std::vector<std::size_t> order(archive_entries.size());
+                for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+                std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b)
+                {
+                    return archive_name_key(archive_entries[a].name)
+                        < archive_name_key(archive_entries[b].name);
+                });
+                std::vector<std::uint8_t> records(order.size() * 0x30);
+                std::vector<s_archive_entry> sorted_entries;
+                sorted_entries.reserve(order.size());
+                for (std::size_t i = 0; i < order.size(); ++i)
+                {
+                    std::memcpy(records.data() + i * 0x30,
+                        decoded_info.data() + 0x30 + order[i] * 0x30, 0x30);
+                    sorted_entries.push_back(std::move(archive_entries[order[i]]));
+                }
+                std::memcpy(decoded_info.data() + 0x30, records.data(), records.size());
+                archive_entries = std::move(sorted_entries);
+            }
+            if (archive_entries.size() >= 2005)
+                std::fprintf(stderr,
+                    "[disc] warning: INFO has %zu records; ARKD_DVD.IRX may only read "
+                    "47 table sectors with file=2047 (record 2005 not yet verified)\n",
+                    archive_entries.size());
             (void)parse_info_entries(decoded_info);
             auto encoded_info = encode_info(decoded_info);
             if (encoded_info.size() > UINT32_MAX)
