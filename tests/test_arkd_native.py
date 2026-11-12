@@ -168,6 +168,38 @@ int main(int argc, char **argv)
         for (unsigned i = 0; i < 16; ++i)
             if (kernel::g_effect_calls[core][i] != core * 16 + i + 1)
                 return 28;
+
+    // 0x501 command buffers and stream-state RPCs now have explicit
+    // input length requirements and must not accept truncated packets.
+    if (!ps2::sif::g_handlers.at(0x501)(1, 0x400, 0x40, 0x180, 4))
+        return 29;
+    if (word(0x180) != 0x80000064u) return 30;
+    if (!ps2::sif::g_handlers.at(0x501)(2, 0x400, 8, 0x180, 4)
+        || word(0x180) != 0) return 31;
+    if (!ps2::sif::g_handlers.at(0x501)(0x81, 0, 0, 0x180, 4)
+        || word(0x180) != 0) return 32;
+    if (!ps2::sif::g_handlers.at(0x501)(0x82, 0, 0, 0x180, 8))
+        return 33;
+
+    const std::uint16_t channel = 2;
+    std::memcpy(ps2::g_ram + 0x400, &channel, 2);
+    if (!ps2::sif::g_handlers.at(0x502)(1, 0x400, 2, 0x180, 4)
+        || word(0x180) != 0) return 34;
+    if (!ps2::sif::g_handlers.at(0x502)(5, 0x400, 2, 0x180, 4)
+        || word(0x180) != 0x80000064u) return 35;
+
+    for (unsigned i = 0; i < 0x33C; ++i)
+        ps2::g_ram[0x800 + i] = static_cast<std::uint8_t>(i);
+    if (!ps2::sif::g_handlers.at(0x501)(3, 0x800, 0x33C, 0x180, 4)
+        || word(0x180) != 0) return 36;
+    for (unsigned i = 0; i < 0x2E0; ++i)
+        ps2::g_ram[0x800 + i] = static_cast<std::uint8_t>(i);
+    if (!ps2::sif::g_handlers.at(0x501)(1, 0x800, 0x2E0, 0x180, 4)
+        || word(0x180) != 0) return 37;
+    for (unsigned i = 0; i < 0x17C; ++i)
+        ps2::g_ram[0x800 + i] = static_cast<std::uint8_t>(i);
+    if (!ps2::sif::g_handlers.at(0x502)(0x101, 0x800, 0x17C, 0x180, 4)
+        || word(0x180) != 0) return 38;
     return 0;
 }
 '''
