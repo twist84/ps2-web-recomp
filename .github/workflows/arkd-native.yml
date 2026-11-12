@@ -32,6 +32,15 @@ jobs:
         env:
           CXX: ${{ matrix.cxx }}
         run: python3 -m unittest discover -s tests -p 'test_arkd_native.py' -v
+      - name: Compile integrated IOP source files
+        env:
+          CXX: ${{ matrix.cxx }}
+        run: |
+          $CXX -std=c++20 -Wall -Wextra -fsyntax-only \
+            -I runtime/include -I runtime/src \
+            runtime/src/iop/arika_dvd.cpp \
+            runtime/src/iop/kernel.cpp \
+            runtime/src/iop/cdvd.cpp
       - name: Check existing folder-disc regressions
         env:
           CXX: ${{ matrix.cxx }}
