@@ -73,6 +73,7 @@ add_library(ps2runtime STATIC
     runtime/src/iop/sio2.cpp
     runtime/src/iop/io.cpp
     runtime/src/iop/cdvd.cpp
+    runtime/src/iop/arika_dvd.cpp
     runtime/src/iop/sif.cpp
     runtime/src/iop/cdvdfsv.cpp)
 target_include_directories(ps2runtime PUBLIC runtime/include)
