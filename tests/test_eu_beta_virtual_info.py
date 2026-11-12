@@ -60,9 +60,10 @@ int main(int argc, char **argv)
     for (std::uint32_t index = 0; index < expected_count; ++index)
     {
         const std::uint8_t *record = data.data() + 0x30 + index * 0x30;
-        const std::size_t length = strnlen(
-            reinterpret_cast<const char *>(record), 32);
-        if (!length || length >= 32) return 7;
+        const auto *end = static_cast<const std::uint8_t *>(
+            std::memchr(record, 0, 32));
+        const std::size_t length = end ? static_cast<std::size_t>(end - record) : 32;
+        if (!length || length > 32) return 7;
         const std::string name(reinterpret_cast<const char *>(record), length);
         if (!previous.empty() && name < previous) return 8;
         if (read32(record + 0x24) != next_sector
