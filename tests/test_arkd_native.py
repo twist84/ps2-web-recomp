@@ -33,10 +33,19 @@ void watch_span(std::uint32_t, std::uint32_t, const char *) {}
 
 namespace ps2::iop::kernel {
 HleModuleStart g_start;
+JobHandler g_read_job = nullptr;
+Job g_queued_read;
 void register_hle_module(const std::string &name, HleModuleStart callback)
 {
     if (name == "ARKD_DVD") g_start = std::move(callback);
 }
+void register_job(std::uint32_t kind, JobHandler callback)
+{
+    if (kind == kJobArkdRead) g_read_job = callback;
+}
+std::uint64_t now() { return 0; }
+std::uint64_t usec_to_cycles(std::uint64_t us) { return us; }
+void schedule(std::uint64_t, const Job &job) { g_queued_read = job; }
 }
 
 namespace ps2::sif {
@@ -106,6 +115,24 @@ int main(int argc, char **argv)
     // Unsupported methods must report errors, never silently succeed.
     if (!ps2::sif::g_handlers.at(0x502)(0x99, 0x100, 0, 0x180, 4)) return 19;
     if (word(0x180) != 0x80000064u) return 20;
+
+    // 0x503/0x102 enqueues a real file read to EE RAM. Method 2 exposes
+    // the guest-observable pending/completed phase.
+    std::memset(ps2::g_ram + 0x100, 0, 0x24);
+    const std::uint32_t target = 0x200;
+    std::memcpy(ps2::g_ram + 0x100, &target, 4);
+    std::memcpy(ps2::g_ram + 0x104, "ply\\small.bin", 14);
+    if (!ps2::sif::g_handlers.at(0x503)(0x102, 0x100, 0x24, 0x180, 4))
+        return 21;
+    if (!kernel::g_read_job || kernel::g_queued_read.kind != kernel::kJobArkdRead)
+        return 22;
+    ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
+    if (word(0x180) != 0x10000000u) return 23;
+    kernel::g_read_job(kernel::g_queued_read);
+    ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
+    if (word(0x180) != 0x30000000u) return 24;
+    for (unsigned i = 0; i < 5000; ++i)
+        if (ps2::g_ram[0x200 + i] != 'S') return 25;
     return 0;
 }
 '''
