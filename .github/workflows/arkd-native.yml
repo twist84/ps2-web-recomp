@@ -41,7 +41,8 @@ jobs:
             runtime/src/iop/arika_dvd.cpp \
             runtime/src/iop/kernel.cpp \
             runtime/src/iop/cdvd.cpp
-      - name: Build the complete ps2runtime static library
+      - name: Build the complete ps2runtime static library (Clang-only VU intrinsics)
+        if: matrix.cxx == 'clang++'
         env:
           CXX: ${{ matrix.cxx }}
         run: |
