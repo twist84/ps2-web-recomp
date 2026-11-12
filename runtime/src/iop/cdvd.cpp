@@ -1,4 +1,5 @@
 #include "kernel.hpp"
+#include "arika_dvd.hpp"
 
 #include "ps2/disc.hpp"
 
@@ -162,6 +163,9 @@ bool cd_busy() { return g_cd.busy; }
 }
 
 std::int32_t load_module(const std::string &path, const std::string &args, std::function<void(int, int)> done) {
+    // Native module substitution does not require the original IRX bytes.
+    if (arkd::intercept_module(path))
+        return load_module_buffer({}, path, args, std::move(done));
     std::vector<std::uint8_t> data;
     std::string lower = path;
     for (char &ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
