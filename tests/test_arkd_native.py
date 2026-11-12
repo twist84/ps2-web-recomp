@@ -200,6 +200,19 @@ int main(int argc, char **argv)
         ps2::g_ram[0x800 + i] = static_cast<std::uint8_t>(i);
     if (!ps2::sif::g_handlers.at(0x502)(0x101, 0x800, 0x17C, 0x180, 4)
         || word(0x180) != 0) return 38;
+
+    if (!ps2::sif::g_handlers.at(0x503)(1, 0, 0, 0x180, 4)
+        || word(0x180) != 1) return 39;
+    // After an ordinary file transfer finishes, the CDVD 0x101 worker
+    // may be primed without supplying an asset name.
+    std::memset(ps2::g_ram + 0x400, 0, 0x24);
+    if (!ps2::sif::g_handlers.at(0x503)(0x101, 0x400, 0x24, 0x180, 4)
+        || word(0x180) != 0) return 40;
+    ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
+    if (word(0x180) != 0x10000000u) return 41;
+    kernel::g_read_job(kernel::g_queued_read);
+    ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
+    if (word(0x180) != 0x30000000u) return 42;
     return 0;
 }
 '''
