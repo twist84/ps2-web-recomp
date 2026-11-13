@@ -106,6 +106,36 @@ which particular upload was active for a particular draw, nor identify the
 source `.pix` file. An "unambiguous" layout means only one fingerprint and
 one TEX0 variant were observed, not that a matching game asset is verified.
 
+### Verified main-menu source matches (EU beta)
+
+The provided original `dis/main_menu.pix` is a 13-entry FPIX/XPIX
+container. Its picture headers put the 8-bit indexed image data at
+offset `0x120` from each XPIX start (rather than the last 64 KiB/256 KiB of
+the chunk). Matching the **complete raw indexed pixel data** against the
+captured GS upload payload hashes found exact matches for **all 13 chunks**:
+one 256×256 atlas and twelve 512×512 atlases, all PSMT8 (`0x13`).
+The reference hashes are in
+`docs/sdbz-main-menu-verified-fingerprints.csv` and are tied to the
+original EU-beta file supplied for verification.
+
+```sh
+python3 scripts/match_sdbz_fpix_gs.py \
+    GAME/dis/main_menu.pix \
+    texture-crosswalk/fingerprint_candidates.csv \
+    --output fpix_gs_matches.csv \
+    --export-png-dir exported-menu
+```
+
+The optional PNG export uses Pillow and writes files named
+`main_menu.pix.000.png` through `main_menu.pix.012.png`. Copy these to
+`NATIVE/dis/` to make them discoverable by the existing host catalog.
+The converter follows Arika's indexed TIM2 palette ordering and expands
+PS2 alpha values 0–128 into 0–255. The exact hash comparison is on original
+indexed image bytes *before* palette expansion. This validates source
+payload identity, but does not yet activate native sampling: the GS renderer
+still uses the game's own VRAM textures until a replacement sampling path
+is implemented.
+
 **The fingerprint is diagnostic, not an asset identity.** GS addresses are
 reused and an Arika FPIX/TIM2 source may have been transformed or swizzled
 before reaching GS memory. Matching FPIX directory entries to actual
