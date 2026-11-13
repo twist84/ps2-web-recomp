@@ -44,6 +44,14 @@ void mount(const std::filesystem::path &disc_root,
 void clear();
 const std::vector<s_pack_info> &packs();
 
+// All discovered compatible packs, including those disabled in load_order.txt.
+// This list is a stable snapshot from the most recent mount.
+const std::vector<s_pack_info> &discovered_packs();
+
+// Persist the enabled packs in highest-to-lowest order and all remaining
+// discovered packs as disabled. The new order takes effect on next boot.
+bool save_selection(const std::vector<std::string> &enabled_ids);
+
 // Logical keys are relative to assets/sdbz, e.g.
 // "textures/dis/main_menu.pix.001.png". Never accepts absolute/traversal paths.
 bool read_resource(const std::string &logical_path,
