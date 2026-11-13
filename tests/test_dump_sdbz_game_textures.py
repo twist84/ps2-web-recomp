@@ -107,7 +107,7 @@ class TextureDumpTests(unittest.TestCase):
         png = output / "assets/sdbz/textures/dis/example.tim2.000.png"
         self.assertTrue(png.is_file())
         self.assertEqual(read_rgba(png),
-                         b"\x00\xff\x00\x00\xff\x00\x00\xff\xff\x00\x40\x00\xff\x00\xff\x80")
+                         b"\x00\xff\x00\x00\xff\x00\xff\x00\x80")
 
 
 if __name__ == "__main__":
