@@ -10,6 +10,8 @@ namespace ps2::gs::native_texture
 
 // GS-only residency metadata. The guest still receives the original indexed
 // texture data and CLUT. Bindings are invalidated on subsequent GS writes.
+// Opt-in diagnostics: PS2_TRACE_NATIVE_TEXTURES=1.
+bool trace_native_textures();
 void reset_residency();
 bool replacements_available();
 void invalidate_destination(std::uint64_t bitbltbuf, std::uint64_t trxreg);

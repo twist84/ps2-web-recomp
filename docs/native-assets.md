@@ -147,6 +147,36 @@ PS2_TRACE_TEXTURE_UPLOADS=1 ./SDBZ 2>gs-textures.log
 python3 -m unittest discover -s tests -p 'test_gs_texture_upload_trace.py' -v
 ```
 
+## Debugging a PNG that does not appear
+
+Native PNGs are loaded once per game run and cached. **Exit and restart
+the game** after editing a PNG, and ensure the edited file—not merely a
+separate export—is installed at
+`disc/NATIVE/dis/main_menu.pix.001.png`. Rebuild the latest SDBZ branch.
+
+For a diagnostic capture on Windows PowerShell:
+
+```powershell
+$env:PS2_TRACE_NATIVE_TEXTURES = '1'
+.\SDBZ.exe 2> native-textures.log
+```
+
+The `[gs-native]` diagnostics identify which stage is failing:
+
+- `no menu PNG in native asset catalog`: the edited file is absent from
+  the mounted disc's NATIVE directory
+- `catalog found`: an atlas was indexed
+- `png chunk=001 status=loaded` or `rejected`: the replacement was
+  decoded and dimension-validated or rejected
+- `matched` / `resident chunk=001`: original TIM2 upload fingerprint
+  established residency at the expected GS base pointer
+- `gpu draw BP=2A00 ... selector=1`: the WebGPU draw chose native atlas
+  001; `selector=-1` means fallback to original GS VRAM
+
+These logs report **selection decisions**, not a guarantee of visible
+output. Save the log alongside a screenshot if the draw selects a native
+image but the original still appears. The GPU shader is not executed by CI.
+
 ## Native menu texture rendering (experimental)
 
 The runtime now recognizes the **verified 13 EU-beta `dis/main_menu.pix` TIM2

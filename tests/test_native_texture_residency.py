@@ -19,6 +19,7 @@ HARNESS = r'''
 
 namespace ps2::disc
 {
+bool is_open() { return true; }
 std::optional<NativeAsset> find_native_asset(
     const std::string &name, const std::string &format)
 {

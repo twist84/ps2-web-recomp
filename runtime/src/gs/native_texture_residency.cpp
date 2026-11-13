@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 namespace ps2::gs::native_texture
@@ -39,6 +40,10 @@ std::array<bool, 13> g_attempted{};
 std::array<s_resident, 64> g_residents{};
 std::size_t g_next_resident = 0;
 bool g_available = false;
+bool g_catalog_reported = false;
+bool g_catalog_missing_reported = false;
+std::array<bool, 13> g_image_reported{};
+
 
 bool intersects(std::uint32_t begin, std::uint32_t end,
     std::uint32_t other_begin, std::uint32_t other_end)
@@ -67,6 +72,16 @@ std::uint32_t transfer_blocks(std::uint64_t bitbltbuf,
 }
 }
 
+bool trace_native_textures()
+{
+    static const bool enabled = []()
+    {
+        const char *value = std::getenv("PS2_TRACE_NATIVE_TEXTURES");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
 bool replacements_available()
 {
     if (g_available) return true;
@@ -80,8 +95,23 @@ bool replacements_available()
         if (disc::find_native_asset(std::string("dis/main_menu.pix") + suffix, "png"))
         {
             g_available = true;
+            if (trace_native_textures() && !g_catalog_reported)
+            {
+                std::fprintf(stderr,
+                    "[gs-native] catalog found dis/main_menu.pix.%03u.png\n",
+                    index);
+                g_catalog_reported = true;
+            }
             break;
         }
+    }
+    if (!g_available && trace_native_textures() && disc::is_open()
+        && !g_catalog_missing_reported)
+    {
+        std::fprintf(stderr,
+            "[gs-native] no menu PNG in native asset catalog; "
+            "expected disc/NATIVE/dis/main_menu.pix.001.png\n");
+        g_catalog_missing_reported = true;
     }
     return g_available;
 }
@@ -94,6 +124,9 @@ void reset_residency()
     g_attempted.fill(false);
     g_images = {};
     g_available = false;
+    g_catalog_reported = false;
+    g_catalog_missing_reported = false;
+    g_image_reported.fill(false);
 }
 
 void invalidate_destination(std::uint64_t bitbltbuf, std::uint64_t trxreg)
@@ -107,7 +140,13 @@ void invalidate_destination(std::uint64_t bitbltbuf, std::uint64_t trxreg)
     {
         if (resident.chunk >= 0
             && intersects(start, end, resident.bp, resident.end_bp))
+        {
+            if (trace_native_textures())
+                std::fprintf(stderr,
+                    "[gs-native] invalidate chunk=%d BP=%04X writeBP=%04X blocks=%u\n",
+                    resident.chunk, resident.bp, start, blocks);
             resident.chunk = -1;
+        }
     }
 }
 
@@ -126,6 +165,14 @@ const s_image *chunk_image(int index)
             || g_images[at].rgba.size() !=
                 static_cast<std::size_t>(expected) * expected * 4)
             g_images[at] = {};
+        if (trace_native_textures() && !g_image_reported[at])
+        {
+            std::fprintf(stderr,
+                "[gs-native] png chunk=%03d status=%s size=%ux%u\n",
+                index, g_images[at].rgba.empty() ? "rejected" : "loaded",
+                g_images[at].width, g_images[at].height);
+            g_image_reported[at] = true;
+        }
     }
     return g_images[at].rgba.empty() ? nullptr : &g_images[at];
 }
@@ -162,6 +209,10 @@ int complete_upload(const s_texture_upload_signature &upload)
         *slot = {bp, std::min(k_gs_blocks,
             bp + static_cast<std::uint32_t>((upload.expected_bytes + 255) / 256)),
             bw, width, height, static_cast<int>(i)};
+        if (trace_native_textures() && i == 1)
+            std::fprintf(stderr,
+                "[gs-native] resident chunk=%03zu BP=%04X BW=%u PSM=%02X size=%ux%u\n",
+                i, bp, bw, psm, width, height);
         return static_cast<int>(i);
     }
     return -1;
