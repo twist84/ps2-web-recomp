@@ -86,16 +86,39 @@ if(PS2_USE_SDBZ_RECONSTRUCTED)
 endif()
 target_compile_options(ps2runtime PRIVATE -Wall -Wextra)
 
-# PNG replacement decoding is optional so builds without zlib retain the
-# original GS texture path. The host catalog is available independently.
+# Native PNG replacements require zlib. Prefer an installed copy, but
+# fetch a pinned static copy into <build>/_deps when none is available.
+# Never silently compile the runtime without its native texture path.
+option(PS2_FETCH_ZLIB "Fetch zlib if it is not installed" ON)
 find_package(ZLIB QUIET)
 if(ZLIB_FOUND)
-    target_sources(ps2runtime PRIVATE
-        runtime/src/gs/native_texture.cpp
-        runtime/src/gs/native_texture_residency.cpp)
-    target_compile_definitions(ps2runtime PRIVATE PS2_NATIVE_PNG)
-    target_link_libraries(ps2runtime PRIVATE ZLIB::ZLIB)
+    set(PS2_ZLIB_TARGET ZLIB::ZLIB)
+    message(STATUS "GS-native PNG replacements: enabled (system zlib)")
+elseif(PS2_FETCH_ZLIB)
+    include(FetchContent)
+    # The project is CXX-only; zlib's CMake targets compile C sources.
+    enable_language(C)
+    set(ZLIB_BUILD_TESTING OFF CACHE BOOL "Disable zlib tests" FORCE)
+    set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "Disable zlib examples" FORCE)
+    FetchContent_Declare(ps2_zlib
+        URL https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+        URL_HASH SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    FetchContent_MakeAvailable(ps2_zlib)
+    if(NOT TARGET zlibstatic)
+        message(FATAL_ERROR "Fetched zlib did not provide zlibstatic")
+    endif()
+    set(PS2_ZLIB_TARGET zlibstatic)
+    message(STATUS "GS-native PNG replacements: enabled (fetched zlib in _deps)")
+else()
+    message(FATAL_ERROR
+        "GS-native PNG replacements require zlib. Install zlib or enable PS2_FETCH_ZLIB.")
 endif()
+target_sources(ps2runtime PRIVATE
+    runtime/src/gs/native_texture.cpp
+    runtime/src/gs/native_texture_residency.cpp)
+target_compile_definitions(ps2runtime PRIVATE PS2_NATIVE_PNG)
+target_link_libraries(ps2runtime PRIVATE ${PS2_ZLIB_TARGET})
 
 set(PS2_WGPU_DIR "${CMAKE_SOURCE_DIR}/third_party/wgpu-native" CACHE PATH "wgpu-native release folder")
 if(EMSCRIPTEN OR EXISTS "${PS2_WGPU_DIR}/lib/libwgpu_native.a" OR EXISTS "${PS2_WGPU_DIR}/lib/libwgpu_native.dll.a")

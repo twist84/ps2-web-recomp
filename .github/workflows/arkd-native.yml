@@ -63,7 +63,9 @@ jobs:
         env:
           CXX: ${{ matrix.cxx }}
         run: |
-          cmake -S . -B build-native -DCMAKE_CXX_COMPILER="$CXX"
+          # Force the fallback even on Linux where system zlib is installed.
+          cmake -S . -B build-native -DCMAKE_CXX_COMPILER="$CXX" -DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=TRUE
+          test -f build-native/_deps/ps2_zlib-src/zlib.h
           cmake --build build-native --target ps2runtime --parallel 2
       - name: Check existing folder-disc regressions
         env:

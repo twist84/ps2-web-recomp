@@ -1,3 +1,25 @@
+## Native PNG build dependency
+
+The Windows build uses the existing zlib PNG decoder. CMake first tries
+`find_package(ZLIB)` and automatically retrieves pinned zlib 1.3.1 into
+`<build>/_deps/ps2_zlib-src` when the library is not installed.
+The downloaded dependency is built as a static library and does not
+require a system-wide zlib installation.
+
+On first configuration with an empty build directory, an internet
+connection is needed to populate `_deps`. Subsequent builds reuse the
+download. To force-test the fallback:
+
+```powershell
+cmake -S . -B build-game -DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=TRUE
+cmake --build build-game --config Release --target SDBZ
+```
+
+The configure output must contain `GS-native PNG replacements: enabled`.
+A missing dependency is now a configuration error rather than silently
+disabling PNG replacement. Setting `-DPS2_FETCH_ZLIB=OFF` requires an
+installed zlib.
+
 # SDBZ native replacement asset catalog
 
 Native replacement files live beside the extracted disc tree, in `NATIVE/`.
