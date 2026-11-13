@@ -11,6 +11,7 @@
 #include "iop/spu2.hpp"
 #include "ipu/ipu.hpp"
 #include "ps2/disc.hpp"
+#include "ps2/resource_pack.hpp"
 #include "kernel.hpp"
 #include "ps2/generated.hpp"
 #include "ps2/memory.hpp"
@@ -24,6 +25,7 @@
 #endif
 
 #include <algorithm>
+#include <filesystem>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -415,8 +417,16 @@ void boot(std::uint32_t entry, const std::vector<std::string> &args) {
     init_watch();
     hw::reset();
     kernel::reset();
+    resource_pack::clear();
     if (!g_options.disc_path.empty() && !disc::open(g_options.disc_path))
         std::fprintf(stderr, "[ee] cannot open disc image %s\n", g_options.disc_path.c_str());
+    else if (!g_options.disc_path.empty())
+    {
+        std::error_code error;
+        const std::filesystem::path root(g_options.disc_path);
+        if (std::filesystem::is_directory(root, error))
+            resource_pack::mount(root);
+    }
     iop::set_trace(g_options.trace_iop_modules, g_options.trace_iop_hle);
     iop::reset();
     std::vector<std::string> guest_args = args;
