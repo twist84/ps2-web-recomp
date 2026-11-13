@@ -919,7 +919,7 @@ int main(int argc, char **argv)
     kernel::g_voice_job(kernel::g_queued_voice);
     if (kernel::g_address_writes.size() != 2
         || kernel::g_address_writes[0] != std::pair<std::uint32_t, std::uint32_t>{0x2041, 0x5150}
-        || kernel::g_address_writes[1] != std::pair<std::uint32_t, std::uint32_t>{0x2141, 0}
+        || kernel::g_address_writes[1] != std::pair<std::uint32_t, std::uint32_t>{0x2141, 0x5010}
         || kernel::g_switch_writes.size() != 3
         || kernel::g_switch_writes[0] != std::pair<std::uint32_t, std::uint32_t>{0x1501, 1}
         || kernel::g_switch_writes[1] != std::pair<std::uint32_t, std::uint32_t>{0x1901, 0x800001}

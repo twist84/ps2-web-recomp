@@ -417,8 +417,14 @@ bool start_voice(std::uint32_t parity, std::uint32_t index,
     std::uint32_t result = 0;
     // IRX 0x4420-0x4508: start address, zero next address, then pitch.
     // 0x6CCC/0x6CFC supplies these envelope defaults at initialization.
+    // SPU2 decodes two ADPCM blocks ahead. Install the one-shot redirect
+    // before key-on so a short sample cannot queue data from address zero
+    // while waiting for the first vblank status pass.
+    const std::uint32_t loop_address = command->restart_control == 0
+        ? 0x5010u : 0u;
     if (!kernel::call_library_export("libsd", 9, reg | 0x2040u, address, 0, 0, result)
-        || !kernel::call_library_export("libsd", 9, reg | 0x2140u, 0, 0, 0, result)
+        || !kernel::call_library_export("libsd", 9, reg | 0x2140u,
+            loop_address, 0, 0, result)
         || !kernel::call_library_export("libsd", 5, reg | 0x200u,
             calculate_voice_pitch(base_pitch, command->pitch_request), 0, 0, result))
         return false;
