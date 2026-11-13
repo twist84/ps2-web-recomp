@@ -167,6 +167,48 @@ file-transfer state machine.
 | 0x102 | 0x95C0 | Reads u32 and updates control bits |
 | 0x103 | 0x9628 | Reads u32 and updates control bits |
 
+## IRX import table and the five-argument libsd transfer
+
+The ELF's actual IOP import stubs were extracted from the EU
+`ARKD_DVD.IRX` `.text` section (`0x41E00000` import headers,
+`jr ra; addiu v0, zero, ordinal` stubs). The `libsd` table starts
+at offset `0xAC00`; exported ordinals referenced are:
+
+| Stub | libsd ordinal |
+| --- | ---: |
+| `0xAC14` | 4 |
+| `0xAC1C` | 5 |
+| `0xAC24` | 7 |
+| `0xAC2C` | 8 |
+| `0xAC34` | 9 |
+| `0xAC3C` | 10 |
+| `0xAC44` | 11 |
+| `0xAC4C` | 17 |
+| `0xAC54` | 23 |
+| `0xAC5C` | 26 |
+| `0xAC64` | 27 |
+
+The original bank transfer worker invokes **ordinal 17**
+(`sceSdVoiceTrans`) at `0x5420`, `0x54F4`, `0x5DF4`, and `0x6250`.
+Its argument setup is **five arguments**, matching the MIPS o32 ABI:
+`a0`–`a3` in registers and the fifth at `sp+0x10`.
+At `0x5420`, the IRX sends the low bit of a local core selector
+as argument 0, constant `1` as argument 1, an IOP data buffer as
+argument 2, a transfer destination as argument 3, and the transfer
+size as the **fifth stack argument**. The other sites use
+different modes/destinations but the same five-argument structure.
+
+The shared native IOP guest-library bridge now optionally writes this
+fifth argument to the guest stack and restores the overwritten word
+after the guest call. Existing four-argument calls remain unchanged.
+
+**The audio transfer itself has not yet been wired to the sound-bank
+cache.** Before using ordinal 17, the native module must reproduce
+the original IOP buffer allocation, source-data lifetime, destination
+addresses, transfer-status polling and completion callbacks. Issuing
+an asynchronous `libsd` transfer from a temporary buffer and freeing
+it immediately would be incorrect.
+
 ## Sound worker details confirmed from original MIPS instructions
 
 - IRX `0x6920-0x6970`: the three sound-volume multipliers
