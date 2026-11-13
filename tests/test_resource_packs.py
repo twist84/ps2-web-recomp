@@ -224,8 +224,8 @@ class ResourcePackTests(unittest.TestCase):
 
         subprocess.run([str(self.binary), str(root), "save"], check=True)
         saved = (packs / "load_order.txt").read_text(encoding="utf-8")
-        self.assertIn("+lower\\n", saved)
-        self.assertIn("-Higher Pack\\n", saved)
+        self.assertIn("+lower\n", saved)
+        self.assertIn("-Higher Pack\n", saved)
         (packs / "load_order.txt").unlink()
 
         # Disable a higher-priority pack without touching its manifest.
