@@ -1,4 +1,7 @@
 #include "raster.hpp"
+#ifdef PS2_NATIVE_PNG
+#include "native_texture_residency.hpp"
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -30,6 +33,9 @@ struct Setup {
     std::uint32_t fogcol;
     int scanmsk;
     const std::uint32_t *clut;
+#ifdef PS2_NATIVE_PNG
+    const native_texture::s_image *native_image = nullptr;
+#endif
 };
 
 struct Attr {
@@ -58,6 +64,21 @@ std::uint32_t fetch(const Setup &s, int x, int y) {
     };
     x = wrap(x, 1 << s.tw, s.wms, s.minu, s.maxu);
     y = wrap(y, 1 << s.th, s.wmt, s.minv, s.maxv);
+#ifdef PS2_NATIVE_PNG
+    if (s.native_image)
+    {
+        const std::size_t index =
+            (static_cast<std::size_t>(y) * s.native_image->width + x) * 4;
+        const std::uint8_t *rgba = s.native_image->rgba.data() + index;
+        // PNG exported from TIM2 uses full 0..255 alpha, whereas GS
+        // texture sampling and blending expect the original 0..128 domain.
+        const std::uint32_t alpha = (static_cast<std::uint32_t>(rgba[3]) + 1) / 2;
+        return static_cast<std::uint32_t>(rgba[0])
+            | (static_cast<std::uint32_t>(rgba[1]) << 8)
+            | (static_cast<std::uint32_t>(rgba[2]) << 16)
+            | (alpha << 24);
+    }
+#endif
     const std::uint32_t raw = read_pixel(s.tpsm, s.tbp, s.tbw, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
     switch (s.tpsm) {
     case PSMCT32: case PSMZ32: return raw;
@@ -337,6 +358,14 @@ Setup make_setup(const State &st) {
     s.fogcol = static_cast<std::uint32_t>(st.fogcol) & 0xFFFFFFu;
     s.scanmsk = static_cast<int>(st.scanmsk) & 3;
     s.clut = st.clut;
+#ifdef PS2_NATIVE_PNG
+    if (s.tme)
+    {
+        const int chunk = native_texture::resident_chunk(s.tbp, s.tbw,
+            s.tpsm, 1u << s.tw, 1u << s.th);
+        s.native_image = native_texture::chunk_image(chunk);
+    }
+#endif
     return s;
 }
 
