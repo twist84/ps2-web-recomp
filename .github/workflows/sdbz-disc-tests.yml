@@ -17,6 +17,13 @@ on:
       - "tests/test_sdbz_texture_log_analysis.py"
       - "tests/test_sdbz_texture_crosswalk.py"
       - "tests/test_sdbz_fpix_gs_match.py"
+      - "tests/test_native_texture_residency.py"
+      - "runtime/src/gs/native_texture_residency.cpp"
+      - "runtime/src/gs/native_texture_residency.hpp"
+      - "runtime/src/gs/raster.cpp"
+      - "runtime/src/gs/gpu/gpu.cpp"
+      - "runtime/src/gs/gpu/gpu.hpp"
+      - "runtime/src/gs/gpu/gs.wgsl"
       - "scripts/match_sdbz_fpix_gs.py"
       - "scripts/crosswalk_sdbz_texture_candidates.py"
       - "scripts/analyze_sdbz_texture_log.py"
@@ -41,6 +48,13 @@ on:
       - "tests/test_sdbz_texture_log_analysis.py"
       - "tests/test_sdbz_texture_crosswalk.py"
       - "tests/test_sdbz_fpix_gs_match.py"
+      - "tests/test_native_texture_residency.py"
+      - "runtime/src/gs/native_texture_residency.cpp"
+      - "runtime/src/gs/native_texture_residency.hpp"
+      - "runtime/src/gs/raster.cpp"
+      - "runtime/src/gs/gpu/gpu.cpp"
+      - "runtime/src/gs/gpu/gpu.hpp"
+      - "runtime/src/gs/gpu/gs.wgsl"
       - "scripts/match_sdbz_fpix_gs.py"
       - "scripts/crosswalk_sdbz_texture_candidates.py"
       - "scripts/analyze_sdbz_texture_log.py"
@@ -78,3 +92,4 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_sdbz_texture_log_analysis.py' -v
           python3 -m unittest discover -s tests -p 'test_sdbz_texture_crosswalk.py' -v
           python3 -m unittest discover -s tests -p 'test_sdbz_fpix_gs_match.py' -v
+          python3 -m unittest discover -s tests -p 'test_native_texture_residency.py' -v
