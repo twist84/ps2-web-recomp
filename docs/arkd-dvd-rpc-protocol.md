@@ -116,6 +116,17 @@ a correct substitute.
   **5** (`sceSdSetParam`) for individual SPU2 register updates. The
   16-byte voice record has two volume fields at offsets `+8` and
   `+10`. The 18-byte command record has flags at offset `+0`.
+- IRX `0x3194-0x31E8` indexes its per-voice **command masks** by
+  `index >> 5` and `index & 31` (32 slots per word). By contrast,
+  `0x3110-0x316C` constructs each `libsd` voice register ID from
+  `index / 24` and `index % 24`. These are distinct: voice indices
+  24 and 32 cross different boundaries. The native queued mute handler
+  now uses the original mapping and has boundary regression tests.
+- IRX `0x3234-0x3278` calls `libsd` ordinal 5 twice with zero volume,
+  first for register `(index / 24) | ((index % 24) << 1)`, then that
+  register OR `0x100`. The new native queued worker performs precisely
+  these mute writes when its command bit or record bit 3 is set. Other
+  voice-start/voice-parameter operations are **not** implemented yet.
 - IRX `0x4DBC` re-applies volumes for *active* voices after `0x501/0x12`
   or `0x501/0x14`. It scales first by the master coefficient and then
   by the corresponding channel coefficient (14-bit fixed point,
