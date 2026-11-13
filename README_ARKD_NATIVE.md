@@ -74,9 +74,9 @@ The latest draft includes the following **statically recovered** handlers:
 | Server | Native methods | Important limitation |
 | --- | --- | --- |
 | `0x500` | `1`, `3`, `0x10`, `0x11`, `0x12` | Some initialization side effects remain unmapped |
-| `0x501` | `1`, `2`, `3`, `0x11`, `0x12`, `0x13`, `0x14`, `0x81`, `0x82` | Buffer/control state is stored; sound worker and per-voice update are incomplete |
+| `0x501` | `1`, `2`, `3`, `0x11`, `0x12`, `0x13`, `0x14`, `0x81`, `0x82` | Added queued voice-stop `libsd #5` volume writes; voice start, bank upload and streaming still incomplete |
 | `0x502` | `1`–`5`, `0x101`–`0x103` | Stream control flags and packet storage, not full SPU2 playback |
-| `0x503` | `1`–`4`, `0x81`, `0x101`, `0x102` | File copy and CDVD initialization use approximate native timing |
+| `0x503` | `1`–`4`, `0x81`, `0x101`, `0x102`, `0x103` | File copy, CDVD initialization and virtual-disc control use approximate native timing; physical-drive errors aren't emulated |
 
 The `0x501/0x11` handler forwards both real 16-byte `sceSdEffectAttr`
 structures to **the game's own `LIBSD.IRX` export ordinal 23** via the
@@ -89,10 +89,12 @@ exposes the 0x10000000/0x20000000/0x30000000 transfer phases. The
 queued job. The actual original-IRX timing and interrupts still require
 comparison before declaring equivalence.
 
-**Still unimplemented:** `0x501/0x101`–`0x103` sound/stream worker,
-`0x503/0x103` CDVD worker, complete sound-buffer consumption and per-voice
-`libsd` updates, exact SIF DMA/interrupt callbacks, and serialization of
-the native module's pending state. The driver replacement is not yet
+**Still unimplemented:** `0x501/0x101`–`0x103` sound/stream bank
+workers, voice-start and complete parameter updates, exact SIF DMA/interrupt
+callbacks, and physical-disc error parity. The `0x503/0x103` native
+worker now handles the command queue and virtual-media completion for
+opcodes 1–8, but does not reproduce mechanical CD/DVD operations.
+Native pending state is serialized with version 7 savestates. The driver replacement is not yet
 ready for end-to-end gameplay validation. The native module is deliberately
 opt-in and PR #2 remains a draft.
 
@@ -109,6 +111,20 @@ EE SifCallRpc wrapper: 0x1789E8
 0x503/0x101 call site: 0x1C0778 (input 0x30, reply 0x10)
 0x503/0x102 call site: 0x1C0BA8 (input 0x30, reply 0x10)
 ```
+
+## Additional worker progress
+
+The original 46-voice worker checks stop requests through two **32-bit**
+command masks but addresses SPU2 voices using **24 voices per core**.
+Native HLE now queues the verified `libsd` ordinal 5 volume-clearing
+operations and tests the distinct mask/register boundaries at voice
+indices 24 and 32. Voice startup and sample data transfer are still missing.
+
+The original `0x503/0x103` accepts a single u32 CDVD control opcode in
+the range 1–8 when the transfer state is complete or errored. Native HLE
+now returns a busy status when appropriate, schedules an emulated drive
+operation, and exposes its completion through `0x503/2`. These are
+**virtual-disc** semantics, not mechanical command parity.
 
 ## Validation
 
