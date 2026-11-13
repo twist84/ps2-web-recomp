@@ -1,0 +1,37 @@
+name: One-shot SDBZ rebase staging
+
+on:
+  push:
+    branches:
+      - rebase-work/sdbz-20261113
+
+permissions:
+  contents: write
+
+jobs:
+  rebase-sdbz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Replay existing SDBZ commits onto main in isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main SDBZ
+          test "$(git rev-parse origin/main)" = "d8a0a452274447b8e1da984bba1a82f7716e3e8f"
+          test "$(git rev-parse origin/SDBZ)" = "1f8094f23447b3c91af5667e7c3ea06e58a15302"
+          git config user.name "SDBZ Rebase Bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --create rebase-scratch origin/SDBZ
+          if ! git rebase origin/main; then
+            echo 'SDBZ rebase requires conflict resolution:'
+            git status --short
+            git diff --name-only --diff-filter=U
+            exit 2
+          fi
+          test "$(git rev-list --count origin/main..HEAD)" = 13
+          git push origin HEAD:refs/heads/rebase-result/sdbz-20261113
+          echo "Staged rewritten SDBZ head $(git rev-parse HEAD)"
