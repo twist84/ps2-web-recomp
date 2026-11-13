@@ -462,6 +462,8 @@ bool sound_effect_rpc(std::uint32_t args, std::uint32_t args_size,
     return true;
 }
 
+void begin_spu_upload();
+
 void complete_audio_command(const kernel::Job &job)
 {
     if (!g_audio_worker.pending || job.a != g_audio_worker.serial)
@@ -477,12 +479,22 @@ void complete_audio_command(const kernel::Job &job)
             ? 0x30000000u : 0x4000012Cu;
         return;
     }
-    // Opcode 2 also manipulates SPU2 bank/stream state and is not yet
-    // reconstructed. Never claim success for its hardware operations.
+    // Original opcode 2 (0x5F08) uses the cached IOP sound bank,
+    // releases its old SPU allocation, then re-uploads its sample data.
+    // A bank for a different selector cannot be reconstructed here.
+    if (g_audio_worker.opcode == 2
+        && g_bank_ready
+        && g_audio_worker.selector == g_loaded_bank_id)
+    {
+        release_spu_bank(g_audio_worker.selector);
+        begin_spu_upload();
+        g_audio_worker.state = g_spu_upload.state;
+        return;
+    }
     g_audio_worker.state = 0x40000064u;
     std::fprintf(stderr,
         "[arkd-native] audio command 0x501/0x%X selector %u "
-        "requires unimplemented SPU2 worker\n",
+        "has no cached sample bank\n",
         g_audio_worker.opcode, g_audio_worker.selector);
 }
 
@@ -529,6 +541,9 @@ void complete_spu_upload(const kernel::Job &job)
         upload.pending = false;
         upload.waiting_for_dma = false;
         upload.state = 0x40000064u;
+        if (g_audio_worker.opcode == 2
+            && g_audio_worker.selector == upload.bank_id)
+            g_audio_worker.state = upload.state;
         if (upload.staging_iop)
         {
             kernel::free(upload.staging_iop);
@@ -569,6 +584,9 @@ void complete_spu_upload(const kernel::Job &job)
     {
         upload.pending = false;
         upload.state = 0x30000000u;
+        if (g_audio_worker.opcode == 2
+            && g_audio_worker.selector == upload.bank_id)
+            g_audio_worker.state = upload.state;
         kernel::free(upload.staging_iop);
         upload.staging_iop = 0;
         return;
