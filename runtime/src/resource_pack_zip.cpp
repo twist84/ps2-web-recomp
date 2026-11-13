@@ -84,15 +84,15 @@ bool index(const std::filesystem::path &archive,
     const std::uint64_t tail_at = length > 65557 ? length - 65557 : 0;
     std::vector<std::uint8_t> tail(static_cast<std::size_t>(length - tail_at));
     if (!read_at(input, tail_at, tail.data(), tail.size())) return false;
-    std::size_t eocd = tail.size();
-    while (eocd >= 22)
+    std::size_t eocd = tail.size() - 22u;
+    for (;;)
     {
-        --eocd;
         if (u32(tail.data() + eocd) == 0x06054b50u
             && eocd + 22u + u16(tail.data() + eocd + 20) == tail.size())
             break;
+        if (eocd == 0) return false;
+        --eocd;
     }
-    if (eocd < 22 || eocd >= tail.size()) return false;
     const auto *end = tail.data() + eocd;
     const std::uint16_t count = u16(end + 10);
     const std::uint32_t central_size = u32(end + 12);
