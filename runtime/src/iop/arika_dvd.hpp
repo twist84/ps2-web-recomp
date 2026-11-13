@@ -59,6 +59,7 @@ private:
 std::uint32_t audio_worker_status();
 bool sound_bank_ready();
 std::uint32_t sound_bank_id();
+std::uint32_t sound_upload_status();
 std::size_t copy_sound_bank(void *destination, std::size_t capacity);
 
 bool native_requested();
