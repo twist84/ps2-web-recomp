@@ -3,6 +3,7 @@
 #include "gif.hpp"
 #include "queue.hpp"
 #include "raster.hpp"
+#include "texture_upload_trace.hpp"
 #include "../hw.hpp"
 #ifdef PS2_GPU
 #include "gpu/gpu.hpp"
@@ -61,6 +62,38 @@ struct Transfer {
     std::uint32_t x = 0, y = 0;
     std::uint32_t pending_bits = 0, pending = 0;
 } g_transfer;
+
+// Diagnostic upload identifiers are host-only: a GS base pointer can be
+// reused, so neither it nor TEX0 alone establishes an asset identity.
+c_texture_upload_trace g_texture_trace;
+std::uint64_t g_texture_trace_serial = 0;
+
+bool trace_texture_uploads()
+{
+    static const bool enabled = std::getenv("PS2_TRACE_TEXTURE_UPLOADS") != nullptr;
+    return enabled;
+}
+
+void report_texture_upload(bool complete)
+{
+    if (!trace_texture_uploads()) return;
+    const auto &t = g_texture_trace.current();
+    if (!t.serial) return;
+    const auto bp = static_cast<unsigned>((t.bitbltbuf >> 32) & 0x3fffu);
+    const auto bw = static_cast<unsigned>((t.bitbltbuf >> 48) & 0x3fu);
+    const auto psm = static_cast<unsigned>((t.bitbltbuf >> 56) & 0x3fu);
+    const auto width = static_cast<unsigned>(t.trxreg & 0xfffu);
+    const auto height = static_cast<unsigned>((t.trxreg >> 32) & 0xfffu);
+    std::fprintf(stderr,
+        "[gs-texture] upload serial=%llu bp=%04X bw=%u psm=%02X size=%ux%u "
+        "pos=%016llX bytes=%llu/%llu fnv64=%016llX %s\n",
+        static_cast<unsigned long long>(t.serial), bp, bw, psm,
+        width, height, static_cast<unsigned long long>(t.trxpos),
+        static_cast<unsigned long long>(t.received_bytes),
+        static_cast<unsigned long long>(t.expected_bytes),
+        static_cast<unsigned long long>(t.fnv1a64),
+        complete ? "complete" : "partial");
+}
 
 std::uint32_t g_off32[32][64], g_offz32[32][64];
 std::uint32_t g_off16[64][64], g_off16s[64][64], g_offz16[64][64], g_offz16s[64][64];
@@ -249,6 +282,8 @@ std::uint8_t g_carry[4];
 std::size_t g_carried = 0;
 
 void feed_image(const std::uint8_t *data, std::size_t bytes) {
+    if (trace_texture_uploads() && g_texture_trace.append(data, bytes))
+        report_texture_upload(true);
 #ifdef PS2_GPU
     if (gpu_on() && (g_state.trxdir & 3u) == 0) gpu::image_data(data, bytes);
 #endif
@@ -455,6 +490,8 @@ void render_reset() {
     std::memset(g_memory, 0, sizeof g_memory);
     ++g_setup_generation;
     g_transfer = Transfer{};
+    g_texture_trace.reset();
+    g_texture_trace_serial = 0;
     g_primitives = 0;
     raster::reset();
 }
@@ -760,6 +797,15 @@ void write(std::uint32_t reg, std::uint64_t value) {
     case 0x05: vertex(static_cast<std::uint32_t>(value) & 0xFFFFu, static_cast<std::uint32_t>(value >> 16) & 0xFFFFu,
                       static_cast<std::uint32_t>(value >> 32), static_cast<std::uint8_t>(s.fog >> 56), true); break;
     case 0x06: case 0x07:
+        if (trace_texture_uploads())
+            std::fprintf(stderr,
+                "[gs-texture] bind ctx=%u tex0=%016llX bp=%04X psm=%02X "
+                "size=%ux%u\n", reg - 6,
+                static_cast<unsigned long long>(value),
+                static_cast<unsigned>(value & 0x3fffu),
+                static_cast<unsigned>((value >> 20) & 0x3fu),
+                1u << ((value >> 26) & 15u),
+                1u << ((value >> 30) & 15u));
         s.ctx[reg - 6].tex0 = value;
         load_clut(value);
         break;
@@ -810,6 +856,16 @@ void write(std::uint32_t reg, std::uint64_t value) {
                          static_cast<unsigned long long>(s.bitbltbuf), static_cast<unsigned long long>(s.trxpos), static_cast<unsigned long long>(s.trxreg));
         }
         capture::transfer(s, value);
+        if (trace_texture_uploads())
+        {
+            if (g_texture_trace.current().active
+                && g_texture_trace.current().received_bytes)
+                report_texture_upload(false);
+            g_texture_trace.reset();
+            if ((value & 3u) == 0)
+                g_texture_trace.begin(++g_texture_trace_serial,
+                    s.bitbltbuf, s.trxpos, s.trxreg);
+        }
         s.trxdir = value;
         g_transfer = Transfer{};
         g_carried = 0;
@@ -1327,6 +1383,11 @@ std::string g_state_error;
 
 void render_state(ps2::state::Stream &s) {
     flush_and_wait();
+    if (s.loading())
+    {
+        // Upload traces reflect live host data, not saved guest state.
+        g_texture_trace.reset();
+    }
     s.pod(g_state);
     ++g_setup_generation;
     s.pod(g_pmode);
