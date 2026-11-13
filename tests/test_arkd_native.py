@@ -688,6 +688,59 @@ int main(int argc, char **argv)
     if (arkd::sound_upload_status() != 0x40000064u
         || arkd::sound_bank_spu_address(upload_bank_id) != stable_address)
         return 115;
+
+    // A second bank must coexist with bank 1. Re-upload bank 1 after
+    // loading bank 2 to prove the native cache is not latest-only.
+    const std::uint32_t second_bank_id = 2;
+    std::memcpy(ps2::g_ram + 0x100, &second_bank_id, 4);
+    if (!ps2::sif::g_handlers.at(0x501)(0x101, 0x100, 0x24, 0x180, 4)
+        || word(0x180) != 0) return 116;
+    kernel::g_bank_job(kernel::g_queued_bank);
+    for (unsigned step = 0; step < 12 &&
+         arkd::sound_upload_status() != 0x30000000u; ++step)
+        kernel::g_upload_job(kernel::g_queued_upload);
+    const auto second_address = arkd::sound_bank_spu_address(second_bank_id);
+    if (arkd::sound_upload_status() != 0x30000000u
+        || !second_address || *second_address <= *stable_address)
+        return 117;
+
+    ps2::state::Writer multi_writer;
+    multi_writer.set_version(12);
+    arkd::state(multi_writer);
+    ps2::state::Reader multi_reader(
+        multi_writer.out.data(), multi_writer.out.size());
+    multi_reader.set_version(12);
+    arkd::state(multi_reader);
+
+    kernel::g_captures.clear();
+    std::memcpy(ps2::g_ram + 0x400, &upload_bank_id, 4);
+    if (!ps2::sif::g_handlers.at(0x501)(0x103, 0x400, 4, 0x180, 4)
+        || word(0x180) != 0) return 118;
+    kernel::g_audio_job(kernel::g_queued_audio);
+    for (unsigned step = 0; step < 12 &&
+         arkd::sound_upload_status() != 0x30000000u; ++step)
+        kernel::g_upload_job(kernel::g_queued_upload);
+    if (arkd::sound_upload_status() != 0x30000000u
+        || kernel::g_captures.size() != 2
+        || kernel::g_captures[0].size != 0x8000
+        || kernel::g_captures[1].size != 0x40)
+        return 119;
+    if (arkd::sound_bank_spu_address(second_bank_id) != second_address)
+        return 120;
+
+    // The second bank is also cached and can be reloaded after first.
+    kernel::g_captures.clear();
+    std::memcpy(ps2::g_ram + 0x400, &second_bank_id, 4);
+    if (!ps2::sif::g_handlers.at(0x501)(0x103, 0x400, 4, 0x180, 4)
+        || word(0x180) != 0) return 121;
+    kernel::g_audio_job(kernel::g_queued_audio);
+    for (unsigned step = 0; step < 12 &&
+         arkd::sound_upload_status() != 0x30000000u; ++step)
+        kernel::g_upload_job(kernel::g_queued_upload);
+    if (arkd::sound_upload_status() != 0x30000000u
+        || kernel::g_captures.size() != 3
+        || kernel::g_captures[0].size != 0x8000)
+        return 122;
     return 0;
 }
 '''
