@@ -90,7 +90,10 @@ target_compile_options(ps2runtime PRIVATE -Wall -Wextra)
 # original GS texture path. The host catalog is available independently.
 find_package(ZLIB QUIET)
 if(ZLIB_FOUND)
-    target_sources(ps2runtime PRIVATE runtime/src/gs/native_texture.cpp)
+    target_sources(ps2runtime PRIVATE
+        runtime/src/gs/native_texture.cpp
+        runtime/src/gs/native_texture_residency.cpp)
+    target_compile_definitions(ps2runtime PRIVATE PS2_NATIVE_PNG)
     target_link_libraries(ps2runtime PRIVATE ZLIB::ZLIB)
 endif()
 

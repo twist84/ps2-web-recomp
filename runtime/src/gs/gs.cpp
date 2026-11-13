@@ -4,6 +4,9 @@
 #include "queue.hpp"
 #include "raster.hpp"
 #include "texture_upload_trace.hpp"
+#ifdef PS2_NATIVE_PNG
+#include "native_texture_residency.hpp"
+#endif
 #include "../hw.hpp"
 #ifdef PS2_GPU
 #include "gpu/gpu.hpp"
@@ -67,6 +70,10 @@ struct Transfer {
 // reused, so neither it nor TEX0 alone establishes an asset identity.
 c_texture_upload_trace g_texture_trace;
 std::uint64_t g_texture_trace_serial = 0;
+#ifdef PS2_NATIVE_PNG
+bool g_native_gpu_uploaded[13] = {};
+bool g_native_match_logged[13] = {};
+#endif
 
 bool trace_texture_uploads()
 {
@@ -282,8 +289,38 @@ std::uint8_t g_carry[4];
 std::size_t g_carried = 0;
 
 void feed_image(const std::uint8_t *data, std::size_t bytes) {
-    if (trace_texture_uploads() && g_texture_trace.append(data, bytes))
+    if (g_texture_trace.append(data, bytes))
+    {
         report_texture_upload(true);
+#ifdef PS2_NATIVE_PNG
+        const int chunk = native_texture::complete_upload(g_texture_trace.current());
+        if (chunk >= 0 && chunk < 13 && !g_native_match_logged[chunk])
+        {
+            const auto &upload = g_texture_trace.current();
+            std::fprintf(stderr,
+                "[gs-native] matched dis/main_menu.pix.%03d at BP=%04X "
+                "hash=%016llX; using native PNG\n",
+                chunk, static_cast<unsigned>((upload.bitbltbuf >> 32) & 0x3fffu),
+                static_cast<unsigned long long>(upload.fnv1a64));
+            g_native_match_logged[chunk] = true;
+        }
+#ifndef PS2_GPU
+        (void)chunk;
+#endif
+#ifdef PS2_GPU
+        if (chunk >= 0 && chunk < 13 && gpu_on()
+            && !g_native_gpu_uploaded[chunk])
+        {
+            if (const auto *img = native_texture::chunk_image(chunk))
+            {
+                gpu::upload_native_atlas(static_cast<std::uint32_t>(chunk),
+                    img->width, img->height, img->rgba.data());
+                g_native_gpu_uploaded[chunk] = true;
+            }
+        }
+#endif
+#endif
+    }
 #ifdef PS2_GPU
     if (gpu_on() && (g_state.trxdir & 3u) == 0) gpu::image_data(data, bytes);
 #endif
@@ -492,6 +529,11 @@ void render_reset() {
     g_transfer = Transfer{};
     g_texture_trace.reset();
     g_texture_trace_serial = 0;
+#ifdef PS2_NATIVE_PNG
+    native_texture::reset_residency();
+    std::memset(g_native_gpu_uploaded, 0, sizeof g_native_gpu_uploaded);
+    std::memset(g_native_match_logged, 0, sizeof g_native_match_logged);
+#endif
     g_primitives = 0;
     raster::reset();
 }
@@ -850,13 +892,23 @@ void write(std::uint32_t reg, std::uint64_t value) {
     case 0x50: s.bitbltbuf = value; break;
     case 0x51: s.trxpos = value; break;
     case 0x52: s.trxreg = value; break;
-    case 0x53:
+    case 0x53: {
         if (trace_display()) {
             std::fprintf(stderr, "[gs] trx dir %llu buf 0x%016llX pos 0x%016llX reg 0x%016llX\n", static_cast<unsigned long long>(value & 3u),
                          static_cast<unsigned long long>(s.bitbltbuf), static_cast<unsigned long long>(s.trxpos), static_cast<unsigned long long>(s.trxreg));
         }
         capture::transfer(s, value);
-        if (trace_texture_uploads())
+        bool need_trace = trace_texture_uploads();
+#ifdef PS2_NATIVE_PNG
+        const bool native_enabled = native_texture::replacements_available();
+        need_trace = need_trace || native_enabled;
+        if (native_enabled && (value & 3u) == 0)
+            native_texture::invalidate_destination(s.bitbltbuf, s.trxreg);
+        // Local-to-local copies can overwrite texture residency too.
+        if (native_enabled && (value & 3u) == 2)
+            native_texture::invalidate_destination(s.bitbltbuf, s.trxreg);
+#endif
+        if (need_trace)
         {
             if (g_texture_trace.current().active
                 && g_texture_trace.current().received_bytes)
@@ -880,6 +932,7 @@ void write(std::uint32_t reg, std::uint64_t value) {
         else if ((value & 3u) == 2) { if (cpu_raster()) local_copy(); }
         else if ((value & 3u) == 1) g_transfer.active = true;
         break;
+    }
     case 0x54:
         feed_image(reinterpret_cast<const std::uint8_t *>(&value), 8);
         break;
@@ -1387,6 +1440,11 @@ void render_state(ps2::state::Stream &s) {
     {
         // Upload traces reflect live host data, not saved guest state.
         g_texture_trace.reset();
+#ifdef PS2_NATIVE_PNG
+        native_texture::reset_residency();
+        std::memset(g_native_gpu_uploaded, 0, sizeof g_native_gpu_uploaded);
+        std::memset(g_native_match_logged, 0, sizeof g_native_match_logged);
+#endif
     }
     s.pod(g_state);
     ++g_setup_generation;

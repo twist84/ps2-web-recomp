@@ -26,6 +26,8 @@ struct SurfaceTarget {
 Mode mode();
 bool init(Mode m);
 void draw(const State &s, const Vertex *v, int count);
+void upload_native_atlas(std::uint32_t index, std::uint32_t width,
+    std::uint32_t height, const std::uint8_t *rgba);
 void image_begin(const State &s);
 void image_data(const std::uint8_t *data, std::size_t bytes);
 void local_copy(const State &s);

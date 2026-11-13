@@ -147,6 +147,29 @@ PS2_TRACE_TEXTURE_UPLOADS=1 ./SDBZ 2>gs-textures.log
 python3 -m unittest discover -s tests -p 'test_gs_texture_upload_trace.py' -v
 ```
 
+## Native menu texture rendering (experimental)
+
+The runtime now recognizes the **verified 13 EU-beta `dis/main_menu.pix` TIM2
+indexed-image fingerprints** at the GS host-to-local upload boundary. When a
+replacement exists under `NATIVE/dis/main_menu.pix.NNN.png`, the renderer
+associates the PNG with the observed physical GS resident range. Subsequent
+texture draws with matching BP, TBW, PSM and dimensions sample RGBA pixels
+from the host replacement instead of the guest CLUT. GS VRAM, guest reads
+and DMA transfers remain untouched.
+
+Overlapping GS transfers invalidate resident mappings, including repeated
+uploads into the same TBP. Missing, corrupt or dimension-mismatched PNGs use
+the original texture. PNG alpha (0–255) is translated to GS alpha (0–128).
+The native RGB/RGBA PNG decoder currently requires **exact dimensions**
+(256×256 for chunk 000, 512×512 for chunks 001–012); higher resolution
+replacement scaling remains future work.
+
+The software renderer and WebGPU compute shader both include replacement
+sampling, but **in-game fidelity and shader runtime validation still need
+an EU-beta comparison**. For targeted comparison, use `PS2_GS=cpu` and
+`PS2_GS=gpu` respectively, checking a recoloured test atlas in each mode.
+Original game textures remain the fallback if native assets are absent.
+
 ## Validation
 
 ```sh
