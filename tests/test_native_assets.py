@@ -17,6 +17,8 @@ HARNESS = r'''
 #include "ps2/disc.hpp"
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <string>
 #include <vector>
 
 int main(int argc, char **argv)
@@ -48,6 +50,8 @@ int main(int argc, char **argv)
     if (ps2::disc::find("NATIVE") || ps2::disc::find("NATIVE/PLY")) return 8;
     if (mode == "removed")
     {
+        std::filesystem::remove(std::filesystem::path(argv[1])
+            / "NATIVE/ply/p01/p01a.mdl.png");
         return ps2::disc::read_native_asset(texture->id, 0, out, sizeof out) == 0
             ? 0 : 9;
     }
@@ -104,10 +108,8 @@ class NativeAssetCatalogTests(unittest.TestCase):
         self.run_harness(self.fixture("replacements"), "normal")
 
     def test_replacement_removed_after_mount_is_not_read(self):
-        # A missing replacement must never cause an unsafe read.
-        # The harness removes the file after opening in this mode.
         root = self.fixture("removed")
-        self.run_harness(root, "normal")
+        self.run_harness(root, "removed")
 
 if __name__ == "__main__":
     unittest.main()
