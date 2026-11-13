@@ -151,11 +151,33 @@ std::uint32_t word(std::uint32_t at)
 int main(int argc, char **argv)
 {
     using namespace ps2::iop;
-    if (argc != 2 || !ps2::disc::open(argv[1])) return 1;
+    if ((argc != 2 && argc != 3) || !ps2::disc::open(argv[1]))
+        return 1;
 
     // The native catalog operates on the synthetic DVD, with no IRX bytes.
     arkd::c_catalog catalog;
-    if (!catalog.open() || catalog.entry_count() != 4) return 2;
+    if (!catalog.open()) return 2;
+
+    if (argc == 3)
+    {
+        const auto expected = static_cast<std::size_t>(
+            std::strtoul(argv[2], nullptr, 10));
+        if (catalog.entry_count() != expected
+            || ps2::disc::find("INFO.DAT")
+            || ps2::disc::find("GAME.DAT"))
+            return 100;
+
+        const auto asset = catalog.find("MOD/A2099.BIN");
+        if (!asset || asset->file_size != 1) return 101;
+        std::uint8_t value = 0;
+        if (catalog.read(*asset, 0, &value, 1) != 1
+            || value != 0x5A) return 102;
+        const auto direct = ps2::disc::loose_game_assets();
+        if (direct.size() != expected) return 103;
+        return 0;
+    }
+
+    if (catalog.entry_count() != 4) return 2;
     const auto entry = catalog.find("PLY/SMALL.BIN");
     if (!entry || entry->file_size != 5000) return 3;
     if (catalog.find("missing.bin")) return 4;
@@ -643,6 +665,19 @@ class ArkdNativeHleTests(unittest.TestCase):
         self.assertFalse((self.root / "disc" / "INFO.DAT").exists())
         self.assertFalse((self.root / "disc" / "GAME.DAT").exists())
         self.assertFalse((self.root / "disc" / "ARKD_DVD.IRX").exists())
+
+    def test_direct_catalog_beyond_legacy_info_limit(self):
+        root = self.root / "native_direct"
+        assets = root / "GAME" / "mod"
+        assets.mkdir(parents=True, exist_ok=True)
+        for index in range(2100):
+            (assets / f"a{index:04d}.bin").write_bytes(b"Z")
+        environment = os.environ.copy()
+        environment["SDBZ_ARKD_NATIVE"] = "1"
+        subprocess.run([str(self.executable), str(root), "2100"],
+                       env=environment, check=True)
+        self.assertFalse((root / "INFO.DAT").exists())
+        self.assertFalse((root / "GAME.DAT").exists())
 
 
 if __name__ == "__main__":
