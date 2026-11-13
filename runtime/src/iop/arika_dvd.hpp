@@ -16,6 +16,9 @@ struct s_asset
 {
     std::uint32_t relative_sector = 0;
     std::uint32_t file_size = 0;
+    // UINT32_MAX => legacy GAME.DAT sector allocation. Otherwise this
+    // is an ID in the currently mounted direct GAME/ host-file index.
+    std::uint32_t loose_id = UINT32_MAX;
 };
 
 // The original 0x501/0x101 bank reader examines the first DVD sector:
