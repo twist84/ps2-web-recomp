@@ -1,4 +1,5 @@
 #include "ps2/resource_pack.hpp"
+#include "resource_pack_zip.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -176,15 +177,36 @@ void warn(const fs::path &path, const char *reason)
         path.string().c_str(), reason);
 }
 
-bool load_pack(const fs::path &directory, s_pack_info &pack)
+bool load_pack(const fs::path &source_path, s_pack_info &pack,
+    bool is_archive)
 {
-    const auto manifest_path = directory / "pack.json";
-    if (!fs::is_regular_file(manifest_path)
-        || fs::file_size(manifest_path) > 16384) return false;
-    std::ifstream input(manifest_path, std::ios::binary);
-    if (!input) return false;
-    const std::string source((std::istreambuf_iterator<char>(input)),
-        std::istreambuf_iterator<char>());
+    std::string source;
+    if (is_archive)
+    {
+        if (!zip::index(source_path, pack.m_entries)) return false;
+        const auto it = std::find_if(pack.m_entries.begin(), pack.m_entries.end(),
+            [](const s_zip_entry &entry)
+            {
+                return entry.m_path == "pack.json" && entry.m_size <= 16384;
+            });
+        if (it == pack.m_entries.end()) return false;
+        std::vector<std::uint8_t> data;
+        if (!zip::read(source_path, *it, data)) return false;
+        source.assign(data.begin(), data.end());
+    }
+    else
+    {
+        const auto manifest_path = source_path / "pack.json";
+        std::error_code error;
+        if (!fs::is_regular_file(manifest_path, error) || error)
+            return false;
+        const auto size = fs::file_size(manifest_path, error);
+        if (error || size > 16384) return false;
+        std::ifstream input(manifest_path, std::ios::binary);
+        if (!input) return false;
+        source.assign(std::istreambuf_iterator<char>(input),
+            std::istreambuf_iterator<char>());
+    }
     std::map<std::string, std::string> fields;
     s_parser parser{source};
     if (!parser.manifest(fields)) return false;
@@ -192,7 +214,8 @@ bool load_pack(const fs::path &directory, s_pack_info &pack)
         || (fields.count("region") && fields["region"] != "eu-beta"))
         return false;
 
-    pack.m_id = directory.filename().string();
+    pack.m_id = is_archive ? source_path.stem().string()
+        : source_path.filename().string();
     if (!valid_pack_id(pack.m_id)) return false;
     pack.m_name = fields.count("name") ? fields["name"] : pack.m_id;
     pack.m_priority = 0;
@@ -205,7 +228,8 @@ bool load_pack(const fs::path &directory, s_pack_info &pack)
     }
     // Avoid absolute priorities that would overflow future ordering rules.
     if (pack.m_priority < -100000 || pack.m_priority > 100000) return false;
-    pack.m_root = fs::canonical(directory);
+    pack.m_root = fs::canonical(source_path);
+    pack.m_archive = is_archive;
     return true;
 }
 
@@ -236,13 +260,19 @@ void mount(const fs::path &disc_root,
     for (fs::directory_iterator it(base, error), end; !error && it != end;
         it.increment(error))
     {
-        if (it->is_symlink(error) || !it->is_directory(error)) continue;
-        const auto directory = fs::canonical(it->path(), error);
-        if (error || !contained(canonical_base, directory)) continue;
+        if (it->is_symlink(error) || error) continue;
+        const bool is_directory = it->is_directory(error);
+        if (error) continue;
+        const bool is_archive = !is_directory
+            && it->is_regular_file(error) && !error
+            && it->path().extension() == ".zip";
+        if (!is_directory && !is_archive) continue;
+        const auto source = fs::canonical(it->path(), error);
+        if (error || !contained(canonical_base, source)) continue;
         s_pack_info info;
-        if (!load_pack(directory, info))
+        if (!load_pack(source, info, is_archive))
         {
-            warn(directory, "invalid or incompatible pack.json");
+            warn(source, "invalid or incompatible pack.json or ZIP");
             continue;
         }
         std::string id = info.m_id;
@@ -250,11 +280,11 @@ void mount(const fs::path &disc_root,
             [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
         if (!ids.insert(id).second)
         {
-            warn(directory, "duplicate pack ID");
+            warn(source, "duplicate pack ID");
             continue;
         }
-        std::fprintf(stderr, "[resource-pack] enabled %s priority %d\n",
-            info.m_id.c_str(), info.m_priority);
+        std::fprintf(stderr, "[resource-pack] detected %s (%s) priority %d\n",
+            info.m_id.c_str(), is_archive ? "zip" : "folder", info.m_priority);
         g_packs.push_back(std::move(info));
     }
     // Optional user-controlled order. Explicitly listed packs precede
@@ -361,6 +391,18 @@ bool find_resource(const std::string &logical_path, s_resource &resource)
     if (!valid_logical_path(logical_path)) return false;
     for (const auto &pack : g_packs)
     {
+        if (pack.m_archive)
+        {
+            const std::string key = "assets/sdbz/" + logical_path;
+            const auto it = std::find_if(pack.m_entries.begin(), pack.m_entries.end(),
+                [&key](const s_zip_entry &entry)
+                {
+                    return entry.m_path == key;
+                });
+            if (it == pack.m_entries.end()) continue;
+            resource = {pack.m_id, pack.m_root, it->m_size, true, *it};
+            return true;
+        }
         std::error_code error;
         const fs::path candidate = pack.m_root / "assets" / "sdbz"
             / fs::path(logical_path);
@@ -371,7 +413,7 @@ bool find_resource(const std::string &logical_path, s_resource &resource)
         if (error || !contained(pack.m_root, canonical)) continue;
         const auto size = fs::file_size(canonical, error);
         if (error || !size || size > k_max_resource) continue;
-        resource = {pack.m_id, canonical, size};
+        resource = {pack.m_id, canonical, size, false, {}};
         return true;
     }
     return false;
@@ -383,6 +425,8 @@ bool read_resource(const std::string &logical_path,
     data.clear();
     s_resource resource;
     if (!find_resource(logical_path, resource)) return false;
+    if (resource.m_archive)
+        return zip::read(resource.m_path, resource.m_entry, data);
     std::ifstream input(resource.m_path, std::ios::binary);
     if (!input) return false;
     std::vector<std::uint8_t> bytes(static_cast<std::size_t>(resource.m_size));

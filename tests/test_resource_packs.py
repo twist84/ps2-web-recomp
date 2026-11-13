@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS = r'''
@@ -20,8 +21,10 @@ int main(int argc, char **argv)
 {
     using namespace ps2::resource_pack;
     if (argc != 3 && argc != 4) return 1;
-    mount(argv[1], argv[2] == std::string("exe")
-        ? std::filesystem::path(argv[3]) : std::filesystem::path{});
+    const std::string mode(argv[2]);
+    mount(argv[1], mode == "exe" ? std::filesystem::path(argv[3])
+        : mode.rfind("zip", 0) == 0 ? std::filesystem::path(argv[1])
+        : std::filesystem::path{});
     const auto &found = packs();
     if (argv[2] == std::string("exe"))
     {
@@ -29,6 +32,29 @@ int main(int argc, char **argv)
         std::vector<std::uint8_t> bytes;
         if (!read_resource("textures/dis/main_menu.pix.001.png", bytes)
             || std::string(bytes.begin(), bytes.end()) != "EXEC") return 12;
+        return 0;
+    }
+    if (argv[2] == std::string("zip")
+        || argv[2] == std::string("zipdisabled")
+        || argv[2] == std::string("zipordered"))
+    {
+        const auto &all = packs();
+        const bool off = argv[2] == std::string("zipdisabled");
+        if (all.size() != (off ? 1u : 2u)) return 30;
+        std::vector<std::uint8_t> bytes;
+        if (!read_resource("textures/dis/main_menu.pix.001.png", bytes))
+            return 31;
+        const std::string wanted = off || argv[2] == std::string("zipordered")
+            ? "FOLDER" : "ZIP-RED";
+        if (std::string(bytes.begin(), bytes.end()) != wanted)
+            return 32;
+        if (!off)
+        {
+            const auto name = "textures/dis/main_menu.pix.002.png";
+            if (!read_resource(name, bytes)
+                || std::string(bytes.begin(), bytes.end()) != "ZIP-SECOND")
+                return 33;
+        }
         return 0;
     }
     if (argv[2] == std::string("disabled"))
@@ -99,12 +125,52 @@ class ResourcePackTests(unittest.TestCase):
         subprocess.run(compiler + ["-std=c++20", "-Wall", "-Wextra",
             "-I", str(ROOT / "runtime/include"),
             str(cls.source), str(ROOT / "runtime/src/resource_pack.cpp"),
-            "-o", str(cls.binary)], check=True)
+            str(ROOT / "runtime/src/resource_pack_zip.cpp"),
+            "-lz", "-o", str(cls.binary)], check=True)
 
     @classmethod
     def tearDownClass(cls):
         if hasattr(cls, "work"):
             cls.work.cleanup()
+
+    def test_zip_packs_priority_disable_and_order(self):
+        root = self.base / "zip_case" / "disc"
+        root.mkdir(parents=True)
+        folder = root / "resourcepacks"
+        folder.mkdir()
+        installed = folder / "Fallback Folder"
+        (installed / "assets/sdbz/textures/dis").mkdir(parents=True)
+        (installed / "pack.json").write_text(
+            '{"pack":{"format":1,"game":"sdbz","priority":2}}',
+            encoding="utf-8")
+        (installed / "assets/sdbz/textures/dis/main_menu.pix.001.png").write_bytes(b"FOLDER")
+
+        archive = folder / "Red Menu.zip"
+        with zipfile.ZipFile(archive, "w") as out:
+            out.writestr("pack.json",
+                '{"pack":{"format":1,"game":"sdbz","region":"eu-beta","priority":100}}',
+                compress_type=zipfile.ZIP_STORED)
+            out.writestr("assets/sdbz/textures/dis/main_menu.pix.001.png",
+                b"ZIP-RED", compress_type=zipfile.ZIP_DEFLATED)
+            out.writestr("assets/sdbz/textures/dis/main_menu.pix.002.png",
+                b"ZIP-SECOND", compress_type=zipfile.ZIP_STORED)
+        subprocess.run([str(self.binary), str(root), "zip"], check=True)
+
+        order = folder / "load_order.txt"
+        order.write_text("-Red Menu\n+Fallback Folder\n", encoding="utf-8")
+        subprocess.run([str(self.binary), str(root), "zipdisabled"], check=True)
+        order.write_text("+Fallback Folder\n+Red Menu\n", encoding="utf-8")
+        subprocess.run([str(self.binary), str(root), "zipordered"], check=True)
+
+        # Fail closed for malformed archives and path traversal. They should
+        # not displace the known-good pack.
+        order.unlink()
+        with zipfile.ZipFile(folder / "Untrusted.zip", "w") as out:
+            out.writestr("pack.json",
+                '{"pack":{"format":1,"game":"sdbz","priority":200}}')
+            out.writestr("../assets/sdbz/textures/dis/main_menu.pix.001.png",
+                b"BAD")
+        subprocess.run([str(self.binary), str(root), "zip"], check=True)
 
     def test_priority_sparse_override_and_manifest_validation(self):
         root = self.base / "test" / "disc"
