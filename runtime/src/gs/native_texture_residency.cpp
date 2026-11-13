@@ -36,7 +36,8 @@ struct s_resident
 
 std::array<s_image, 13> g_images;
 std::array<bool, 13> g_attempted{};
-std::array<s_resident, 13> g_residents{};
+std::array<s_resident, 64> g_residents{};
+std::size_t g_next_resident = 0;
 bool g_available = false;
 
 bool intersects(std::uint32_t begin, std::uint32_t end,
@@ -88,6 +89,7 @@ bool replacements_available()
 void reset_residency()
 {
     g_residents = {};
+    g_next_resident = 0;
     for (auto &resident : g_residents) resident.chunk = -1;
     g_attempted.fill(false);
     g_images = {};
@@ -146,8 +148,19 @@ int complete_upload(const s_texture_upload_signature &upload)
             || upload.fnv1a64 != k_fingerprints[i])
             continue;
         if (!chunk_image(static_cast<int>(i))) return -1;
-        g_residents[i] = {bp, std::min(k_gs_blocks,
-            bp + static_cast<std::uint32_t>(upload.expected_bytes / 256)),
+        s_resident *slot = nullptr;
+        for (auto &resident : g_residents)
+        {
+            if (resident.chunk < 0)
+            {
+                slot = &resident;
+                break;
+            }
+        }
+        if (!slot)
+            slot = &g_residents[(g_next_resident++) % g_residents.size()];
+        *slot = {bp, std::min(k_gs_blocks,
+            bp + static_cast<std::uint32_t>((upload.expected_bytes + 255) / 256)),
             bw, width, height, static_cast<int>(i)};
         return static_cast<int>(i);
     }
