@@ -65,6 +65,20 @@ std::uint32_t g_bank_serial = 0;
 std::uint32_t g_loaded_bank_id = 0;
 bool g_bank_ready = false;
 std::vector<std::uint8_t> g_sound_bank_data;
+
+// 0x501/0x102 and /0x103 update the original IRX's per-audio-worker
+// command selector and wake the same thread. The SPU2-backed worker is
+// not ported yet. Track command admission and report an explicit error.
+struct s_audio_worker
+{
+    std::uint32_t selector = 0;
+    std::uint32_t serial = 0;
+    std::uint32_t state = 0x30000000u;
+    std::uint8_t opcode = 0;
+    bool pending = false;
+};
+s_audio_worker g_audio_worker;
+
 constexpr std::size_t k_max_bank_size = 64u * 1024u * 1024u;
 
 struct s_sound_rpc_state
@@ -359,6 +373,51 @@ bool sound_effect_rpc(std::uint32_t args, std::uint32_t args_size,
     }
     kernel::free(staging);
     reply_u32(ret, ret_size, success ? 0 : 0x80000064u);
+    return true;
+}
+
+void complete_audio_command(const kernel::Job &job)
+{
+    if (!g_audio_worker.pending || job.a != g_audio_worker.serial)
+        return;
+
+    g_audio_worker.pending = false;
+    // These commands need the original worker's 0x5228/0x5F08 SPU2
+    // hardware path. Do not fabricate a successful audio operation.
+    g_audio_worker.state = 0x40000064u;
+    std::fprintf(stderr,
+        "[arkd-native] audio command 0x501/0x%X selector %u "
+        "requires unimplemented SPU2 worker\n",
+        g_audio_worker.opcode, g_audio_worker.selector);
+}
+
+bool queue_audio_command(std::uint32_t method,
+    std::uint32_t args, std::uint32_t args_size,
+    std::uint32_t ret, std::uint32_t ret_size)
+{
+    // IRX 0x65C8 and 0x6668: both methods load a single u32 selector,
+    // assign command opcode 1 or 2, and wake the same worker.
+    if (args_size < 4 || !ee_range(args, 4))
+    {
+        reply_u32(ret, ret_size, 0x80000064u);
+        return true;
+    }
+    if (g_audio_worker.pending)
+    {
+        reply_u32(ret, ret_size, 0x80000065u);
+        return true;
+    }
+
+    g_audio_worker.selector = read_u32(
+        ps2::g_ram + (args & (ps2::kRamSize - 1)));
+    g_audio_worker.opcode = static_cast<std::uint8_t>(
+        method == 0x102 ? 1 : 2);
+    ++g_audio_worker.serial;
+    g_audio_worker.pending = true;
+    g_audio_worker.state = 0x10000000u;
+    kernel::schedule(kernel::now() + kernel::usec_to_cycles(400),
+        kernel::Job{kernel::kJobArkdAudio, g_audio_worker.serial});
+    reply_u32(ret, ret_size, 0);
     return true;
 }
 
@@ -675,6 +734,8 @@ bool rpc(std::uint32_t server, std::uint32_t method, std::uint32_t args,
     {
         if (method == 0x101)
             return queue_sound_bank(args, args_size, ret, ret_size);
+        if (method == 0x102 || method == 0x103)
+            return queue_audio_command(method, args, args_size, ret, ret_size);
         if (method == 0x11)
             return sound_effect_rpc(args, args_size, ret, ret_size);
         if (sound_command_rpc(method, args, args_size, ret, ret_size))
@@ -901,6 +962,11 @@ std::size_t c_catalog::entry_count() const
     return m_assets.size();
 }
 
+std::uint32_t audio_worker_status()
+{
+    return g_audio_worker.state;
+}
+
 bool sound_bank_ready()
 {
     return g_bank_ready;
@@ -949,6 +1015,7 @@ void install()
     g_loaded_bank_id = 0;
     g_bank_ready = false;
     g_sound_bank_data.clear();
+    g_audio_worker = {};
     g_transfer_state = 0x30000000u;
     g_transfer_serial = 0;
     g_control_value = g_transfer_block_bytes = 0;
@@ -957,6 +1024,7 @@ void install()
     kernel::register_job(kernel::kJobArkdRead, complete_native_read);
     kernel::register_job(kernel::kJobArkdVoice, process_voice_mutes);
     kernel::register_job(kernel::kJobArkdBank, complete_sound_bank);
+    kernel::register_job(kernel::kJobArkdAudio, complete_audio_command);
     kernel::register_hle_module("ARKD_DVD", start_module);
     std::fprintf(stderr,
         "[arkd-native] experimental native module selected; "
@@ -978,6 +1046,7 @@ void state(ps2::state::Stream &stream)
             g_loaded_bank_id = 0;
             g_bank_ready = false;
             g_sound_bank_data.clear();
+            g_audio_worker = {};
             g_transfer_state = 0x30000000u;
             g_transfer_serial = 0;
             g_control_value = g_transfer_block_bytes = 0;
@@ -1036,6 +1105,15 @@ void state(ps2::state::Stream &stream)
         g_loaded_bank_id = 0;
         g_bank_ready = false;
         g_sound_bank_data.clear();
+    }
+
+    if (stream.version() >= 9)
+    {
+        stream.pod(g_audio_worker);
+    }
+    else if (stream.loading())
+    {
+        g_audio_worker = {};
     }
 
     if (stream.loading() && native && !g_catalog.open())
