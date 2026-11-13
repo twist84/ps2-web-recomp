@@ -1,4 +1,7 @@
 #include "gpu.hpp"
+#ifdef PS2_NATIVE_PNG
+#include "../native_texture_residency.hpp"
+#endif
 #include "ps2/system.hpp"
 #include "ps2/video.hpp"
 #include "ps2/presentation.hpp"
@@ -45,7 +48,9 @@ constexpr std::uint32_t kParamStride = 256;
 constexpr std::uint32_t kClutSlots = 2048;
 constexpr std::uint32_t kClutEntries = 512;
 constexpr std::uint32_t kPrimWords = 28;
-constexpr std::uint32_t kSetupWords = 25;
+constexpr std::uint32_t kSetupWords = 26;
+constexpr std::uint32_t kNativeAtlasPixels = 512u * 512u;
+constexpr std::uint32_t kNativeAtlasCount = 13;
 constexpr std::uint32_t kDecodedWords = 4u << 20;
 constexpr std::uint32_t kDecodePrims = 64;
 
@@ -74,7 +79,7 @@ bool g_query_pending = false, g_query_ready = false;
 std::uint64_t g_measured_ns = 0, g_measured = 0, g_total_passes = 0;
 WGPUDevice g_device = nullptr;
 WGPUQueue g_queue = nullptr;
-WGPUBuffer g_vram = nullptr, g_tables = nullptr, g_params = nullptr, g_data = nullptr, g_clut = nullptr, g_scratch = nullptr, g_readback = nullptr, g_decoded = nullptr;
+WGPUBuffer g_vram = nullptr, g_tables = nullptr, g_params = nullptr, g_data = nullptr, g_clut = nullptr, g_scratch = nullptr, g_readback = nullptr, g_decoded = nullptr, g_native_atlases = nullptr;
 std::uint32_t g_decoded_used = 0;
 bool g_rendered[512] = {};
 bool g_decode = true;
@@ -818,9 +823,9 @@ WGPUBuffer make_buffer(std::uint64_t size, WGPUBufferUsage usage) {
 
 void rebuild_group() {
     if (g_group) wgpuBindGroupRelease(g_group);
-    WGPUBindGroupEntry e[8] = {};
-    WGPUBuffer buffers[8] = {g_vram, g_tables, g_params, g_data, g_clut, g_scratch, g_cache, g_decoded};
-    for (int i = 0; i < 8; ++i) {
+    WGPUBindGroupEntry e[9] = {};
+    WGPUBuffer buffers[9] = {g_vram, g_tables, g_params, g_data, g_clut, g_scratch, g_cache, g_decoded, g_native_atlases};
+    for (int i = 0; i < 9; ++i) {
         e[i] = WGPU_BIND_GROUP_ENTRY_INIT;
         e[i].binding = static_cast<std::uint32_t>(i);
         e[i].buffer = buffers[i];
@@ -828,7 +833,7 @@ void rebuild_group() {
     }
     WGPUBindGroupDescriptor d = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
     d.layout = g_layout;
-    d.entryCount = 8;
+    d.entryCount = 9;
     d.entries = e;
     g_group = wgpuDeviceCreateBindGroup(g_device, &d);
 }
@@ -1119,6 +1124,16 @@ std::uint32_t make_setup(const State &st, std::uint64_t attr, std::uint32_t *w) 
     w[22] = g_clut_slot;
     w[23] = z_max(zpsm);
     w[24] = 0xFFFFFFFFu;
+    w[25] = 0xFFFFFFFFu;
+#ifdef PS2_NATIVE_PNG
+    if (flags & 2u)
+    {
+        const int chunk = native_texture::resident_chunk(w[12], w[13],
+            w[14], 1u << (w[15] & 0xffu), 1u << (w[15] >> 8));
+        if (chunk >= 0 && native_texture::chunk_image(chunk))
+            w[25] = static_cast<std::uint32_t>(chunk);
+    }
+#endif
     return flags;
 }
 
@@ -1315,6 +1330,7 @@ bool init(Mode m) {
     g_scratch = make_buffer((static_cast<std::uint64_t>(g_copy_words) + 2ull * g_field_words) * 4, WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc);
     g_cache = make_buffer(static_cast<std::uint64_t>(kCacheWords) * 4, WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
     g_decoded = make_buffer(static_cast<std::uint64_t>(kDecodedWords) * 4, WGPUBufferUsage_Storage);
+    g_native_atlases = make_buffer(static_cast<std::uint64_t>(kNativeAtlasCount) * kNativeAtlasPixels * 4, WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
     if (const char *decode = std::getenv("PS2_DECODE")) g_decode = std::atoi(decode) != 0;
     g_cache_copy.assign(kCacheWords, 0);
     g_readback = make_buffer(static_cast<std::uint64_t>(g_copy_words) * 4, WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst);
@@ -1327,11 +1343,11 @@ bool init(Mode m) {
         g_query_read = make_buffer(16, WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst);
     }
 
-    WGPUBindGroupLayoutEntry le[8] = {};
-    const WGPUBufferBindingType types[8] = {WGPUBufferBindingType_Storage, WGPUBufferBindingType_ReadOnlyStorage, WGPUBufferBindingType_Uniform,
+    WGPUBindGroupLayoutEntry le[9] = {};
+    const WGPUBufferBindingType types[9] = {WGPUBufferBindingType_Storage, WGPUBufferBindingType_ReadOnlyStorage, WGPUBufferBindingType_Uniform,
                                             WGPUBufferBindingType_ReadOnlyStorage, WGPUBufferBindingType_Storage, WGPUBufferBindingType_Storage,
-                                            WGPUBufferBindingType_ReadOnlyStorage, WGPUBufferBindingType_Storage};
-    for (int i = 0; i < 8; ++i) {
+                                            WGPUBufferBindingType_ReadOnlyStorage, WGPUBufferBindingType_Storage, WGPUBufferBindingType_ReadOnlyStorage};
+    for (int i = 0; i < 9; ++i) {
         le[i] = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
         le[i].binding = static_cast<std::uint32_t>(i);
         le[i].visibility = WGPUShaderStage_Compute;
@@ -1340,7 +1356,7 @@ bool init(Mode m) {
         le[i].buffer.minBindingSize = i == 2 ? kParamStride : 0;
     }
     WGPUBindGroupLayoutDescriptor ld = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
-    ld.entryCount = 8;
+    ld.entryCount = 9;
     ld.entries = le;
     g_layout = wgpuDeviceCreateBindGroupLayout(g_device, &ld);
     WGPUPipelineLayoutDescriptor pld = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
@@ -1352,6 +1368,42 @@ bool init(Mode m) {
     ensure_capacity();
     g_mode = m;
     return true;
+}
+
+void upload_native_atlas(std::uint32_t index, std::uint32_t width,
+    std::uint32_t height, const std::uint8_t *rgba)
+{
+    if (!g_native_atlases || !rgba || index >= kNativeAtlasCount
+        || (width != 256 && width != 512) || height != width)
+        return;
+    // Each atlas has a fixed 512x512 slot. PNGs contain conventional
+    // 0..255 alpha; PS2 texture arithmetic uses 0..128 alpha.
+    std::vector<std::uint32_t> converted(static_cast<std::size_t>(width) * height);
+    for (std::size_t i = 0; i < converted.size(); ++i)
+    {
+        const std::uint8_t *pixel = rgba + i * 4;
+        const std::uint32_t alpha = (static_cast<std::uint32_t>(pixel[3]) + 1) / 2;
+        converted[i] = static_cast<std::uint32_t>(pixel[0])
+            | (static_cast<std::uint32_t>(pixel[1]) << 8)
+            | (static_cast<std::uint32_t>(pixel[2]) << 16)
+            | (alpha << 24);
+    }
+    // The shader addresses slots with a constant 512 pixel row stride.
+    // Compact 256x256 rows must be padded to that stride.
+    if (width == 256)
+    {
+        std::vector<std::uint32_t> padded(kNativeAtlasPixels, 0);
+        for (std::uint32_t y = 0; y < height; ++y)
+            std::copy_n(converted.data() + static_cast<std::size_t>(y) * width,
+                width, padded.data() + static_cast<std::size_t>(y) * 512);
+        wgpuQueueWriteBuffer(g_queue, g_native_atlases,
+            static_cast<std::uint64_t>(index) * kNativeAtlasPixels * 4,
+            padded.data(), padded.size() * 4);
+    }
+    else
+        wgpuQueueWriteBuffer(g_queue, g_native_atlases,
+            static_cast<std::uint64_t>(index) * kNativeAtlasPixels * 4,
+            converted.data(), converted.size() * 4);
 }
 
 void draw(const State &st, const Vertex *v, int count) {
