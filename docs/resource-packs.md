@@ -118,8 +118,8 @@ than changing guest-visible resources.
 
 ## In-game manager (experimental)
 
-Press **Select + Start** on the first game controller to open the
-resource-pack manager; press the same combination again to cancel.
+Press **F6** or **Select + Start** on the first game controller to open the
+resource-pack manager; use the same shortcut again to cancel.
 The simple, resolution-scaled WebGPU overlay uses the original
 `5-24-2.fon` game font and a flat translucent background.
 
@@ -133,7 +133,8 @@ Controller-only controls:
 - Start saves `disc/resourcepacks/load_order.txt` and closes
 - B or Select + Start cancels unsaved changes
 
-The manager intentionally has **no mouse or keyboard controls**. While
+The manager intentionally has **no mouse controls or keyboard navigation**;
+F6 remains an open/close shortcut. While
 it is open, gamepad inputs are consumed and do not reach gameplay.
 Keyboard input is also blocked from the game while the modal menu is
 open. Existing window-level shortcuts outside the manager are unchanged.
