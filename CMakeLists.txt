@@ -86,15 +86,30 @@ if(PS2_USE_SDBZ_RECONSTRUCTED)
 endif()
 target_compile_options(ps2runtime PRIVATE -Wall -Wextra)
 
-# PNG replacement decoding is optional so builds without zlib retain the
-# original GS texture path. The host catalog is available independently.
-find_package(ZLIB QUIET)
-if(ZLIB_FOUND)
+# Windows Imaging Component ships with Windows and avoids an optional,
+# silently disabled zlib dependency in the native Windows SDBZ build.
+# Other targets use zlib when available; all builds explicitly report whether
+# GS-native PNG replacement is compiled in.
+if(WIN32)
     target_sources(ps2runtime PRIVATE
         runtime/src/gs/native_texture.cpp
+        runtime/src/gs/native_texture_wic.cpp
         runtime/src/gs/native_texture_residency.cpp)
-    target_compile_definitions(ps2runtime PRIVATE PS2_NATIVE_PNG)
-    target_link_libraries(ps2runtime PRIVATE ZLIB::ZLIB)
+    target_compile_definitions(ps2runtime PRIVATE PS2_NATIVE_PNG PS2_NATIVE_PNG_WIC)
+    target_link_libraries(ps2runtime PRIVATE windowscodecs ole32)
+    message(STATUS "GS-native PNG replacements: enabled (Windows Imaging Component)")
+else()
+    find_package(ZLIB QUIET)
+    if(ZLIB_FOUND)
+        target_sources(ps2runtime PRIVATE
+            runtime/src/gs/native_texture.cpp
+            runtime/src/gs/native_texture_residency.cpp)
+        target_compile_definitions(ps2runtime PRIVATE PS2_NATIVE_PNG)
+        target_link_libraries(ps2runtime PRIVATE ZLIB::ZLIB)
+        message(STATUS "GS-native PNG replacements: enabled (zlib)")
+    else()
+        message(WARNING "GS-native PNG replacements: disabled (ZLIB not found)")
+    endif()
 endif()
 
 set(PS2_WGPU_DIR "${CMAKE_SOURCE_DIR}/third_party/wgpu-native" CACHE PATH "wgpu-native release folder")
