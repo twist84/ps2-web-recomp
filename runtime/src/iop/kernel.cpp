@@ -367,7 +367,9 @@ void reschedule() { g_switch = true; }
 
 bool in_interrupt() { return g_nesting > 0; }
 
-std::uint32_t call_guest(std::uint32_t address, std::uint32_t a0, std::uint32_t a1, std::uint32_t a2, std::uint32_t a3) {
+std::uint32_t call_guest(std::uint32_t address, std::uint32_t a0,
+    std::uint32_t a1, std::uint32_t a2, std::uint32_t a3,
+    std::optional<std::uint32_t> a4) {
     const Cpu saved = g_cpu;
     const bool saved_done = g_nested_done;
     ++g_nesting;
@@ -377,6 +379,13 @@ std::uint32_t call_guest(std::uint32_t address, std::uint32_t a0, std::uint32_t 
     g_cpu.r[6] = a2;
     g_cpu.r[7] = a3;
     g_cpu.r[29] = kInterruptStack - static_cast<std::uint32_t>(g_nesting - 1) * 0x1000u;
+    // MIPS o32 ABI: arguments 0-3 are in a0-a3, and the fifth is
+    // passed in the caller's stack area at sp+0x10.
+    // Do not touch this address for the existing four-argument calls.
+    const std::uint32_t stack_arg = g_cpu.r[29] + 0x10u;
+    const std::uint32_t saved_stack_arg =
+        a4.has_value() ? read32(stack_arg) : 0u;
+    if (a4.has_value()) write32(stack_arg, *a4);
     g_cpu.r[31] = g_return_stub;
     g_cpu.pc = address;
     g_cpu.npc = address + 4;
@@ -393,6 +402,7 @@ std::uint32_t call_guest(std::uint32_t address, std::uint32_t a0, std::uint32_t 
     g_switch = switch_wanted;
     if (guard <= 0) std::fprintf(stderr, "[iop] guest call to 0x%08X did not return\n", address);
     const std::uint32_t result = g_cpu.r[2];
+    if (a4.has_value()) write32(stack_arg, saved_stack_arg);
     g_cpu = saved;
     g_nested_done = saved_done;
     --g_nesting;
@@ -483,7 +493,8 @@ bool library_exists(const std::string &name) { return g_libraries.count(name) ||
 
 bool call_library_export(const std::string &name, std::uint32_t ordinal,
     std::uint32_t a0, std::uint32_t a1, std::uint32_t a2,
-    std::uint32_t a3, std::uint32_t &result)
+    std::uint32_t a3, std::uint32_t &result,
+    std::optional<std::uint32_t> a4)
 {
     const auto found = g_libraries.find(name);
     if (found == g_libraries.end() || ordinal > 1024) return false;
@@ -492,7 +503,7 @@ bool call_library_export(const std::string &name, std::uint32_t ordinal,
     if (entry + 4 > kRamSize) return false;
     const std::uint32_t address = ram32(static_cast<std::uint32_t>(entry));
     if (!address || (phys(address) >= kRamSize)) return false;
-    result = call_guest(address, a0, a1, a2, a3);
+    result = call_guest(address, a0, a1, a2, a3, a4);
     return true;
 }
 
