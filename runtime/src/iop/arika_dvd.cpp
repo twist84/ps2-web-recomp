@@ -448,6 +448,14 @@ void complete_sound_bank(const kernel::Job &job)
     }
     g_loaded_bank_id = g_pending_bank.bank_id;
     g_bank_ready = true;
+    if (const auto metadata = inspect_sound_bank(
+            g_sound_bank_data.data(), g_sound_bank_data.size()))
+    {
+        std::fprintf(stderr,
+            "[arkd-native] bank %u preloaded: %u entries, %u SPU bytes\n",
+            g_loaded_bank_id, metadata->entry_count,
+            metadata->spu_memory_bytes);
+    }
 }
 
 bool queue_sound_bank(std::uint32_t args, std::uint32_t args_size,
@@ -967,6 +975,32 @@ std::size_t c_catalog::entry_count() const
 std::uint32_t audio_worker_status()
 {
     return g_audio_worker.state;
+}
+
+std::optional<s_sound_bank_info> inspect_sound_bank(
+    const std::uint8_t *bytes, std::size_t size)
+{
+    // The IRX reads the first sector at 0x5894-0x5934 and then consults
+    // +4 (number of entries), +8 (SPU2 allocation span) and the
+    // 8-byte entry records beginning at +0x0C (0x5AC0-0x5C04).
+    // This only checks the bounded header shape. It does not claim
+    // to decode sample data or validate all entry semantics.
+    constexpr std::size_t header_size = 0x800;
+    constexpr std::size_t entry_offset = 0x0C;
+    constexpr std::size_t entry_size = 8;
+    constexpr std::uint32_t max_spu_bytes = 2u * 1024u * 1024u;
+
+    if (!bytes || size < header_size)
+        return std::nullopt;
+
+    const std::uint32_t count = read_u32(bytes + 4);
+    const std::uint32_t span = read_u32(bytes + 8);
+    if (!count || count > (header_size - entry_offset) / entry_size)
+        return std::nullopt;
+    if (!span || span > max_spu_bytes)
+        return std::nullopt;
+
+    return s_sound_bank_info{count, span};
 }
 
 bool sound_bank_ready()
