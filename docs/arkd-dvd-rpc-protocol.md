@@ -40,7 +40,7 @@ The remaining values within 1–18 jump to the default case.
 | 0x81 | 0x183C | Sets a cancel/stop flag |
 | 0x101 | 0x250C | Copies 36-byte request and schedules worker command 1 |
 | 0x102 | 0x2410 | Copies 36-byte request and schedules worker command 2 |
-| 0x103 | 0x2608 | Reads request u32 and schedules CDVD worker command 3 |
+| 0x103 | 0x2608 | Reads request u32 (CDVD operation 1–8) and schedules worker command 3 |
 
 Request for method 0x102 (disassembled at 0x2410, worker at
 0x21B0/0x1A58):
@@ -62,6 +62,24 @@ transitions include 0x10000000 (accepted), 0x20000000 (reading),
 The native implementation currently reproduces the basic queue,
 status transitions, and bounded copy, but not every hardware error
 condition, interrupt or transfer timing.
+
+## Native virtual-CDVD worker 0x503/0x103
+
+The original routine at `0x2608–0x26EC` accepts a 32-bit drive-control
+opcode from the request only if its transfer status has the
+`0x30000000` (complete) or `0x40000000` (error) high nibble. Otherwise
+it returns `-1` without queueing. Accepted calls store the opcode,
+set status `0x10000000` and wake the CDVD worker.
+
+Worker routine `0x1EB0–0x219C` dispatches opcodes **1 through 8**.
+Each original opcode performs a different physical `cdvdman` sequence;
+some have error codes `0x80000190`–`0x80000195`. Native HLE
+now reproduces the request format, busy return, queue, and status
+transitions. With a mounted **virtual** disc, operations 1–8 complete
+successfully as emulated media-control operations; an absent disc gives
+`0x40000190`. It does **not** recreate real DVD tray, spindle, seek,
+or all the original error-code distinctions. This is intentionally a
+virtual-device model, not confirmed instruction-level CDVD parity.
 
 ## Server 0x501 dispatch (0x6708)
 
