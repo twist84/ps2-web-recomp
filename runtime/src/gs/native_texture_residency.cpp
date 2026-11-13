@@ -82,17 +82,19 @@ bool replacements_available()
     // do not cache a negative result from early GS initialization.
     for (std::uint32_t index = 0; index < k_menu_atlases.size(); ++index)
     {
-        char suffix[5] = {'.', static_cast<char>('0' + index / 100),
-            static_cast<char>('0' + index / 10 % 10),
-            static_cast<char>('0' + index % 10), 0};
-        if (disc::find_native_asset(std::string("dis/main_menu.pix") + suffix, "png"))
+        const auto &entry = k_menu_atlases[index];
+        const auto chunk = entry.chunk_index;
+        char suffix[5] = {'.', static_cast<char>('0' + chunk / 100),
+            static_cast<char>('0' + chunk / 10 % 10),
+            static_cast<char>('0' + chunk % 10), 0};
+        if (disc::find_native_asset(std::string(entry.game_path) + suffix, "png"))
         {
             g_available = true;
             if (trace_native_textures() && !g_catalog_reported)
             {
                 std::fprintf(stderr,
-                    "[gs-native] catalog found dis/main_menu.pix.%03u.png\n",
-                    index);
+                    "[gs-native] catalog found %s.%03u.png\n",
+                    entry.game_path, entry.chunk_index);
                 g_catalog_reported = true;
             }
             break;
@@ -102,8 +104,7 @@ bool replacements_available()
         && !g_catalog_missing_reported)
     {
         std::fprintf(stderr,
-            "[gs-native] no menu PNG in native asset catalog; "
-            "expected disc/NATIVE/dis/main_menu.pix.001.png\n");
+            "[gs-native] no indexed PNGs match the verified native manifest\n");
         g_catalog_missing_reported = true;
     }
     return g_available;
@@ -167,8 +168,9 @@ const s_image *chunk_image(int index)
     if (!g_attempted[at])
     {
         g_attempted[at] = true;
-        if (!load_fpix_chunk_png("dis/main_menu.pix",
-                static_cast<std::uint32_t>(index), g_images[at]))
+        const auto &entry = k_menu_atlases[at];
+        if (!load_fpix_chunk_png(entry.game_path,
+                entry.chunk_index, g_images[at]))
             g_images[at] = {};
         if (!valid_atlas_size(static_cast<std::uint32_t>(at),
                 g_images[at].width, g_images[at].height)
@@ -201,7 +203,8 @@ int complete_upload(const s_texture_upload_signature &upload)
     for (std::size_t i = 0; i < k_menu_atlases.size(); ++i)
     {
         const std::uint32_t expected = k_menu_atlases[i].width;
-        if (width != expected || height != expected
+        if (width != expected || height != k_menu_atlases[i].height
+            || psm != k_menu_atlases[i].psm
             || upload.fnv1a64 != k_menu_atlases[i].fingerprint)
             continue;
         if (!chunk_image(static_cast<int>(i))) return -1;
@@ -219,7 +222,7 @@ int complete_upload(const s_texture_upload_signature &upload)
         *slot = {bp, std::min(k_gs_blocks,
             bp + static_cast<std::uint32_t>((upload.expected_bytes + 255) / 256)),
             bw, width, height, static_cast<int>(i)};
-        if (trace_native_textures() && i == 1)
+        if (trace_native_textures() && k_menu_atlases[i].chunk_index == 1)
             std::fprintf(stderr,
                 "[gs-native] resident chunk=%03zu BP=%04X BW=%u PSM=%02X size=%ux%u\n",
                 i, bp, bw, psm, width, height);
