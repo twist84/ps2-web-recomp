@@ -162,8 +162,7 @@ void key_on(Voice &v) {
     decode_block(v, v.buffer + 28);
     static const bool trace_arkd_voices = std::getenv("SDBZ_TRACE_ARKD_VOICES") != nullptr;
     if (trace_arkd_voices) {
-        const Core *core = &g_cores[0];
-        if (&v >= &g_cores[1].voices[0]) core = &g_cores[1];
+        const unsigned slot = voice_slot(v);
         std::fprintf(stderr,
             "[spu2-voice] keyon core=%td voice=%td ssa=0x%05X lsax=0x%05X blocks=0x%05X/%05X flags=%X/%X next=0x%05X\n",
             static_cast<std::size_t>(slot / 24u), static_cast<std::size_t>(slot % 24u), v.ssa, v.lsax,
