@@ -43,7 +43,8 @@ namespace ps2::disc
 std::optional<NativeAsset> find_native_asset(
     const std::string &path, const std::string &format)
 {
-    if (path != "menu/title.pix" || format != "png" || bytes.empty())
+    if ((path != "menu/title.pix" && path != "menu/title.pix.003")
+        || format != "png" || bytes.empty())
         return std::nullopt;
     return NativeAsset{0, static_cast<std::uint32_t>(bytes.size()), path, format};
 }
@@ -81,8 +82,14 @@ int main(int argc, char **argv)
     };
     if (std::memcmp(decoded.rgba.data(),
             mode == "rgba" ? rgba : rgb, 16)) return 5;
+    if (!ps2::gs::native_texture::load_fpix_chunk_png(
+            "menu/title.pix", 3, decoded) || decoded.rgba.size() != 16)
+        return 6;
+    if (ps2::gs::native_texture::load_fpix_chunk_png(
+            "menu/title.pix", 1000, decoded) || !decoded.rgba.empty())
+        return 7;
     return ps2::gs::native_texture::load_png("missing.pix", decoded)
-        || !decoded.rgba.empty() ? 6 : 0;
+        || !decoded.rgba.empty() ? 8 : 0;
 }
 '''
 
