@@ -64,6 +64,7 @@ void index_layer(std::uint32_t pvd_sector, std::uint32_t base) {
 }
 
 bool open(const std::string &path) {
+    clear_loose_game_assets();
     g_reader = {};
     g_probe = {};
     g_index.clear();
@@ -94,6 +95,7 @@ bool open(const std::string &path) {
 }
 
 bool open(const std::string &name, std::uint64_t size, Reader reader, Probe probe) {
+    clear_loose_game_assets();
     g_reader = std::move(reader);
     g_probe = std::move(probe);
     g_size = size;
