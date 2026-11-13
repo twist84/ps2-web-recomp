@@ -413,7 +413,12 @@ bool save_selection(const std::vector<std::string> &enabled_ids)
     }
     const fs::path file = g_pack_directory / "load_order.txt";
     std::error_code error;
-    if (fs::is_symlink(file, error) || error) return false;
+    if (fs::is_symlink(file, error)) return false;
+    // A new install has no load_order.txt yet. ENOENT is expected when
+    // creating that file, but other filesystem failures must be rejected.
+    if (error && error != std::make_error_code(
+            std::errc::no_such_file_or_directory))
+        return false;
     std::ofstream output(file, std::ios::binary | std::ios::trunc);
     if (!output) return false;
     output << "# SDBZ resource packs: top enabled pack has highest priority\n";
