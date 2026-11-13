@@ -76,6 +76,7 @@ add_library(ps2runtime STATIC
     runtime/src/iop/sif.cpp
     runtime/src/iop/cdvdfsv.cpp)
 target_include_directories(ps2runtime PUBLIC runtime/include)
+target_include_directories(ps2runtime PRIVATE recomp)
 if(PS2_USE_SDBZ_RECONSTRUCTED)
     target_sources(ps2runtime PRIVATE runtime/src/sdbz_bridge.cpp)
     target_include_directories(ps2runtime PRIVATE games/sdbz_decomp/include)
@@ -123,6 +124,21 @@ if(EMSCRIPTEN OR EXISTS "${PS2_WGPU_DIR}/lib/libwgpu_native.a" OR EXISTS "${PS2_
     endif()
 endif()
 
+
+option(PS2_BUILD_TESTS "Build native synthetic runtime tests (no game data required)" OFF)
+if(PS2_BUILD_TESTS AND NOT EMSCRIPTEN)
+    enable_testing()
+    foreach(name IN ITEMS sif_scratchpad kernel_exit_delete_thread gt3_initialization gt3_state)
+        add_executable(${name}_test tests/${name}_test.cpp)
+        target_include_directories(${name}_test PRIVATE runtime/src)
+        target_link_libraries(${name}_test PRIVATE ps2runtime)
+        add_test(NAME ${name} COMMAND ${name}_test)
+    endforeach()
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME gt3_core COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/gt3_core_test.py")
+    endif()
+endif()
 
 if(PS2_GENERATED)
     file(GLOB PS2_UNITS CONFIGURE_DEPENDS "${PS2_GENERATED}/*.cpp")

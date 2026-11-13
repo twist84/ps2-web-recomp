@@ -1,0 +1,103 @@
+// Super Dragon Ball Z
+
+gametitle=Europe (PAL) [SLES-54161] (CRC A0B1D94A)
+
+[Widescreen 16:9 (3D only)]
+author=Twist.
+description=Renders the 3D scene with a 16:9 aspect ratio. No UI/2D code is touched
+gsaspectratio=16:9
+
+// The 3D camera stores its inverse aspect ratio as 0.75 (3/4), loaded with
+// "lui $reg, 0x3F40". Changing the immediate to 0x3F10 makes it 0.5625 (9/16).
+// The camera constructor derives the aspect itself as 1.0 / 0.75 (-> 1.0 / 0.5625 = 16/9),
+// and func_001C4AD0 (the camera "set perspective" setter) takes the same 0.75 as an argument.
+
+// func_002B0070 camera controller constructor: lui $v1,0x3F40
+patch=1,EE,202B1374,extended,3C033F10
+
+// func_002B0300 camera controller -> setter call: lui $v0,0x3F40
+patch=1,EE,202B15FC,extended,3C023F10
+
+// func_0040C800 setter call: lui $v0,0x3F40
+patch=1,EE,2040F580,extended,3C023F10
+
+// func_0040CA10 setter call: lui $v0,0x3F40
+patch=1,EE,2040F864,extended,3C023F10
+
+// -------------------------------------------------------------------------
+// UI compensation (optional). Enable BOTH of the next two sections together.
+// The UI is authored in a 512x448 space (centre x=256). Every 2D x is squeezed
+// by 0.75 about the centre so the UI keeps its 4:3 proportions on a 16:9 image.
+// There is deliberately NO edge exemption: nothing gets stretched, so HUD plates,
+// faces and menu art keep their shape. Menus end up pillarboxed (4:3), and
+// full-screen fades/dim overlays only cover the centre 4:3 area.
+// -------------------------------------------------------------------------
+
+[UI squeeze - sprites (512-wide UI)]
+author=Twist.
+description=Squeezes every 2D sprite x by 0.75 about x=256 (x' = 0.75x + 64). No edge exemption: nothing is stretched; menus are pillarboxed to 4:3
+
+// hook: func_0019B344 (2D vertex emitter) entry; the displaced 'addiu $v1,$zero,1' is re-executed in the cave.
+// 0810ACC0  j 0x0042B300   -  jump to sprite squeeze cave
+patch=1,EE,2019B344,extended,0810ACC0
+
+// cave at 0x0042B300: x' = x*0.75 + 64
+// 24030001  addiu $v1, $zero, 1     -  re-execute displaced instruction
+// 3C013F40  lui $at, 0x3F40         -  load 0x3F400000 into $at
+// 44811000  add.s $f0, $f1, $f1     -  f0 = f1 + f1
+// 3C014280  lui $at, 0x4280         -  load 0x42800000 into $at
+// 44811800  add.s $f0, $f3, $f1     -  f0 = f3 + f1
+// 00000000  nop                     -  
+// 46026302  mul.s $f12, $f12, $f2   -  f12 = f12 * f2
+// 46036300  add.s $f12, $f12, $f3   -  f12 = f12 + f3
+// 08066CD3  j 0x0019B34C            -  return to hook+8
+// 00000000  nop                     -  delay slot filler
+patch=1,EE,2042B300,extended,24030001
+patch=1,EE,2042B304,extended,3C013F40
+patch=1,EE,2042B308,extended,44811000
+patch=1,EE,2042B30C,extended,3C014280
+patch=1,EE,2042B310,extended,44811800
+patch=1,EE,2042B314,extended,00000000
+patch=1,EE,2042B318,extended,46026302
+patch=1,EE,2042B31C,extended,46036300
+patch=1,EE,2042B320,extended,08066CD3
+patch=1,EE,2042B324,extended,00000000
+
+[UI text squeeze (use together with the sprite squeeze)]
+author=Twist.
+description=Squeezes menu/HUD text: glyph width x0.75 and x' = 0.75x + 64 (512-wide UI space)
+
+// font draw-string method calls:
+//   font-size setter(font, w, h) -> redirected to a stub that sets w = 3w>>2
+//   draw-text(font, x, y, s) -> redirected to a stub that sets x = (3x>>2) + 64
+// 0C10ACCA  jal 0x0042B328   -  call width stub
+// 0C10ACCF  jal 0x0042B33C   -  call position stub
+patch=1,EE,2019A278,extended,0C10ACCA
+patch=1,EE,2019A298,extended,0C10ACCF
+
+// Stubs live in zero padding right after the sprite trampoline (0x0042B328 / 0x0042B33C)
+// and tail-jump with 'j' (opcode 08, NOT 'jal') to the real functions.
+// Width stub:
+// 00050840  sll $at, $zero, $a1      -  $at = $a1 << 1 (= $a1 * 2)
+// 00A12821  addu $a1, $a1, $at       -  $a1 = $a1 + $at (= $a1 * 3)
+// 00052883  sra $a1, $zero, $a1      -  $a1 = $a1 >> 2 (= $a1 * 3 / 4)
+// 08044B00  j 0x00112C00             -  tail-call original width helper
+// 00000000  nop                      -  delay slot filler
+// Position stub:
+// 00050840  sll $at, $zero, $a1      -  $at = $a1 << 1 (= $a1 * 2)
+// 00A12821  addu $a1, $a1, $at       -  $a1 = $a1 + $at (= $a1 * 3)
+// 00052883  sra $a1, $zero, $a1      -  $a1 = $a1 >> 2 (= $a1 * 3 / 4)
+// 24A50040  addiu $a1, $a1, 64       -  $a1 += 64
+// 08044A50  j 0x00112940             -  tail-call original position helper
+// 00000000  nop                      -  delay slot filler
+patch=1,EE,2042B328,extended,00050840
+patch=1,EE,2042B32C,extended,00A12821
+patch=1,EE,2042B330,extended,00052883
+patch=1,EE,2042B334,extended,08044B00
+patch=1,EE,2042B338,extended,00000000
+patch=1,EE,2042B33C,extended,00050840
+patch=1,EE,2042B340,extended,00A12821
+patch=1,EE,2042B344,extended,00052883
+patch=1,EE,2042B348,extended,24A50040
+patch=1,EE,2042B34C,extended,08044A50
+patch=1,EE,2042B350,extended,00000000

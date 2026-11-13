@@ -283,6 +283,18 @@ bool attach_gpu() {
     }
     target.width = static_cast<std::uint32_t>(w);
     target.height = static_cast<std::uint32_t>(h);
+#ifdef __APPLE__
+    if (info.subsystem == SDL_SYSWM_COCOA) {
+        SDL_MetalView view = SDL_Metal_CreateView(g_window);
+        if (!view) return false;
+        target.kind = ps2::WindowTarget::Metal;
+        target.surface = SDL_Metal_GetLayer(view);
+        SDL_Metal_GetDrawableSize(g_window, &w, &h);
+        target.width = static_cast<std::uint32_t>(w);
+        target.height = static_cast<std::uint32_t>(h);
+        return target.surface && ps2::attach_window(target);
+    }
+#endif
     switch (info.subsystem) {
 #if defined(SDL_VIDEO_DRIVER_WINDOWS)
     case SDL_SYSWM_WINDOWS:

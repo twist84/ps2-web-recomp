@@ -445,6 +445,7 @@ void dispatch(Cpu &c, std::uint32_t, std::uint32_t depth) {
     const std::uint32_t pc = c.pc;
     if (pc & kUnwind) return;
     if (pc == kHandlerReturn || pc == kIdle) return;
+    if (g_forced.has(pc)) [[clang::musttail]] return interpret(c, 0u, depth);
     auto rit = g_reconstructed.find(pc);
     if (rit != g_reconstructed.end()) {
         rit->second(c);
