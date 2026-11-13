@@ -410,6 +410,12 @@ std::vector<s_pack_info> active_packs_snapshot()
     return g_packs;
 }
 
+bool selection_pending()
+{
+    std::lock_guard<std::mutex> lock(g_selection_mutex);
+    return g_selection_pending;
+}
+
 bool apply_pending_selection()
 {
     std::lock_guard<std::mutex> lock(g_selection_mutex);
