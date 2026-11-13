@@ -88,6 +88,24 @@ The tool creates `uploads.csv` (deduplicated upload layout and content hash),
 for further FPIX investigation). These are observations, **not automatic
 FPIX chunk mappings**.
 
+After exporting the CSV reports, correlate complete atlas-sized uploads with
+observed TEX0 configurations:
+
+```sh
+python3 scripts/crosswalk_sdbz_texture_candidates.py \
+    texture-report/atlas_candidates.csv \
+    texture-report/bindings.csv \
+    --output texture-crosswalk
+```
+
+This writes `layout_groups.csv` and `fingerprint_candidates.csv`. The first
+groups by destination/PSM/dimensions and flags layouts with multiple observed
+payload fingerprints or TEX0 variants. The second preserves each content hash
+and occurrence count. The crosswalk is **aggregate**: it cannot determine
+which particular upload was active for a particular draw, nor identify the
+source `.pix` file. An "unambiguous" layout means only one fingerprint and
+one TEX0 variant were observed, not that a matching game asset is verified.
+
 **The fingerprint is diagnostic, not an asset identity.** GS addresses are
 reused and an Arika FPIX/TIM2 source may have been transformed or swizzled
 before reaching GS memory. Matching FPIX directory entries to actual
