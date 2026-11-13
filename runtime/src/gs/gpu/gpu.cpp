@@ -5,6 +5,7 @@
 #include "ps2/system.hpp"
 #include "ps2/video.hpp"
 #include "ps2/presentation.hpp"
+#include "ps2/resource_pack_overlay.hpp"
 #include "ps2/render_scale.hpp"
 #include "font.hpp"
 
@@ -1024,6 +1025,31 @@ void submit(WGPUTextureView present_view = nullptr) {
         // over the game frame without needing LoadOp_Load on a separate pass.
         font_draw_text_in_pass(rp, present_view, g_surface_width, g_surface_height,
             g_stats_text, 10.f, 10.f, 1.f, 255, 255, 0);
+        // Native resource-pack selector: flat text, using SDBZ's FFON font.
+        // The SDL/UI thread publishes a thread-safe snapshot. This presentation
+        // path never accesses or mutates the pack catalogue.
+        const auto overlay_lines = ps2::resource_pack_overlay::get_lines();
+        if (!overlay_lines.empty())
+        {
+            const float scale = std::clamp(
+                static_cast<float>(g_surface_height) / 900.0f, 0.55f, 1.5f);
+            const float x = static_cast<float>(g_surface_width) * 0.08f;
+            float y = static_cast<float>(g_surface_height) * 0.10f;
+            for (std::size_t i = 0; i < overlay_lines.size(); ++i)
+            {
+                const auto &line = overlay_lines[i];
+                const bool selected = line.size() >= 2 && line[0] == '>';
+                const bool heading = i == 0 || line.find("ENABLED -") == 0
+                    || line.find("AVAILABLE -") == 0;
+                font_draw_text_in_pass(rp, present_view,
+                    g_surface_width, g_surface_height,
+                    line.c_str(), x, y, scale,
+                    selected ? 255 : heading ? 255 : 235,
+                    selected ? 210 : heading ? 255 : 235,
+                    selected ? 65 : heading ? 255 : 235);
+                y += 31.f * scale;
+            }
+        }
         wgpuRenderPassEncoderEnd(rp);
         wgpuRenderPassEncoderRelease(rp);
     }
