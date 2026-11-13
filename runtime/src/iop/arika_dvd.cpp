@@ -109,6 +109,11 @@ struct s_spu_upload
 };
 
 std::array<s_spu_bank_allocation, k_sound_bank_slots> g_spu_banks{};
+// Multiple sound banks remain loaded concurrently. Keep the original
+// archive payload for each slot so 0x501/0x103 can re-upload an older
+// bank after another bank has been loaded.
+std::array<std::vector<std::uint8_t>, k_sound_bank_slots> g_cached_banks{};
+constexpr std::size_t k_max_total_bank_cache = 128u * 1024u * 1024u;
 std::uint32_t g_spu_next = k_spu_base_start;
 s_spu_upload g_spu_upload;
 
@@ -490,10 +495,14 @@ void complete_audio_command(const kernel::Job &job)
     // releases its old SPU allocation, then re-uploads its sample data.
     // A bank for a different selector cannot be reconstructed here.
     if (g_audio_worker.opcode == 2
-        && g_bank_ready
-        && g_audio_worker.selector == g_loaded_bank_id)
+        && g_audio_worker.selector < k_sound_bank_slots
+        && !g_cached_banks[g_audio_worker.selector].empty())
     {
-        release_spu_bank(g_audio_worker.selector);
+        const auto selected = g_audio_worker.selector;
+        g_sound_bank_data = g_cached_banks[selected];
+        g_loaded_bank_id = selected;
+        g_bank_ready = true;
+        release_spu_bank(selected);
         begin_spu_upload();
         g_audio_worker.state = g_spu_upload.state;
         return;
@@ -705,6 +714,22 @@ void complete_sound_bank(const kernel::Job &job)
     }
     g_loaded_bank_id = g_pending_bank.bank_id;
     g_bank_ready = true;
+    if (g_loaded_bank_id < k_sound_bank_slots)
+    {
+        std::size_t total = 0;
+        for (std::size_t index = 0; index < g_cached_banks.size(); ++index)
+        {
+            if (index != g_loaded_bank_id)
+                total += g_cached_banks[index].size();
+        }
+        if (g_sound_bank_data.size() <= k_max_total_bank_cache
+            && total <= k_max_total_bank_cache - g_sound_bank_data.size())
+            g_cached_banks[g_loaded_bank_id] = g_sound_bank_data;
+        else
+            std::fprintf(stderr,
+                "[arkd-native] total audio-bank cache limit reached; "
+                "older bank reloads may be unavailable\n");
+    }
     if (const auto metadata = inspect_sound_bank(
             g_sound_bank_data.data(), g_sound_bank_data.size()))
     {
@@ -1386,6 +1411,7 @@ void install()
     g_audio_worker = {};
     g_spu_upload = {};
     g_spu_banks = {};
+    g_cached_banks = {};
     g_spu_next = k_spu_base_start;
     g_transfer_state = 0x30000000u;
     g_transfer_serial = 0;
@@ -1421,6 +1447,7 @@ void state(ps2::state::Stream &stream)
             g_audio_worker = {};
             g_spu_upload = {};
             g_spu_banks = {};
+            g_cached_banks = {};
             g_spu_next = k_spu_base_start;
             g_transfer_state = 0x30000000u;
             g_transfer_serial = 0;
@@ -1510,6 +1537,31 @@ void state(ps2::state::Stream &stream)
         g_spu_upload = {};
         g_spu_banks = {};
         g_spu_next = k_spu_base_start;
+    }
+
+    if (stream.version() >= 11)
+    {
+        std::size_t total = 0;
+        for (auto &bank : g_cached_banks)
+        {
+            std::uint32_t count = static_cast<std::uint32_t>(bank.size());
+            stream.pod(count);
+            // Validate before allocation: a damaged savestate cannot
+            // force an unbounded number of audio-bank bytes into RAM.
+            if (count > k_max_bank_size
+                || total > k_max_total_bank_cache - count)
+                throw std::runtime_error(
+                    "native ARKD cached sound banks exceed size limit");
+            total += count;
+            if (stream.loading()) bank.resize(count);
+            if (count) stream.bytes(bank.data(), count);
+        }
+    }
+    else if (stream.loading())
+    {
+        g_cached_banks = {};
+        if (g_loaded_bank_id < k_sound_bank_slots && g_bank_ready)
+            g_cached_banks[g_loaded_bank_id] = g_sound_bank_data;
     }
 
     if (stream.loading() && native && !g_catalog.open())
