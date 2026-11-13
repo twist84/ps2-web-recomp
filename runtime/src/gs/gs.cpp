@@ -296,7 +296,9 @@ void feed_image(const std::uint8_t *data, std::size_t bytes) {
         report_texture_upload(true);
 #ifdef PS2_NATIVE_PNG
         const int chunk = native_texture::complete_upload(g_texture_trace.current());
-        if (chunk >= 0 && chunk < 13 && !g_native_match_logged[chunk])
+        if (chunk >= 0 && chunk < 13
+            && native_texture::chunk_image(chunk)
+            && !g_native_match_logged[chunk])
         {
             const auto &upload = g_texture_trace.current();
             std::fprintf(stderr,
