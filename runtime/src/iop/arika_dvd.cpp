@@ -402,7 +402,8 @@ bool queue_audio_command(std::uint32_t method,
         reply_u32(ret, ret_size, 0x80000064u);
         return true;
     }
-    if (g_audio_worker.pending)
+    // All three 0x501/0x101-0x103 methods wake the same IRX worker.
+    if (g_audio_worker.pending || g_pending_bank.valid)
     {
         reply_u32(ret, ret_size, 0x80000065u);
         return true;
@@ -459,7 +460,8 @@ bool queue_sound_bank(std::uint32_t args, std::uint32_t args_size,
         reply_u32(ret, ret_size, 0x80000064u);
         return true;
     }
-    if (g_pending_bank.valid)
+    // The bank preload and stream-control commands share an IOP worker.
+    if (g_pending_bank.valid || g_audio_worker.pending)
     {
         reply_u32(ret, ret_size, 0x80000065u);
         return true;
