@@ -1000,7 +1000,25 @@ std::optional<s_sound_bank_info> inspect_sound_bank(
     if (!span || span > max_spu_bytes)
         return std::nullopt;
 
-    return s_sound_bank_info{count, span};
+    s_sound_bank_info result;
+    result.entry_count = count;
+    result.spu_memory_bytes = span;
+    result.entries.reserve(count);
+
+    for (std::uint32_t index = 0; index < count; ++index)
+    {
+        const auto *record = bytes + entry_offset
+            + static_cast<std::size_t>(index) * entry_size;
+        const std::uint32_t parameter = read_u32(record);
+        const std::uint32_t offset = read_u32(record + 4);
+        // IRX 0x5B40-0x5B68 adds this offset to the allocated SPU
+        // region base. An offset beyond the bank span would address
+        // another allocation and must not reach a native transfer.
+        if (offset >= span)
+            return std::nullopt;
+        result.entries.push_back({parameter, offset});
+    }
+    return result;
 }
 
 bool sound_bank_ready()
