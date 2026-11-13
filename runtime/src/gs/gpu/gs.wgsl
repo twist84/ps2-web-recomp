@@ -608,15 +608,26 @@ fn convert(s: Setup, raw: u32) -> u32 {
     }
 }
 
+fn native_wrap(v: i32, size: u32, mode: u32,
+    mn: u32, mx: u32, scale: u32) -> u32 {
+    switch mode {
+        case 0u { return u32(v) & (size - 1u); }
+        case 1u { return u32(clamp(v, 0, i32(size) - 1)); }
+        case 2u { return u32(clamp(v, i32(mn * scale),
+            i32((mx + 1u) * scale) - 1)); }
+        default {
+            return (u32(v) & (mn * scale + scale - 1u)) | (mx * scale);
+        }
+    }
+}
+
 fn native_fetch(s: Setup, xi: i32, yi: i32) -> u32 {
     let scale = s.native >> 16u;
     let atlas = s.native & 0xffffu;
-    let xmax = (1u << s.tw) * scale;
-    let ymax = (1u << s.th) * scale;
-    let x = u32(wrap_coord(xi, i32(xmax), mode(s, 24u, 2u),
-        s.minu * scale + scale - 1u, s.maxu * scale + scale - 1u));
-    let y = u32(wrap_coord(yi, i32(ymax), mode(s, 26u, 2u),
-        s.minv * scale + scale - 1u, s.maxv * scale + scale - 1u));
+    let x = native_wrap(xi, (1u << s.tw) * scale,
+        mode(s, 24u, 2u), s.minu, s.maxu, scale);
+    let y = native_wrap(yi, (1u << s.th) * scale,
+        mode(s, 26u, 2u), s.minv, s.maxv, scale);
     return native_atlases[atlas * 1048576u + y * 1024u + x];
 }
 
