@@ -87,7 +87,7 @@ endif()
 target_compile_options(ps2runtime PRIVATE -Wall -Wextra)
 
 # PNG replacement decoding is optional so builds without zlib retain the
-// original GS texture path. The host catalog is available independently.
+# original GS texture path. The host catalog is available independently.
 find_package(ZLIB QUIET)
 if(ZLIB_FOUND)
     target_sources(ps2runtime PRIVATE runtime/src/gs/native_texture.cpp)
