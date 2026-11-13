@@ -26,6 +26,13 @@
 
 #include <algorithm>
 #include <filesystem>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -425,7 +432,22 @@ void boot(std::uint32_t entry, const std::vector<std::string> &args) {
         std::error_code error;
         const std::filesystem::path root(g_options.disc_path);
         if (std::filesystem::is_directory(root, error))
-            resource_pack::mount(root);
+        {
+            std::filesystem::path executable_directory;
+#ifdef _WIN32
+            wchar_t filename[32768] = {};
+            const DWORD length = GetModuleFileNameW(nullptr, filename, 32768);
+            if (length && length < 32768)
+                executable_directory = std::filesystem::path(filename).parent_path();
+#elif defined(__linux__)
+            executable_directory = std::filesystem::read_symlink(
+                "/proc/self/exe", error).parent_path();
+            error.clear();
+#endif
+            if (executable_directory.empty())
+                executable_directory = std::filesystem::current_path(error);
+            resource_pack::mount(root, executable_directory);
+        }
     }
     iop::set_trace(g_options.trace_iop_modules, g_options.trace_iop_hle);
     iop::reset();
