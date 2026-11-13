@@ -17,6 +17,7 @@ WGPURenderPipeline g_panel_pipeline = nullptr;
 WGPUBuffer g_panel_uniform_buffer = nullptr;
 WGPUBindGroupLayout g_font_bind_group_layout = nullptr;
 WGPUBuffer g_font_uniform_buffer = nullptr;
+WGPUBuffer g_overlay_uniform_buffer = nullptr;
 WGPUBuffer g_font_vertex_buffer = nullptr;
 WGPUSampler g_font_sampler = nullptr;
 WGPUTexture g_font_atlas = nullptr;
@@ -39,7 +40,7 @@ constexpr int kAtlasCols = 34;
 constexpr int kAtlasCell = 24;
 constexpr int kFirstChar = 32;
 constexpr int kLastChar = 126;
-constexpr int kMaxChars = 256;
+constexpr int kMaxChars = 1024;
 constexpr int kUniformStride = 256; // aligned to minUniformBufferOffsetAlignment
 
 FontInfo g_font_info;
@@ -211,6 +212,7 @@ bool font_init(WGPUDevice device, WGPUQueue queue, const char* font_path) {
     ubo.size = static_cast<std::uint64_t>(kMaxChars) * kUniformStride;
     ubo.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
     g_font_uniform_buffer = wgpuDeviceCreateBuffer(device, &ubo);
+    g_overlay_uniform_buffer = wgpuDeviceCreateBuffer(device, &ubo);
 
     const float quad[12] = {0.f, 0.f, 1.f, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f, 1.f, 0.f, 1.f};
     WGPUBufferDescriptor vbo = WGPU_BUFFER_DESCRIPTOR_INIT;
@@ -401,6 +403,7 @@ void font_shutdown() {
     if (g_font_pipeline) wgpuRenderPipelineRelease(g_font_pipeline);
     if (g_font_bind_group_layout) wgpuBindGroupLayoutRelease(g_font_bind_group_layout);
     if (g_font_uniform_buffer) wgpuBufferRelease(g_font_uniform_buffer);
+    if (g_overlay_uniform_buffer) wgpuBufferRelease(g_overlay_uniform_buffer);
     if (g_font_vertex_buffer) wgpuBufferRelease(g_font_vertex_buffer);
     if (g_font_sampler) wgpuSamplerRelease(g_font_sampler);
     if (g_font_atlas_view) wgpuTextureViewRelease(g_font_atlas_view);
@@ -410,6 +413,7 @@ void font_shutdown() {
     g_font_pipeline = nullptr;
     g_font_bind_group_layout = nullptr;
     g_font_uniform_buffer = nullptr;
+    g_overlay_uniform_buffer = nullptr;
     g_font_vertex_buffer = nullptr;
     g_font_sampler = nullptr;
     g_font_atlas_view = nullptr;
@@ -464,12 +468,13 @@ void font_draw_panel_in_pass(WGPURenderPassEncoder rp,
     wgpuBindGroupRelease(group);
 }
 
-void font_draw_text_in_pass(WGPURenderPassEncoder rp, WGPUTextureView target,
+void font_draw_text_in_pass_impl(WGPURenderPassEncoder rp, WGPUTextureView target,
     std::uint32_t surface_width, std::uint32_t surface_height,
     const char* text, float x, float y, float scale,
-    std::uint8_t r, std::uint8_t g, std::uint8_t b)
+    std::uint8_t r, std::uint8_t g, std::uint8_t b,
+    WGPUBuffer uniform_buffer)
 {
-    if (!g_font_pipeline || !g_font_atlas_view || !g_font_sampler ||
+    if (!uniform_buffer || !g_font_pipeline || !g_font_atlas_view || !g_font_sampler ||
         !g_font_bind_group_layout) return;
     if (g_font_info.char_map.empty()) return;
 
@@ -560,7 +565,7 @@ void font_draw_text_in_pass(WGPURenderPassEncoder rp, WGPUTextureView target,
     std::vector<float> padded(char_count * kUniformStride / 4, 0.f);
     for (int i = 0; i < char_count; i++)
         std::memcpy(&padded[i * kUniformStride / 4], chars[i].uniforms, 64);
-    wgpuQueueWriteBuffer(g_font_queue, g_font_uniform_buffer, 0, padded.data(),
+    wgpuQueueWriteBuffer(g_font_queue, uniform_buffer, 0, padded.data(),
         static_cast<std::uint64_t>(padded.size()) * sizeof(float));
 
     wgpuRenderPassEncoderSetPipeline(rp, g_font_pipeline);
@@ -574,7 +579,7 @@ void font_draw_text_in_pass(WGPURenderPassEncoder rp, WGPUTextureView target,
                                      WGPU_BIND_GROUP_ENTRY_INIT,
                                      WGPU_BIND_GROUP_ENTRY_INIT};
         bge[0].binding = 0;
-        bge[0].buffer = g_font_uniform_buffer;
+        bge[0].buffer = uniform_buffer;
         bge[0].offset = dynamic_offset;
         bge[0].size = kUniformStride;
         bge[1].binding = 1;
@@ -590,6 +595,24 @@ void font_draw_text_in_pass(WGPURenderPassEncoder rp, WGPUTextureView target,
         wgpuRenderPassEncoderDraw(rp, 6, 1, 0, 0);
         wgpuBindGroupRelease(bg);
     }
+}
+
+void font_draw_text_in_pass(WGPURenderPassEncoder rp, WGPUTextureView target,
+    std::uint32_t surface_width, std::uint32_t surface_height,
+    const char* text, float x, float y, float scale,
+    std::uint8_t r, std::uint8_t g, std::uint8_t b)
+{
+    font_draw_text_in_pass_impl(rp, target, surface_width, surface_height,
+        text, x, y, scale, r, g, b, g_font_uniform_buffer);
+}
+
+void font_draw_overlay_text_in_pass(WGPURenderPassEncoder rp, WGPUTextureView target,
+    std::uint32_t surface_width, std::uint32_t surface_height,
+    const char* text, float x, float y, float scale,
+    std::uint8_t r, std::uint8_t g, std::uint8_t b)
+{
+    font_draw_text_in_pass_impl(rp, target, surface_width, surface_height,
+        text, x, y, scale, r, g, b, g_overlay_uniform_buffer);
 }
 
 void font_draw_text(WGPUCommandEncoder enc, WGPUTextureView target,
