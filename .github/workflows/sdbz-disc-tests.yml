@@ -12,6 +12,9 @@ on:
       - "tests/test_disc_folder_expansion.py"
       - "tests/test_eu_beta_virtual_info.py"
       - "tests/test_native_assets.py"
+      - "tests/test_native_png.py"
+      - "runtime/src/gs/native_texture.cpp"
+      - "runtime/src/gs/native_texture.hpp"
       - ".github/workflows/sdbz-disc-tests.yml"
   push:
     branches: [SDBZ]
@@ -24,6 +27,9 @@ on:
       - "tests/test_disc_folder_expansion.py"
       - "tests/test_eu_beta_virtual_info.py"
       - "tests/test_native_assets.py"
+      - "tests/test_native_png.py"
+      - "runtime/src/gs/native_texture.cpp"
+      - "runtime/src/gs/native_texture.hpp"
       - ".github/workflows/sdbz-disc-tests.yml"
   workflow_dispatch:
 
@@ -49,3 +55,4 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_disc_folder_expansion.py' -v
           python3 -m unittest discover -s tests -p 'test_eu_beta_virtual_info.py' -v
           python3 -m unittest discover -s tests -p 'test_native_assets.py' -v
+          python3 -m unittest discover -s tests -p 'test_native_png.py' -v
