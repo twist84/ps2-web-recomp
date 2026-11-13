@@ -17,6 +17,8 @@ namespace
 {
 namespace fs = std::filesystem;
 std::vector<s_pack_info> g_packs;
+std::vector<s_pack_info> g_discovered;
+fs::path g_pack_directory;
 constexpr std::uint64_t k_max_resource = 64ull * 1024 * 1024;
 
 // The pack manifest is intentionally small. This parser validates JSON
@@ -238,6 +240,8 @@ bool load_pack(const fs::path &source_path, s_pack_info &pack,
 void clear()
 {
     g_packs.clear();
+    g_discovered.clear();
+    g_pack_directory.clear();
 }
 
 void mount(const fs::path &disc_root,
@@ -256,6 +260,7 @@ void mount(const fs::path &disc_root,
     if (!fs::is_directory(base, error)) return;
     const fs::path canonical_base = fs::canonical(base, error);
     if (error) return;
+    g_pack_directory = canonical_base;
     std::set<std::string> ids;
     for (fs::directory_iterator it(base, error), end; !error && it != end;
         it.increment(error))
@@ -340,6 +345,8 @@ void mount(const fs::path &disc_root,
         }
     }
 
+    g_discovered = g_packs;
+
     g_packs.erase(std::remove_if(g_packs.begin(), g_packs.end(),
         [&disabled](const s_pack_info &pack)
         {
@@ -384,6 +391,42 @@ const std::vector<s_pack_info> &packs()
 {
     return g_packs;
 }
+
+const std::vector<s_pack_info> &discovered_packs()
+{
+    return g_discovered;
+}
+
+bool save_selection(const std::vector<std::string> &enabled_ids)
+{
+    if (g_pack_directory.empty()) return false;
+    std::set<std::string> known, enabled;
+    for (const auto &pack : g_discovered)
+    {
+        known.insert(pack.m_id);
+    }
+    for (const auto &id : enabled_ids)
+    {
+        if (!valid_pack_id(id) || !known.count(id)
+            || !enabled.insert(id).second)
+            return false;
+    }
+    const fs::path file = g_pack_directory / "load_order.txt";
+    std::error_code error;
+    if (fs::is_symlink(file, error) || error) return false;
+    std::ofstream output(file, std::ios::binary | std::ios::trunc);
+    if (!output) return false;
+    output << "# SDBZ resource packs: top enabled pack has highest priority\n";
+    for (const auto &id : enabled_ids) output << '+' << id << '\n';
+    for (const auto &pack : g_discovered)
+    {
+        if (!enabled.count(pack.m_id))
+            output << '-' << pack.m_id << '\n';
+    }
+    output.flush();
+    return output.good();
+}
+
 
 bool find_resource(const std::string &logical_path, s_resource &resource)
 {
