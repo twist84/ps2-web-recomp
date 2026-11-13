@@ -67,6 +67,7 @@ enum JobKind : std::uint32_t {
     kJobSifReply,
     kJobArkdRead,
     kJobArkdVoice,
+    kJobArkdBank,
     kJobCount
 };
 struct Job {
