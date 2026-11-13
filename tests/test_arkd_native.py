@@ -174,6 +174,12 @@ int main(int argc, char **argv)
             || value != 0x5A) return 102;
         const auto direct = ps2::disc::loose_game_assets();
         if (direct.size() != expected) return 103;
+        // Native savestates store these IDs; they must be assigned in
+        // deterministic name order, not filesystem enumeration order.
+        if (direct.front().name != "mod\\a0000.bin"
+            || direct.back().name != "mod\\a2099.bin"
+            || asset->loose_id != expected - 1)
+            return 113;
         return 0;
     }
 
