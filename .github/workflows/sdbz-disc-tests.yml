@@ -12,6 +12,9 @@ on:
       - "tests/test_disc_folder_expansion.py"
       - "tests/test_eu_beta_virtual_info.py"
       - "tests/test_native_assets.py"
+      - "tests/test_resource_packs.py"
+      - "runtime/src/resource_pack.cpp"
+      - "runtime/include/ps2/resource_pack.hpp"
       - "tests/test_native_png.py"
       - "tests/test_gs_texture_upload_trace.py"
       - "tests/test_sdbz_texture_log_analysis.py"
@@ -47,6 +50,9 @@ on:
       - "tests/test_disc_folder_expansion.py"
       - "tests/test_eu_beta_virtual_info.py"
       - "tests/test_native_assets.py"
+      - "tests/test_resource_packs.py"
+      - "runtime/src/resource_pack.cpp"
+      - "runtime/include/ps2/resource_pack.hpp"
       - "tests/test_native_png.py"
       - "tests/test_gs_texture_upload_trace.py"
       - "tests/test_sdbz_texture_log_analysis.py"
@@ -95,6 +101,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_disc_folder_expansion.py' -v
           python3 -m unittest discover -s tests -p 'test_eu_beta_virtual_info.py' -v
           python3 -m unittest discover -s tests -p 'test_native_assets.py' -v
+          python3 -m unittest discover -s tests -p 'test_resource_packs.py' -v
           python3 -m unittest discover -s tests -p 'test_native_png.py' -v
           python3 -m unittest discover -s tests -p 'test_gs_texture_upload_trace.py' -v
           python3 -m unittest discover -s tests -p 'test_sdbz_texture_log_analysis.py' -v
