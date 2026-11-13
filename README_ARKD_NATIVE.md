@@ -134,6 +134,24 @@ now returns a busy status when appropriate, schedules an emulated drive
 operation, and exposes its completion through `0x503/2`. These are
 **virtual-disc** semantics, not mechanical command parity.
 
+## Audio command admission (0x501/0x102–0x103)
+
+The remaining audio RPCs now have a native *request-queue adapter*:
+they decode their 32-bit bank/stream selector, map to original worker
+opcodes 1 and 2, and serialize the pending worker command in savestate
+version 9. All three audio commands (`0x101` preload, `0x102`,
+`0x103`) share the same busy state, consistent with the original IRX
+worker thread.
+
+**The underlying SPU2 worker is not implemented.** For `0x102` and
+`0x103`, the native queue accepts a valid request and deliberately
+finishes with an explicit unsupported-operation status
+(`0x40000064`) rather than claiming playback occurred. This status
+is available to regression tests through
+`arkd::audio_worker_status()`. Implementing request admission is not
+equivalent to implementing successful sound streaming or playback.
+The original IRX remains the default.
+
 ## Validation
 
 Run the synthetic native catalog and RPC test:
