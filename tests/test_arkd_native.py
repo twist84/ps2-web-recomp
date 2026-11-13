@@ -4,6 +4,7 @@
 import os
 import pathlib
 import shlex
+import struct
 import shutil
 import subprocess
 import tempfile
@@ -45,10 +46,23 @@ JobHandler g_read_job = nullptr;
 JobHandler g_voice_job = nullptr;
 JobHandler g_bank_job = nullptr;
 JobHandler g_audio_job = nullptr;
+JobHandler g_upload_job = nullptr;
 Job g_queued_read;
 Job g_queued_voice;
 Job g_queued_bank;
 Job g_queued_audio;
+Job g_queued_upload;
+
+struct s_capture
+{
+    std::uint32_t channel = 0;
+    std::uint32_t mode = 0;
+    std::uint32_t source = 0;
+    std::uint32_t destination = 0;
+    std::uint32_t size = 0;
+    std::vector<std::uint8_t> contents;
+};
+std::vector<s_capture> g_captures;
 std::vector<std::pair<std::uint32_t, std::uint32_t>> g_voice_writes;
 std::vector<std::vector<std::uint8_t>> g_effect_calls;
 std::vector<std::uint32_t> g_effect_cores;
@@ -56,10 +70,31 @@ bool library_exists(const std::string &name) { return name == "libsd"; }
 std::uint32_t alloc(std::uint32_t, int, std::uint32_t) { return 0x1000; }
 void free(std::uint32_t) {}
 bool call_library_export(const std::string &name, std::uint32_t ordinal,
-    std::uint32_t a0, std::uint32_t a1, std::uint32_t,
-    std::uint32_t, std::uint32_t &result, std::optional<std::uint32_t>)
+    std::uint32_t a0, std::uint32_t a1, std::uint32_t a2,
+    std::uint32_t a3, std::uint32_t &result, std::optional<std::uint32_t> a4)
 {
     if (name != "libsd") return false;
+    if (ordinal == 17)
+    {
+        if (!a4 || *a4 > 0x8000 || a2 != 0x1000
+            || a0 > 1 || a1 != 0) return false;
+        s_capture capture;
+        capture.channel = a0;
+        capture.mode = a1;
+        capture.source = a2;
+        capture.destination = a3;
+        capture.size = *a4;
+        const auto *iop_bytes = ps2::iop::ram_ptr(a2);
+        capture.contents.assign(iop_bytes, iop_bytes + *a4);
+        g_captures.push_back(std::move(capture));
+        result = *a4;
+        return true;
+    }
+    if (ordinal == 19)
+    {
+        result = 1;
+        return true;
+    }
     if (ordinal == 5)
     {
         g_voice_writes.emplace_back(a0, a1);
@@ -84,6 +119,7 @@ void register_job(std::uint32_t kind, JobHandler callback)
     else if (kind == kJobArkdVoice) g_voice_job = callback;
     else if (kind == kJobArkdBank) g_bank_job = callback;
     else if (kind == kJobArkdAudio) g_audio_job = callback;
+    else if (kind == kJobArkdSpuUpload) g_upload_job = callback;
 }
 std::uint64_t now() { return 0; }
 std::uint64_t usec_to_cycles(std::uint64_t us) { return us; }
@@ -92,6 +128,7 @@ void schedule(std::uint64_t, const Job &job)
     if (job.kind == kJobArkdVoice) g_queued_voice = job;
     else if (job.kind == kJobArkdBank) g_queued_bank = job;
     else if (job.kind == kJobArkdAudio) g_queued_audio = job;
+    else if (job.kind == kJobArkdSpuUpload) g_queued_upload = job;
     else g_queued_read = job;
 }
 }
@@ -118,7 +155,7 @@ int main(int argc, char **argv)
 
     // The native catalog operates on the synthetic DVD, with no IRX bytes.
     arkd::c_catalog catalog;
-    if (!catalog.open() || catalog.entry_count() != 3) return 2;
+    if (!catalog.open() || catalog.entry_count() != 4) return 2;
     const auto entry = catalog.find("PLY/SMALL.BIN");
     if (!entry || entry->file_size != 5000) return 3;
     if (catalog.find("missing.bin")) return 4;
@@ -516,9 +553,15 @@ class ArkdNativeHleTests(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory(prefix="arkd-native-")
         cls.root = pathlib.Path(cls.temp.name)
         cls.game = cls.root / "disc" / "GAME"
+        bank = bytearray(0x800 + 0x8040)
+        struct.pack_into("<IIIIII", bank, 4,
+                         2, 0x9000, 0x1111, 0, 0x2222, 0x100)
+        for index in range(0x8040):
+            bank[0x800 + index] = index & 0xFF
         for name, content in {
             "dis/a_first.bin": b"A" * 13,
             "ply/small.bin": b"S" * 5000,
+            "snd/test.bnk": bytes(bank),
             "trc/z_last.bin": b"Z" * 17,
         }.items():
             target = cls.game / name
