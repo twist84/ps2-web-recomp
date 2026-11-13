@@ -71,6 +71,17 @@ struct s_sound_rpc_state
 };
 s_sound_rpc_state g_sound;
 
+void reset_sound_state()
+{
+    g_sound = {};
+    // Original IRX 0x6920-0x6970 initializes these three 14-bit
+    // coefficients to 0x3FFF. Zero-initializing them would mute all
+    // subsequent sceSdSetParam voice-volume updates.
+    g_sound.master_volume = 0x3FFF;
+    g_sound.channel_volume_left = 0x3FFF;
+    g_sound.channel_volume_right = 0x3FFF;
+}
+
 std::uint32_t read_u32(const std::uint8_t *bytes)
 {
     return static_cast<std::uint32_t>(bytes[0])
@@ -530,6 +541,7 @@ bool rpc(std::uint32_t server, std::uint32_t method, std::uint32_t args,
         {
         case 1: // IRX 0x0030, subsystem initialisation.
             g_transfer_state = 0x30000000u;
+            reset_sound_state();
             g_pending.valid = false;
             reply_u32(ret, ret_size, 0);
             return true;
@@ -721,7 +733,7 @@ void install()
     g_transfer_state = 0x30000000u;
     g_transfer_serial = 0;
     g_control_value = g_transfer_block_bytes = 0;
-    g_sound = {};
+    reset_sound_state();
     if (!native_requested()) return;
     kernel::register_job(kernel::kJobArkdRead, complete_native_read);
     kernel::register_hle_module("ARKD_DVD", start_module);
@@ -743,7 +755,7 @@ void state(ps2::state::Stream &stream)
             g_transfer_state = 0x30000000u;
             g_transfer_serial = 0;
             g_control_value = g_transfer_block_bytes = 0;
-            g_sound = {};
+            reset_sound_state();
             if (native_requested() && !g_catalog.open())
                 throw std::runtime_error("cannot restore native ARKD asset catalog");
         }
