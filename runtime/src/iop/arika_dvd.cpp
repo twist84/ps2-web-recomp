@@ -205,9 +205,14 @@ struct s_sound_rpc_state
 };
 s_sound_rpc_state g_sound;
 
+// IRX globals 0x13258/0x1325A hold one pair of source gain words
+// per physical voice, independent of the alternating command buffers.
+std::array<std::array<std::uint16_t, 2>, 46> g_voice_source_volumes{};
+
 void reset_sound_state()
 {
     g_sound = {};
+    g_voice_source_volumes = {};
     // Original IRX 0x6920-0x6970 initializes these three 14-bit
     // coefficients to 0x3FFF. Zero-initializing them would mute all
     // subsequent sceSdSetParam voice-volume updates.
@@ -266,6 +271,69 @@ void reply_pair(std::uint32_t ret, std::uint32_t length,
 {
     if (length >= 4) reply_u32(ret, length, first);
     if (length >= 8) reply_u32(ret + 4, length - 4, second);
+}
+
+std::uint16_t scale_voice_gain(std::uint16_t source,
+    std::uint16_t master, std::uint16_t channel)
+{
+    // Original IRX 0x4F78-0x4FB4 and 0x4FEC-0x5028:
+    // MIPS mult/mflo, logical shift by 14, multiply, shift by 14.
+    // Use unsigned 32-bit arithmetic to preserve guest wrap semantics.
+    const std::uint32_t first =
+        (static_cast<std::uint32_t>(source) * master) >> 14;
+    return static_cast<std::uint16_t>((first * channel) >> 14);
+}
+
+void refresh_live_voice_gains()
+{
+    // IRX 0x4DBC runs immediately when the master/channel/mixing
+    // controls change, but only touches voices marked active.
+    if (!(g_sound.active_voice_masks[0] | g_sound.active_voice_masks[1]))
+        return;
+    if (!kernel::library_exists("libsd"))
+    {
+        std::fprintf(stderr,
+            "[arkd-native] cannot refresh voice gains without libsd\n");
+        return;
+    }
+
+    for (std::uint32_t index = 0; index < g_voice_source_volumes.size(); ++index)
+    {
+        const std::uint32_t word = index >> 5;
+        const std::uint32_t bit = 1u << (index & 31u);
+        if (!(g_sound.active_voice_masks[word] & bit))
+            continue;
+
+        const std::uint32_t core = index / 24u;
+        const std::uint32_t voice = index % 24u;
+        const std::uint32_t reg = core | (voice << 1u);
+        const auto &source = g_voice_source_volumes[index];
+
+        // IRX 0x4EC0-0x4F50: when mono/mix-disable bit 16 is set,
+        // combine both source words for the first register and zero
+        // the second. Otherwise source +10 drives the first register
+        // and source +8 the second register.
+        const bool mono = (g_sound.streaming_flags & 0x10000u) != 0;
+        const std::uint16_t first = mono
+            ? static_cast<std::uint16_t>(source[0] | source[1])
+            : source[1];
+        const std::uint16_t second = mono ? 0u : source[0];
+        const std::uint16_t first_gain = scale_voice_gain(
+            first, g_sound.master_volume, g_sound.channel_volume_left);
+        const std::uint16_t second_gain = scale_voice_gain(
+            second, g_sound.master_volume, g_sound.channel_volume_right);
+
+        std::uint32_t result = 0;
+        if (!kernel::call_library_export("libsd", 5,
+                reg, first_gain, 0, 0, result)
+            || !kernel::call_library_export("libsd", 5,
+                reg | 0x100u, second_gain, 0, 0, result))
+        {
+            std::fprintf(stderr,
+                "[arkd-native] live voice gain update failed (voice %u)\n",
+                index);
+        }
+    }
 }
 
 void process_voice_mutes(const kernel::Job &job)
@@ -870,18 +938,25 @@ bool sound_command_rpc(std::uint32_t method, std::uint32_t args,
         if (args_size < 2 || !ee_range(args, 2)) break;
         std::memcpy(&g_sound.master_volume,
             ps2::g_ram + (args & (ps2::kRamSize - 1)), 2);
+        refresh_live_voice_gains();
         reply_u32(ret, ret_size, 0);
         return true;
     case 0x13: // IRX 0x5108, enable/disable mixing by request u32.
         if (!read_input(4)) break;
         if (value) g_sound.streaming_flags &= ~0x10000u;
         else g_sound.streaming_flags |= 0x10000u;
+        refresh_live_voice_gains();
         reply_u32(ret, ret_size, 0);
         return true;
     case 0x14: // IRX 0x50A8, left/right u16 volume controls.
-        if (!copy_input(&g_sound.channel_volume_left, 2)) break;
+        // Validate both fields before copying either: the old HLE read
+        // the second u16 from an unvalidated request buffer.
+        if (args_size < 4 || !ee_range(args, 4)) break;
+        std::memcpy(&g_sound.channel_volume_left,
+            ps2::g_ram + (args & (ps2::kRamSize - 1)), 2);
         std::memcpy(&g_sound.channel_volume_right,
             ps2::g_ram + (args & (ps2::kRamSize - 1)) + 2, 2);
+        refresh_live_voice_gains();
         reply_u32(ret, ret_size, 0);
         return true;
     case 0x81: // IRX 0x5194, set control bit 0.
@@ -1380,6 +1455,16 @@ std::optional<std::uint32_t> sound_bank_spu_address(std::uint32_t bank_id)
     return g_spu_banks[bank_id].base;
 }
 
+bool record_voice_volume_state(std::uint32_t index,
+    std::uint16_t source_volume_0, std::uint16_t source_volume_1)
+{
+    if (index >= g_voice_source_volumes.size())
+        return false;
+    g_voice_source_volumes[index] = {source_volume_0, source_volume_1};
+    g_sound.active_voice_masks[index >> 5] |= 1u << (index & 31u);
+    return true;
+}
+
 bool sound_bank_ready()
 {
     return g_bank_ready;
@@ -1582,6 +1667,19 @@ void state(ps2::state::Stream &stream)
         g_cached_banks = {};
         if (g_loaded_bank_id < k_sound_bank_slots && g_bank_ready)
             g_cached_banks[g_loaded_bank_id] = g_sound_bank_data;
+    }
+
+    if (stream.version() >= 13)
+    {
+        stream.pod(g_voice_source_volumes);
+    }
+    else if (stream.loading())
+    {
+        // Older experimental HLE builds never populated active voice
+        // bookkeeping; their source volumes are not available to
+        // reconstruct gain writes after restoration.
+        g_voice_source_volumes = {};
+        g_sound.active_voice_masks = {};
     }
 
     if (stream.loading() && native && !g_catalog.open())
