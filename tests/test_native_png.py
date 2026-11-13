@@ -111,6 +111,7 @@ class PngDecodeTests(unittest.TestCase):
             "-I", str(ROOT / "runtime/include"),
             "-I", str(ROOT / "runtime/src"),
             str(source), str(ROOT / "runtime/src/gs/native_texture.cpp"),
+            str(ROOT / "runtime/src/resource_pack.cpp"),
             "-lz", "-o", str(cls.executable)], check=True)
 
     @classmethod
