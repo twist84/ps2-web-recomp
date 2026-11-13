@@ -212,9 +212,27 @@ and DMA transfers remain untouched.
 Overlapping GS transfers invalidate resident mappings, including repeated
 uploads into the same TBP. Missing, corrupt or dimension-mismatched PNGs use
 the original texture. PNG alpha (0–255) is translated to GS alpha (0–128).
-The native RGB/RGBA PNG decoder currently requires **exact dimensions**
-(256×256 for chunk 000, 512×512 for chunks 001–012); higher resolution
-replacement scaling remains future work.
+The native RGB/RGBA PNG decoder accepts **original dimensions or exactly
+2× dimensions**: 256×256 or 512×512 for chunk 000; 512×512 or
+1024×1024 for chunks 001–012. The guest's original UV coordinates remain
+unchanged. CPU and WebGPU sampling scale UVs at the native texture boundary,
+including nearest and bilinear filtering and the GS clamp/wrap modes.
+Nonuniform, arbitrary, and larger-scale replacements are rejected and fall
+back to the original GS textures. The WebGPU native atlas buffer uses fixed
+1024×1024 slots, requiring about 52 MiB of device storage.
+
+The verified source fingerprint table is generated from
+`docs/sdbz-main-menu-verified-fingerprints.csv`:
+
+```sh
+python3 scripts/generate_native_menu_manifest.py
+python3 scripts/generate_native_menu_manifest.py --check
+```
+
+This creates `runtime/src/gs/native_menu_manifest.hpp`; the generated file
+is checked in so users do not need Python to build the runtime. The manifest
+remains limited to the 13 verified EU-beta menu atlases; other game files
+require their own verified source/upload mappings.
 
 The software renderer and WebGPU compute shader both include replacement
 sampling, but **in-game fidelity and shader runtime validation still need
