@@ -42,6 +42,15 @@ jobs:
             git add runtime/src/iop/kernel.hpp
             git commit -m "Preserve main IOP CD seek job alongside ARKD jobs"
           fi
+          # PR 2 advances the native savestate format from main's v7 to
+          # v12. Preserve the test's intent: reject unsupported versions
+          # before any guest memory or CPU state can be modified.
+          if grep -q 'check(version == 7,' tests/gt3_state_test.cpp; then
+            sed -i 's/check(version == 7, "new snapshot layout uses version 7")/check(version >= 7, "snapshot schema is version 7 or later")/' tests/gt3_state_test.cpp
+            sed -i 's/{0u, 1u, 8u}/{0u, 1u, version + 1u}/' tests/gt3_state_test.cpp
+            git add tests/gt3_state_test.cpp
+            git commit -m "Make GT3 snapshot version regression compatible with ARKD v12"
+          fi
           echo "Replayed commits: $(git rev-list --count origin/SDBZ..HEAD)"
           python3 -m unittest discover -s tests -p 'test_game_dat_loose_assets.py' -v
           python3 -m unittest discover -s tests -p 'test_disc_folder_expansion.py' -v
