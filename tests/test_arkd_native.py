@@ -248,6 +248,11 @@ int main(int argc, char **argv)
     }
     if (!left_muted || !right_muted) return 52;
 
+    // Reset the synthetic test's earlier voice-command bytes. Their
+    // pseudo-random flags otherwise request unrelated sound writes.
+    if (!ps2::sif::g_handlers.at(0x500)(1, 0, 0, 0x180, 4)
+        || word(0x180) != 0) return 55;
+
     // The IRX splits command masks at 32 voices, but chooses SPU2
     // register IDs using 24 voices per core. Exercise both boundaries.
     kernel::g_voice_writes.clear();
