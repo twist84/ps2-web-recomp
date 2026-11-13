@@ -233,6 +233,43 @@ ordinal 19 before changing or freeing the buffer. This sequence is
 covered by synthetic DMA tests, **not** by differential validation of
 the original IRQ, completion callback ordering, or gameplay playback.
 
+## Live voice gain recalculation (0x501/0x12, 0x13, 0x14)
+
+Original `ARKD_DVD.IRX` routines `0x505C`, `0x5108`, and
+`0x50A8` all call `0x4DBC` after changing master volume, mono-mode,
+or channel volume. Previously native HLE only remembered these values;
+existing SPU2 voices would retain their old gain.
+
+The original `0x4DBC` walks **46 voice slots** and checks active
+masks indexed as `voice_index / 32`. Active slots have two retained
+source volume words (IRX globals `0x13258` and `0x1325A`) with 4
+bytes per voice. `sceSdSetParam` (libsd export 5) receives:
+
+- `reg = (voice_index / 24) | ((voice_index % 24) << 1)`:
+  source `+10` scaled by the master and *first* channel coefficient.
+- `reg | 0x100`: source `+8` scaled by the master and *second*
+  channel coefficient.
+- If the IRX mixing-control flag `0x10000` is set, the source pair
+  is bitwise ORed for the first register and the second source is zero.
+
+Each gain stage is a 32-bit multiplication followed by a **logical
+right shift of 14** (`(source * master >> 14) * channel >> 14`).
+Native HLE now performs these writes immediately for active voices
+upon all three RPC control calls and checks the entire four-byte
+channel request before reading either `u16` (the previous handler
+could read past a truncated request).
+
+Native HLE now retains the source gain pair independently of the two
+alternating command buffers. That per-voice bookkeeping is serialized
+in savestate **version 13**, with older native savestates preserving
+their previous sections. `record_voice_volume_state()` provides a
+bookkeeping entry point for the unported 46-voice startup worker.
+
+**Remaining dependency:** full voice startup must call that
+bookkeeping entry after a real libsd start. This change closes the
+gain-control path for *tracked active voices*; it does not by itself
+make the incomplete native voice-start path functional.
+
 ## Sound worker details confirmed from original MIPS instructions
 
 - IRX `0x6920-0x6970`: the three sound-volume multipliers
