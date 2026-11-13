@@ -99,7 +99,8 @@ class ResourcePackTests(unittest.TestCase):
         subprocess.run(compiler + ["-std=c++20", "-Wall", "-Wextra",
             "-I", str(ROOT / "runtime/include"),
             str(cls.source), str(ROOT / "runtime/src/resource_pack.cpp"),
-            "-o", str(cls.binary)], check=True)
+            str(ROOT / "runtime/src/resource_pack_zip.cpp"),
+            "-lz", "-o", str(cls.binary)], check=True)
 
     @classmethod
     def tearDownClass(cls):
