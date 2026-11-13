@@ -453,6 +453,146 @@ bool queue_audio_command(std::uint32_t method,
     return true;
 }
 
+void complete_spu_upload(const kernel::Job &job)
+{
+    if (!g_spu_upload.pending || job.a != g_spu_upload.serial)
+        return;
+
+    auto &upload = g_spu_upload;
+    auto fail = [&upload]()
+    {
+        upload.pending = false;
+        upload.waiting_for_dma = false;
+        upload.state = 0x40000064u;
+        if (upload.staging_iop)
+        {
+            kernel::free(upload.staging_iop);
+            upload.staging_iop = 0;
+        }
+    };
+
+    // Source RAM must remain allocated until the asynchronous SPU2 DMA
+    // finishes. Poll libsd #19 before changing or freeing the staging RAM.
+    if (upload.waiting_for_dma)
+    {
+        std::uint32_t completed = 0;
+        if (!kernel::call_library_export("libsd", 19, upload.bank_id & 1u,
+                0, 0, 0, completed))
+        {
+            fail();
+            return;
+        }
+        if (!completed)
+        {
+            if (++upload.polls > 10000)
+            {
+                fail();
+                return;
+            }
+            kernel::schedule(kernel::now() + kernel::usec_to_cycles(200),
+                kernel::Job{kernel::kJobArkdSpuUpload, upload.serial});
+            return;
+        }
+        upload.waiting_for_dma = false;
+        upload.offset += upload.chunk;
+        upload.chunk = 0;
+        upload.polls = 0;
+    }
+
+    if (upload.offset == upload.data_size)
+    {
+        upload.pending = false;
+        upload.state = 0x30000000u;
+        kernel::free(upload.staging_iop);
+        upload.staging_iop = 0;
+        return;
+    }
+    if (upload.offset > upload.data_size
+        || g_sound_bank_data.size() < 0x800u + upload.data_size)
+    {
+        fail();
+        return;
+    }
+
+    const std::uint32_t remaining = upload.data_size - upload.offset;
+    const std::uint32_t chunk = std::min(remaining, k_iop_stage_bytes);
+    const std::uint32_t padded = (chunk + 15u) & ~15u;
+    if (upload.spu_address > k_spu_limit
+        || upload.offset > k_spu_limit - upload.spu_address
+        || padded > k_spu_limit - (upload.spu_address + upload.offset))
+    {
+        fail();
+        return;
+    }
+
+    // Copy into a persistent IOP buffer; pad the last 16-byte block.
+    // SPU2 sample data starts after the 2 KiB sound-bank header.
+    std::memset(iop::ram_ptr(upload.staging_iop), 0, padded);
+    std::memcpy(iop::ram_ptr(upload.staging_iop),
+        g_sound_bank_data.data() + 0x800u + upload.offset, chunk);
+
+    std::uint32_t transferred = 0;
+    if (!kernel::call_library_export("libsd", 17, upload.bank_id & 1u,
+            0, upload.staging_iop, upload.spu_address + upload.offset,
+            transferred, padded)
+        || static_cast<std::int32_t>(transferred) < 0)
+    {
+        fail();
+        return;
+    }
+
+    upload.state = 0x20000000u;
+    upload.chunk = chunk;
+    upload.waiting_for_dma = true;
+    kernel::schedule(kernel::now() + kernel::usec_to_cycles(200),
+        kernel::Job{kernel::kJobArkdSpuUpload, upload.serial});
+}
+
+void begin_spu_upload()
+{
+    g_spu_upload.state = 0x40000064u;
+    const auto metadata = inspect_sound_bank(
+        g_sound_bank_data.data(), g_sound_bank_data.size());
+    if (!metadata || g_loaded_bank_id >= k_sound_bank_slots
+        || !kernel::library_exists("libsd")
+        || g_sound_bank_data.size() <= 0x800u
+        || g_spu_upload.pending)
+        return;
+
+    const std::size_t samples = g_sound_bank_data.size() - 0x800u;
+    const std::uint32_t allocation =
+        (metadata->spu_memory_bytes + 63u) & ~63u;
+    if (samples > allocation || samples > k_spu_limit)
+        return;
+
+    auto &bank = g_spu_banks[g_loaded_bank_id];
+    if (bank.size < allocation)
+    {
+        if (g_spu_next > k_spu_limit
+            || allocation > k_spu_limit - g_spu_next)
+            return;
+        bank = {g_spu_next, allocation};
+        g_spu_next += allocation;
+    }
+
+    const std::uint32_t staging = kernel::alloc(k_iop_stage_bytes);
+    if (!staging || (iop::phys(staging) & (iop::kRamSize - 1))
+        > iop::kRamSize - k_iop_stage_bytes)
+        return;
+
+    auto &upload = g_spu_upload;
+    upload = {};
+    upload.bank_id = g_loaded_bank_id;
+    upload.spu_address = bank.base;
+    upload.staging_iop = staging;
+    upload.data_size = static_cast<std::uint32_t>(samples);
+    upload.state = 0x10000000u;
+    upload.serial = ++g_bank_serial;
+    upload.pending = true;
+    kernel::schedule(kernel::now() + kernel::usec_to_cycles(200),
+        kernel::Job{kernel::kJobArkdSpuUpload, upload.serial});
+}
+
 void complete_sound_bank(const kernel::Job &job)
 {
     if (!g_pending_bank.valid || job.a != g_pending_bank.serial)
