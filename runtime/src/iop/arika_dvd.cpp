@@ -1053,6 +1053,20 @@ void c_catalog::clear()
 bool c_catalog::open()
 {
     clear();
+    // A folder-backed native mount exposes the entire GAME/ tree,
+    // without rebuilding INFO.DAT or relying on the IRX's 2047 slots.
+    const auto loose = disc::loose_game_assets();
+    if (!loose.empty())
+    {
+        for (const auto &asset : loose)
+        {
+            if (!m_assets.emplace(name_key(asset.name),
+                    s_asset{0, asset.size, asset.id}).second)
+                return false;
+        }
+        return true;
+    }
+
     const auto info = disc::find("INFO.DAT");
     const auto game = disc::find("GAME.DAT");
     if (!info || !game || info->directory || game->directory
@@ -1120,6 +1134,9 @@ std::size_t c_catalog::read(const s_asset &asset, std::uint32_t offset,
         return 0;
     const std::size_t requested = std::min<std::size_t>(
         capacity, asset.file_size - offset);
+    if (asset.loose_id != UINT32_MAX)
+        return disc::read_loose_game_asset(asset.loose_id, offset,
+            destination, requested);
     auto *target = static_cast<std::uint8_t *>(destination);
     std::size_t copied = 0;
     std::vector<std::uint8_t> scratch(k_read_chunk_sectors * k_sector_bytes);
@@ -1312,6 +1329,10 @@ void state(ps2::state::Stream &stream)
     stream.pod(g_transfer_block_bytes);
     stream.pod(g_pending.asset.relative_sector);
     stream.pod(g_pending.asset.file_size);
+    if (stream.version() >= 11)
+        stream.pod(g_pending.asset.loose_id);
+    else if (stream.loading())
+        g_pending.asset.loose_id = UINT32_MAX;
     stream.pod(g_pending.destination);
     stream.pod(g_pending.serial);
     stream.pod(g_pending.valid);
@@ -1322,6 +1343,10 @@ void state(ps2::state::Stream &stream)
     {
         stream.pod(g_pending_bank.asset.relative_sector);
         stream.pod(g_pending_bank.asset.file_size);
+        if (stream.version() >= 11)
+            stream.pod(g_pending_bank.asset.loose_id);
+        else if (stream.loading())
+            g_pending_bank.asset.loose_id = UINT32_MAX;
         stream.pod(g_pending_bank.bank_id);
         stream.pod(g_pending_bank.serial);
         stream.pod(g_pending_bank.valid);
