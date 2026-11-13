@@ -257,9 +257,93 @@ void mount(const fs::path &disc_root,
             info.m_id.c_str(), info.m_priority);
         g_packs.push_back(std::move(info));
     }
-    std::sort(g_packs.begin(), g_packs.end(),
-        [](const s_pack_info &a, const s_pack_info &b)
+    // Optional user-controlled order. Explicitly listed packs precede
+    // unlisted packs (which retain their manifest priority ordering).
+    // Prefix + enables a pack; - disables it. Names are folder IDs.
+    std::map<std::string, std::size_t> explicit_order;
+    std::set<std::string> disabled;
+    const fs::path order_file = canonical_base / "load_order.txt";
+    error.clear();
+    if (fs::is_regular_file(order_file, error) && !error
+        && !fs::is_symlink(order_file, error) && !error)
+    {
+        error.clear();
+        const auto bytes = fs::file_size(order_file, error);
+        if (!error && bytes <= 16384)
         {
+            std::ifstream input(order_file);
+            std::string line;
+            std::size_t line_number = 0;
+            while (line_number < 256 && std::getline(input, line))
+            {
+                ++line_number;
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (line.empty() || line[0] == '#') continue;
+                const char flag = line[0];
+                const std::string name = line.substr(1);
+                if ((flag != '+' && flag != '-') || !valid_pack_id(name))
+                {
+                    std::fprintf(stderr,
+                        "[resource-pack] ignoring invalid order entry at line %zu\n",
+                        line_number);
+                    continue;
+                }
+                std::string key = name;
+                std::transform(key.begin(), key.end(), key.begin(),
+                    [](unsigned char ch)
+                    {
+                        return static_cast<char>(std::tolower(ch));
+                    });
+                if (!explicit_order.emplace(key, line_number).second)
+                {
+                    std::fprintf(stderr,
+                        "[resource-pack] ignoring duplicate order entry at line %zu\n",
+                        line_number);
+                    continue;
+                }
+                if (flag == '-') disabled.insert(key);
+            }
+        }
+        else
+        {
+            warn(order_file, "load order exceeds 16 KiB");
+        }
+    }
+
+    g_packs.erase(std::remove_if(g_packs.begin(), g_packs.end(),
+        [&disabled](const s_pack_info &pack)
+        {
+            std::string key = pack.m_id;
+            std::transform(key.begin(), key.end(), key.begin(),
+                [](unsigned char ch)
+                {
+                    return static_cast<char>(std::tolower(ch));
+                });
+            if (!disabled.count(key)) return false;
+            std::fprintf(stderr, "[resource-pack] disabled %s\n",
+                pack.m_id.c_str());
+            return true;
+        }), g_packs.end());
+
+    std::sort(g_packs.begin(), g_packs.end(),
+        [&explicit_order](const s_pack_info &a, const s_pack_info &b)
+        {
+            auto lookup = [&explicit_order](const std::string &id)
+            {
+                std::string key = id;
+                std::transform(key.begin(), key.end(), key.begin(),
+                    [](unsigned char ch)
+                    {
+                        return static_cast<char>(std::tolower(ch));
+                    });
+                return explicit_order.find(key);
+            };
+            const auto ai = lookup(a.m_id);
+            const auto bi = lookup(b.m_id);
+            if ((ai != explicit_order.end()) != (bi != explicit_order.end()))
+                return ai != explicit_order.end();
+            if (ai != explicit_order.end() && bi != explicit_order.end())
+                return ai->second < bi->second;
             if (a.m_priority != b.m_priority)
                 return a.m_priority > b.m_priority;
             return a.m_id < b.m_id;
