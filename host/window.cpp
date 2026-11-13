@@ -622,8 +622,8 @@ void poll() {
                     && g_pack_row >= 9 ? g_pack_row - 8 : 0;
                 const int available_offset = g_pack_column == 0
                     && g_pack_row >= 9 ? g_pack_row - 8 : 0;
-                const int enabled_start = 5;
-                const int available_start = 7
+                const int enabled_start = 6;
+                const int available_start = 8
                     + static_cast<int>(std::min<std::size_t>(9, g_pack_enabled.size()));
                 bool clicked_pack = false;
                 if (e.button.x >= static_cast<int>(window_w * 0.06f)
