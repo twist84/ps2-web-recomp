@@ -125,7 +125,10 @@ void refresh_pack_overlay()
         "",
         "ENABLED - highest priority first"
     };
-    for (std::size_t i = 0; i < g_pack_enabled.size() && i < 9; ++i)
+    const std::size_t enabled_offset = g_pack_column == 1 && g_pack_row >= 9
+        ? static_cast<std::size_t>(g_pack_row - 8) : 0u;
+    for (std::size_t i = enabled_offset;
+        i < g_pack_enabled.size() && i < enabled_offset + 9; ++i)
     {
         lines.push_back(std::string(g_pack_column == 1
             && g_pack_row == static_cast<int>(i) ? "> " : "  ")
@@ -133,7 +136,10 @@ void refresh_pack_overlay()
     }
     lines.push_back("");
     lines.push_back("AVAILABLE - disabled");
-    for (std::size_t i = 0; i < g_pack_available.size() && i < 9; ++i)
+    const std::size_t available_offset = g_pack_column == 0 && g_pack_row >= 9
+        ? static_cast<std::size_t>(g_pack_row - 8) : 0u;
+    for (std::size_t i = available_offset;
+        i < g_pack_available.size() && i < available_offset + 9; ++i)
     {
         lines.push_back(std::string(g_pack_column == 0
             && g_pack_row == static_cast<int>(i) ? "> " : "  ")
@@ -606,6 +612,10 @@ void poll() {
                 const float first_y = window_h * 0.10f;
                 const int line = static_cast<int>(
                     (static_cast<float>(e.button.y) - first_y) / step);
+                const int enabled_offset = g_pack_column == 1
+                    && g_pack_row >= 9 ? g_pack_row - 8 : 0;
+                const int available_offset = g_pack_column == 0
+                    && g_pack_row >= 9 ? g_pack_row - 8 : 0;
                 const int enabled_start = 5;
                 const int available_start = 7
                     + static_cast<int>(std::min<std::size_t>(9, g_pack_enabled.size()));
@@ -613,13 +623,13 @@ void poll() {
                     + static_cast<int>(std::min<std::size_t>(9, g_pack_enabled.size())))
                 {
                     g_pack_column = 1;
-                    g_pack_row = line - enabled_start;
+                    g_pack_row = line - enabled_start + enabled_offset;
                 }
                 else if (line >= available_start && line < available_start
                     + static_cast<int>(std::min<std::size_t>(9, g_pack_available.size())))
                 {
                     g_pack_column = 0;
-                    g_pack_row = line - available_start;
+                    g_pack_row = line - available_start + available_offset;
                 }
                 if (e.button.button == SDL_BUTTON_RIGHT || e.button.clicks >= 2)
                     handle_pack_key(g_pack_column == 1
