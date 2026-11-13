@@ -909,17 +909,19 @@ bool sound_command_rpc(std::uint32_t method, std::uint32_t args,
     }
     case 2: // IRX 0x4AC0, OR the two command flag words.
         if (!read_input(8)) break;
+        // Original 0x4AC0 increments the global generation before
+        // ORing the two flag words into the selected alternating slot.
+        ++g_sound.buffer_generation;
+        const std::uint32_t parity = g_sound.buffer_generation & 1u;
         for (std::uint32_t index = 0; index < 2; ++index)
         {
             const auto *source = ps2::g_ram
                 + (args & (ps2::kRamSize - 1)) + 4 * index;
-            g_sound.command_flags[(g_sound.buffer_generation + 1) & 1][index]
-                |= read_u32(source);
+            g_sound.command_flags[parity][index] |= read_u32(source);
         }
         ++g_sound.submitted_generation;
         kernel::schedule(kernel::now() + kernel::usec_to_cycles(100),
-            kernel::Job{kernel::kJobArkdVoice,
-                (g_sound.buffer_generation + 1) & 1u});
+            kernel::Job{kernel::kJobArkdVoice, parity});
         reply_u32(ret, ret_size, 0);
         return true;
     case 3: // IRX 0x4BB8, copy 0x33C stream command bytes.
@@ -927,7 +929,10 @@ bool sound_command_rpc(std::uint32_t method, std::uint32_t args,
         const std::uint32_t next = (g_sound.buffer_generation + 1) & 1;
         if (!copy_input(g_sound.sound_commands[next].data(), 0x33C)) break;
         ++g_sound.buffer_generation;
-        ++g_sound.submitted_generation;
+        // Unlike 0x4A10 and 0x4AC0, original 0x4BB8 only signals
+        // pending work if the completion counter is currently zero.
+        if (!g_sound.submitted_generation)
+            ++g_sound.submitted_generation;
         kernel::schedule(kernel::now() + kernel::usec_to_cycles(100),
             kernel::Job{kernel::kJobArkdVoice,
                 g_sound.buffer_generation & 1u});
