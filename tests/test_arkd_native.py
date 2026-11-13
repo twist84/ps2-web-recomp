@@ -240,6 +240,39 @@ int main(int argc, char **argv)
     kernel::g_read_job(saved_job);
     ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
     if (word(0x180) != 0x30000000u) return 47;
+
+    // Reject restoring a native savestate with the original driver
+    // selected; mixing backends would discard the queued native work.
+#ifdef _WIN32
+    _putenv_s("SDBZ_ARKD_NATIVE", "");
+#else
+    unsetenv("SDBZ_ARKD_NATIVE");
+#endif
+    bool rejected = false;
+    try
+    {
+        ps2::state::Reader mismatched(writer.out.data(), writer.out.size());
+        mismatched.set_version(7);
+        arkd::state(mismatched);
+    }
+    catch (const std::runtime_error &)
+    {
+        rejected = true;
+    }
+    if (!rejected) return 48;
+
+#ifdef _WIN32
+    _putenv_s("SDBZ_ARKD_NATIVE", "1");
+#else
+    setenv("SDBZ_ARKD_NATIVE", "1", 1);
+#endif
+
+    // Legacy v6 state files contain no native arkd section.
+    ps2::state::Reader old_state(nullptr, 0);
+    old_state.set_version(6);
+    arkd::state(old_state);
+    ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
+    if (word(0x180) != 0x30000000u) return 49;
     return 0;
 }
 '''
