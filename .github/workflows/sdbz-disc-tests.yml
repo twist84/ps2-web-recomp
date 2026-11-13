@@ -14,6 +14,8 @@ on:
       - "tests/test_native_assets.py"
       - "tests/test_native_png.py"
       - "tests/test_gs_texture_upload_trace.py"
+      - "tests/test_sdbz_texture_log_analysis.py"
+      - "scripts/analyze_sdbz_texture_log.py"
       - "runtime/src/gs/gs.cpp"
       - "runtime/src/gs/texture_upload_trace.hpp"
       - "runtime/src/gs/native_texture.cpp"
@@ -32,6 +34,8 @@ on:
       - "tests/test_native_assets.py"
       - "tests/test_native_png.py"
       - "tests/test_gs_texture_upload_trace.py"
+      - "tests/test_sdbz_texture_log_analysis.py"
+      - "scripts/analyze_sdbz_texture_log.py"
       - "runtime/src/gs/gs.cpp"
       - "runtime/src/gs/texture_upload_trace.hpp"
       - "runtime/src/gs/native_texture.cpp"
@@ -63,3 +67,4 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_native_assets.py' -v
           python3 -m unittest discover -s tests -p 'test_native_png.py' -v
           python3 -m unittest discover -s tests -p 'test_gs_texture_upload_trace.py' -v
+          python3 -m unittest discover -s tests -p 'test_sdbz_texture_log_analysis.py' -v

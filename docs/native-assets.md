@@ -74,6 +74,20 @@ Interrupted uploads are labelled `partial`. `[gs-texture] bind` records
 show the `TEX0` value, buffer pointer, format and dimensions chosen for
 texture sampling.
 
+Use `scripts/analyze_sdbz_texture_log.py` to summarize a raw capture,
+including Windows PowerShell UTF-16 stderr redirects:
+
+```sh
+python3 scripts/analyze_sdbz_texture_log.py gs-textures.log --output texture-report
+```
+
+The tool creates `uploads.csv` (deduplicated upload layout and content hash),
+`bindings.csv` (deduplicated TEX0 bindings), `reused_destinations.csv`
+(GS addresses with different payloads/layouts), and
+`atlas_candidates.csv` (complete 256x256 and 512x512 uploads, suitable
+for further FPIX investigation). These are observations, **not automatic
+FPIX chunk mappings**.
+
 **The fingerprint is diagnostic, not an asset identity.** GS addresses are
 reused and an Arika FPIX/TIM2 source may have been transformed or swizzled
 before reaching GS memory. Matching FPIX directory entries to actual
