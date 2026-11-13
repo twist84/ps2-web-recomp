@@ -8,7 +8,9 @@
 #include <limits>
 #include <vector>
 
+#ifndef PS2_NATIVE_PNG_WIC
 #include <zlib.h>
+#endif
 
 namespace ps2::gs::native_texture
 {
@@ -17,6 +19,8 @@ namespace
 constexpr std::uint32_t k_max_dimension = 4096;
 constexpr std::size_t k_max_file_bytes = 64u * 1024u * 1024u;
 constexpr std::uint8_t k_signature[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+
+#ifndef PS2_NATIVE_PNG_WIC
 
 std::uint32_t read_be32(const std::uint8_t *p)
 {
@@ -37,7 +41,9 @@ int paeth(int a, int b, int c)
     return c;
 }
 }
+#endif
 
+#ifndef PS2_NATIVE_PNG_WIC
 bool decode_png(const std::uint8_t *data, std::size_t size, s_image &output)
 {
     output = {};
@@ -143,6 +149,8 @@ bool decode_png(const std::uint8_t *data, std::size_t size, s_image &output)
     output.rgba = std::move(rgba);
     return true;
 }
+
+#endif
 
 bool load_fpix_chunk_png(const std::string &game_path,
     std::uint32_t chunk_index, s_image &output)
