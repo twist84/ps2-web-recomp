@@ -78,6 +78,13 @@ The latest draft includes the following **statically recovered** handlers:
 | `0x502` | `1`–`5`, `0x101`–`0x103` | Stream control flags and packet storage, not full SPU2 playback |
 | `0x503` | `1`–`4`, `0x81`, `0x101`, `0x102`, `0x103` | File copy, CDVD initialization and virtual-disc control use approximate native timing; physical-drive errors aren't emulated |
 
+The `0x501/0x101` handler now resolves and asynchronously loads the
+named archive asset into a bounded native sound-bank cache. Its first
+request word is retained as the bank ID. A successfully loaded bank is
+accessible to the next native SPU2 upload stage, but **it is not yet
+uploaded or played**. This bank data and the pending request are included
+in **savestate version 8**. The cache has a 64 MiB per-bank maximum.
+
 The `0x501/0x11` handler forwards both real 16-byte `sceSdEffectAttr`
 structures to **the game's own `LIBSD.IRX` export ordinal 23** via the
 existing IOP guest-library call bridge. There is no need to duplicate
@@ -89,8 +96,9 @@ exposes the 0x10000000/0x20000000/0x30000000 transfer phases. The
 queued job. The actual original-IRX timing and interrupts still require
 comparison before declaring equivalence.
 
-**Still unimplemented:** `0x501/0x101`–`0x103` sound/stream bank
-workers, voice-start and complete parameter updates, exact SIF DMA/interrupt
+**Still unimplemented:** the SPU2 upload/completion portion of
+`0x501/0x101`, the `0x501/0x102`–`0x103` sound/stream bank workers,
+voice-start and complete parameter updates, exact SIF DMA/interrupt
 callbacks, and physical-disc error parity. The `0x503/0x103` native
 worker now handles the command queue and virtual-media completion for
 opcodes 1–8, but does not reproduce mechanical CD/DVD operations.
