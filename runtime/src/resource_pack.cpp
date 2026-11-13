@@ -216,11 +216,19 @@ void clear()
     g_packs.clear();
 }
 
-void mount(const fs::path &disc_root)
+void mount(const fs::path &disc_root,
+    const fs::path &executable_directory)
 {
     clear();
     std::error_code error;
-    const fs::path base = disc_root.parent_path() / "resourcepacks";
+    // Standalone builds keep resource packs beside SDBZ.exe. For existing
+    // development layouts, retain the disc-adjacent location as a fallback.
+    const fs::path executable_base = executable_directory / "resourcepacks";
+    const fs::path fallback_base = disc_root.parent_path() / "resourcepacks";
+    const fs::path base = !executable_directory.empty()
+        && fs::is_directory(executable_base, error) && !error
+        ? executable_base : fallback_base;
+    error.clear();
     if (!fs::is_directory(base, error)) return;
     const fs::path canonical_base = fs::canonical(base, error);
     if (error) return;
