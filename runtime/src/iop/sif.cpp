@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <stdexcept>
@@ -152,6 +153,25 @@ void call(const std::uint8_t *packet) {
     Call c;
     std::memcpy(&c, packet, sizeof c);
     const std::uint32_t server = c.server_data ^ kServerXor;
+    // Trace exactly the four Arika RPC services, irrespective of
+    // whether the selected implementation is the original IRX or HLE.
+    // The data has already been DMA-copied to g_data_addr by the SIF
+    // command transport. Bound the dump against EE RAM and 48 bytes.
+    static const bool trace_arkd_rpc =
+        std::getenv("SDBZ_TRACE_ARKD_RPC") != nullptr;
+    if (trace_arkd_rpc && server >= 0x500u && server <= 0x503u)
+    {
+        const std::uint32_t offset = g_data_addr & (kRamSize - 1);
+        const std::uint32_t available = std::min<std::uint32_t>(
+            c.send_size, static_cast<std::uint32_t>(
+                std::min<std::size_t>(48, kRamSize - offset)));
+        std::fprintf(stderr,
+            "[arkd-rpc] server=%03X method=%03X send=%u recv=%u args=",
+            server, c.rpc_number, c.send_size, c.recv_size);
+        for (std::uint32_t index = 0; index < available; ++index)
+            std::fprintf(stderr, "%02X", g_ram[offset + index]);
+        std::fprintf(stderr, "\n");
+    }
     auto it = g_servers.find(server);
     if (it == g_servers.end()) {
         std::fprintf(stderr, "[sif] call %u to unknown server 0x%08X\n", c.rpc_number, server);
