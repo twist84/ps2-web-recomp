@@ -71,11 +71,12 @@ bool replacements_available()
     if (g_available) return true;
     // The catalog is populated when a folder-backed disc is mounted, so
     // do not cache a negative result from early GS initialization.
-    for (const auto &asset : disc::native_assets())
+    for (std::uint32_t index = 0; index < 13; ++index)
     {
-        const std::string &path = asset.name;
-        if (path.find("dis/main_menu.pix.") != std::string::npos
-            && asset.format == "PNG")
+        char suffix[5] = {'.', static_cast<char>('0' + index / 100),
+            static_cast<char>('0' + index / 10 % 10),
+            static_cast<char>('0' + index % 10), 0};
+        if (disc::find_native_asset(std::string("dis/main_menu.pix") + suffix, "png"))
         {
             g_available = true;
             break;
