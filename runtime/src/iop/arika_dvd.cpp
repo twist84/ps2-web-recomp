@@ -55,12 +55,14 @@ s_pending_transfer g_pending;
 struct s_pending_bank
 {
     s_asset asset;
+    std::uint32_t bank_id = 0;
     std::uint32_t serial = 0;
     bool valid = false;
 };
 
 s_pending_bank g_pending_bank;
 std::uint32_t g_bank_serial = 0;
+std::uint32_t g_loaded_bank_id = 0;
 bool g_bank_ready = false;
 std::vector<std::uint8_t> g_sound_bank_data;
 constexpr std::size_t k_max_bank_size = 64u * 1024u * 1024u;
@@ -384,6 +386,7 @@ void complete_sound_bank(const kernel::Job &job)
             loaded, asset.file_size);
         return;
     }
+    g_loaded_bank_id = g_pending_bank.bank_id;
     g_bank_ready = true;
 }
 
@@ -417,7 +420,10 @@ bool queue_sound_bank(std::uint32_t args, std::uint32_t args_size,
         return true;
     }
 
-    g_pending_bank = {*asset, ++g_bank_serial, true};
+    // Original 0x5894 copies request[0] to the active bank index at
+    // 0x3334 and uses it to index per-bank allocation tables.
+    const std::uint32_t bank_id = read_u32(packet);
+    g_pending_bank = {*asset, bank_id, ++g_bank_serial, true};
     g_bank_ready = false;
     g_sound_bank_data.clear();
 
@@ -900,6 +906,11 @@ bool sound_bank_ready()
     return g_bank_ready;
 }
 
+std::uint32_t sound_bank_id()
+{
+    return g_loaded_bank_id;
+}
+
 std::size_t copy_sound_bank(void *destination, std::size_t capacity)
 {
     if (!g_bank_ready || !destination
@@ -935,6 +946,7 @@ void install()
     g_pending = {};
     g_pending_bank = {};
     g_bank_serial = 0;
+    g_loaded_bank_id = 0;
     g_bank_ready = false;
     g_sound_bank_data.clear();
     g_transfer_state = 0x30000000u;
@@ -963,6 +975,7 @@ void state(ps2::state::Stream &stream)
             g_pending = {};
             g_pending_bank = {};
             g_bank_serial = 0;
+            g_loaded_bank_id = 0;
             g_bank_ready = false;
             g_sound_bank_data.clear();
             g_transfer_state = 0x30000000u;
@@ -998,9 +1011,11 @@ void state(ps2::state::Stream &stream)
     {
         stream.pod(g_pending_bank.asset.relative_sector);
         stream.pod(g_pending_bank.asset.file_size);
+        stream.pod(g_pending_bank.bank_id);
         stream.pod(g_pending_bank.serial);
         stream.pod(g_pending_bank.valid);
         stream.pod(g_bank_serial);
+        stream.pod(g_loaded_bank_id);
         stream.pod(g_bank_ready);
         std::uint32_t bank_size =
             static_cast<std::uint32_t>(g_sound_bank_data.size());
@@ -1018,6 +1033,7 @@ void state(ps2::state::Stream &stream)
     {
         g_pending_bank = {};
         g_bank_serial = 0;
+        g_loaded_bank_id = 0;
         g_bank_ready = false;
         g_sound_bank_data.clear();
     }
