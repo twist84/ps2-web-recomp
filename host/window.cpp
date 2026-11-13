@@ -121,7 +121,7 @@ void refresh_pack_overlay()
     }
     std::vector<std::string> lines{
         "RESOURCE PACKS",
-        "SELECT + START: open / cancel   START: save",
+        "F6 / SELECT + START: open / cancel   START: save",
         "A: toggle   D-PAD LEFT / RIGHT: move",
         "D-PAD UP / DOWN: select   LB / RB: reorder   B: cancel",
         "",
@@ -567,9 +567,18 @@ void poll() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) { save_preferences(); ps2::halt("window closed"); }
-        if (e.type == SDL_KEYDOWN && !e.key.repeat
-            && !g_pack_manager_open)
-            handle_hotkey(e.key);
+        if (e.type == SDL_KEYDOWN && !e.key.repeat)
+        {
+            if (e.key.keysym.scancode == SDL_SCANCODE_F6)
+            {
+                if (g_pack_manager_open) close_pack_manager(false);
+                else open_pack_manager();
+            }
+            else if (!g_pack_manager_open)
+            {
+                handle_hotkey(e.key);
+            }
+        }
         if (e.type == SDL_CONTROLLERBUTTONDOWN
             && g_pads[0]
             && e.cbutton.which
@@ -946,7 +955,7 @@ bool open_window(bool fullscreen) {
     SDL_SetWindowMinimumSize(g_window, 320, 240);
     save_preferences();
     std::fprintf(stderr, "[window] F5 GPU render scale | F7 filter | F8 field blending | F9 stats | F10 mute | +/- volume | F11 / Alt+Enter fullscreen\n");
-    std::fprintf(stderr, "[window] Select+Start resource pack manager (controller only; restart required)\n");
+    std::fprintf(stderr, "[window] F6 or Select+Start resource pack manager (controller navigation; restart required)\n");
     std::fprintf(stderr, "[window] settings: %s\n", g_preferences_path.c_str());
     SDL_AudioSpec want{}, have{};
     want.freq = 48000;
