@@ -53,6 +53,35 @@ sparse: if a pack lacks a texture, resolution falls through to lower
 priority packs. If no pack supplies it, `disc/NATIVE/` remains the
 legacy fallback. If neither exists, the original GS texture is sampled.
 
+## ZIP packs
+
+Place a ZIP file directly in `disc/resourcepacks/`, next to `SDBZ.exe`.
+Like folder packs, the archive must contain a `pack.json` at its root
+and replacement files under `assets/sdbz/`. The archive name (without
+`.zip`) is its pack ID for `load_order.txt`, so these entries work:
+
+```text
++Red Menu
+-HD Pack
+```
+
+ZIP and folder packs share the same priority and load-order rules. Files
+are read from ZIP on demand; extraction is not required. Stored and
+deflated entries are supported. Encrypted, ZIP64, multi-volume, unsafe
+paths, duplicate case-insensitive entries and oversized files are
+rejected. A ZIP is capped at 512 MiB and individual entries at 64 MiB.
+
+Create a freely redistributable, pure-red example with:
+
+```sh
+python3 scripts/build_red_menu_pack.py --output "Red Menu.zip"
+```
+
+The generated archive contains only a solid `#FF0000` 1024×1024 RGBA
+image, `pack.json`, and README; it contains no original game imagery.
+Its full menu atlas replacement is deliberately a diagnostic, not a
+preservation of alpha transparency or game artwork.
+
 ## Enable, disable and reorder packs
 
 Create `disc/resourcepacks/load_order.txt` alongside the pack folders.
@@ -79,9 +108,8 @@ fingerprints; the runtime's verified mapping establishes texture identity.
 
 Pack paths cannot be absolute, contain traversal components, or escape
 their pack directory through symlinks. Resources exceeding 64 MiB are
-ignored. `resourcepacks` contains folder packs only in v1; ZIP archives,
-a graphical pack manager and live reload are future
-features. To apply edits, restart the game. Packs are enumerated at
+ignored. `resourcepacks` supports both folder and ZIP packs; a graphical pack manager
+and live reload are future features. To apply edits, restart the game. Packs are enumerated at
 disc startup, with active packs logged as `[resource-pack] enabled ...`.
 
 A malformed or incompatible pack is skipped with a warning. An
@@ -90,7 +118,6 @@ than changing guest-visible resources.
 
 ## Next steps
 
-- ZIP/pack archive support
 - In-game pack list and order editor
 - More verified FPIX/TIM2 mappings
 - Shared resource resolver for audio and other asset formats
