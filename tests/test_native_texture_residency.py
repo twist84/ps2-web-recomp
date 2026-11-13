@@ -17,13 +17,16 @@ HARNESS = r'''
 #include <string>
 #include <vector>
 
+bool g_replacement_enabled = true;
+
 namespace ps2::disc
 {
 bool is_open() { return true; }
 std::optional<NativeAsset> find_native_asset(
     const std::string &name, const std::string &format)
 {
-    if (name == "dis/main_menu.pix.000" && format == "png")
+    if (g_replacement_enabled
+        && name == "dis/main_menu.pix.000" && format == "png")
         return NativeAsset{0, 1024, name, "PNG"};
     return std::nullopt;
 }
@@ -33,7 +36,7 @@ namespace ps2::gs::native_texture
 {
 bool load_fpix_chunk_png(const std::string &, std::uint32_t chunk, s_image &out)
 {
-    if (chunk != 0) return false;
+    if (!g_replacement_enabled || chunk != 0) return false;
     out.width = out.height = 512;
     out.rgba.assign(512 * 512 * 4, 255);
     return true;
@@ -79,6 +82,24 @@ int main()
     invalidate_destination(overwrite, 8ull | (8ull << 32));
     if (resident_chunk(0x3000, 4, 0x13, 256, 256) != -1) return 10;
     if (resident_chunk(0x3200, 4, 0x13, 256, 256) != 0) return 11;
+
+    // Changing resource packs must not destroy the original upload's identity.
+    g_replacement_enabled = false;
+    reload_replacements();
+    if (replacements_available() || chunk_image(0)) return 17;
+    if (resident_chunk(0x3200, 4, 0x13, 256, 256) != 0) return 18;
+    const auto active = resident_chunks();
+    if (active.size() != 1 || active[0] != 0) return 19;
+
+    // Even a texture uploaded while packs are disabled retains identity.
+    upload.bitbltbuf = (0x3400ull << 32) | (4ull << 48)
+        | (0x13ull << 56);
+    if (complete_upload(upload) != 0) return 20;
+    if (resident_chunk(0x3400, 4, 0x13, 256, 256) != 0) return 21;
+    g_replacement_enabled = true;
+    reload_replacements();
+    if (!replacements_available() || !chunk_image(0)) return 22;
+    if (resident_chunk(0x3400, 4, 0x13, 256, 256) != 0) return 23;
 
     // Wrong fingerprints or incomplete transfers may never establish identity.
     upload.bitbltbuf = (0x3300ull << 32) | (4ull << 48) | (0x13ull << 56);
