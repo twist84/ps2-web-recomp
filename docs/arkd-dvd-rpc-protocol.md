@@ -179,6 +179,21 @@ Pending bank IDs, direct host-file IDs, cache contents and SPU2
 uploads are serialized in **version 11 savestates**; cache sizes
 are checked before allocation on restore.
 
+## Alternating voice-command buffer generation (0x4A10–0x4BB8)
+
+Original `0x501` methods `1` (`0x4A10`), `2` (`0x4AC0`),
+and `3` (`0x4BB8`) **each** increment the same generation word
+at IRX global `0xB370`; the new low bit selects the destination
+command buffer. Native HLE previously failed to increment generation
+for method `2`, allowing later flags and sound command records to be
+paired with the wrong buffer.
+
+Method `3` increments the pending-work word at `0xB36C` only if
+it was zero; methods `1` and `2` increment it unconditionally.
+The native queue now models those admission rules, while voice
+processing itself remains a partial reconstruction. The harness
+checks method order, parity, and rejected packets.
+
 ## Server 0x502 dispatch (0x9D38)
 
 | Method | Called routine | Static result |
