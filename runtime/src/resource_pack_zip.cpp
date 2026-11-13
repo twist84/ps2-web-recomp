@@ -132,7 +132,7 @@ bool index(const std::filesystem::path &archive,
             || (method != 0 && method != 8)
             || compressed > k_max_file || expanded > k_max_file
             || offset == 0xffffffffu || u16(p + 34)
-            || (u16(p + 4) >> 8) == 3 && ((external >> 16) & 0170000u) == 0120000u)
+            || ((u16(p + 4) >> 8) == 3 && ((external >> 16) & 0170000u) == 0120000u))
             return false;
 
         std::string name(reinterpret_cast<const char *>(p + 46), name_length);
