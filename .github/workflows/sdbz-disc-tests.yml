@@ -16,6 +16,8 @@ on:
       - "tests/test_gs_texture_upload_trace.py"
       - "tests/test_sdbz_texture_log_analysis.py"
       - "tests/test_sdbz_texture_crosswalk.py"
+      - "tests/test_sdbz_fpix_gs_match.py"
+      - "scripts/match_sdbz_fpix_gs.py"
       - "scripts/crosswalk_sdbz_texture_candidates.py"
       - "scripts/analyze_sdbz_texture_log.py"
       - "runtime/src/gs/gs.cpp"
@@ -38,6 +40,8 @@ on:
       - "tests/test_gs_texture_upload_trace.py"
       - "tests/test_sdbz_texture_log_analysis.py"
       - "tests/test_sdbz_texture_crosswalk.py"
+      - "tests/test_sdbz_fpix_gs_match.py"
+      - "scripts/match_sdbz_fpix_gs.py"
       - "scripts/crosswalk_sdbz_texture_candidates.py"
       - "scripts/analyze_sdbz_texture_log.py"
       - "runtime/src/gs/gs.cpp"
@@ -73,3 +77,4 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_gs_texture_upload_trace.py' -v
           python3 -m unittest discover -s tests -p 'test_sdbz_texture_log_analysis.py' -v
           python3 -m unittest discover -s tests -p 'test_sdbz_texture_crosswalk.py' -v
+          python3 -m unittest discover -s tests -p 'test_sdbz_fpix_gs_match.py' -v
