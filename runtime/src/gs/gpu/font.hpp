@@ -31,6 +31,13 @@ void font_draw_text_in_pass(WGPURenderPassEncoder rp, WGPUTextureView target,
     const char* text, float x, float y, float scale,
     std::uint8_t r, std::uint8_t g, std::uint8_t b);
 
+// Flat alpha-blended rectangle using the existing font quad and FFON
+// presentation pipeline. Used for the pack manager backdrop.
+void font_draw_panel_in_pass(WGPURenderPassEncoder rp,
+    std::uint32_t surface_width, std::uint32_t surface_height,
+    float x, float y, float width, float height,
+    float r, float g, float b, float alpha);
+
 void font_shutdown();
 
 }
