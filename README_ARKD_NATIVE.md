@@ -96,6 +96,29 @@ Do not remove the original driver or change the default until these
 tests pass. The optional environment toggle is intentional protection
 for unverified behaviours, not a permanent design requirement.
 
+## Latest compatibility fixes
+
+- The native catalog merges original `INFO.DAT/GAME.DAT` entries
+  with loose `GAME/` replacements, preserving untouched archive files.
+  Pure loose mounts still work without INFO or the old entry limit.
+- Live SPU2 allocations cannot be silently moved when a larger bank is
+  loaded into the same slot: that would invalidate active voice addresses.
+- The native 46-voice mute worker now also calls `libsd` export #7
+  (`sceSdSetSwitch`) with `SD_S_KOFF` (`0x1600 | core`) and a
+  per-core voice mask. Muting volume alone does not stop playback.
+- A bounded multi-bank source cache supports reuploading older bank
+  IDs after newer loads. Only admitted uploads update the cache, so
+  failed growth leaves the previous source intact. Version **12**
+  savestates preserve the bank cache, with a 128 MiB total limit.
+- `SDBZ_TRACE_ARKD_RPC=1` enables diagnostics for the first 48
+  request bytes of RPC servers `0x500`–`0x503` under either the
+  original IRX or native implementation.
+
+**Native mode is still opt-in.** Full voice start, stream interrupts,
+original DMA/callback timing, and EU beta gameplay/audio parity have
+not been established. Passing synthetic C++ CI does not prove those
+guest-visible behaviours match the original IRX.
+
 ## Tests
 
 ```sh
