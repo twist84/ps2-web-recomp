@@ -575,7 +575,7 @@ int main(int argc, char **argv)
 
     const auto &first_upload = kernel::g_captures[0];
     const auto &second_upload = kernel::g_captures[1];
-    if (first_upload.channel != 1 || second_upload.channel != 1
+    if (first_upload.channel != 0 || second_upload.channel != 1
         || first_upload.mode != 0 || second_upload.mode != 0
         || first_upload.destination != 0x5050
         || second_upload.destination != 0xD050
