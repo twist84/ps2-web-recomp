@@ -248,6 +248,21 @@ int main(int argc, char **argv)
     }
     if (!left_muted || !right_muted) return 52;
 
+    // The IRX splits command masks at 32 voices, but chooses SPU2
+    // register IDs using 24 voices per core. Exercise both boundaries.
+    kernel::g_voice_writes.clear();
+    const std::uint32_t boundary_masks[2] = {1u << 24, 1u << 0};
+    std::memcpy(ps2::g_ram + 0x400, boundary_masks, sizeof(boundary_masks));
+    if (!ps2::sif::g_handlers.at(0x501)(2, 0x400, 8, 0x180, 4)
+        || word(0x180) != 0) return 53;
+    kernel::g_voice_job(kernel::g_queued_voice);
+    const std::vector<std::pair<std::uint32_t, std::uint32_t>> expected_writes
+    {
+        {0x001u, 0}, {0x101u, 0}, // index 24: core 1, voice 0
+        {0x011u, 0}, {0x111u, 0}  // index 32: core 1, voice 8
+    };
+    if (kernel::g_voice_writes != expected_writes) return 54;
+
     // Save an unfinished native DMA, cancel it, then restore. The
     // in-flight job must still match the preserved request serial.
     std::memset(ps2::g_ram + 0x100, 0, 0x24);
