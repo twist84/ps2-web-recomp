@@ -1625,4 +1625,47 @@ bool open_folder(const fs::path &root)
         return false;
     }
 }
+
+std::vector<LooseGameAsset> loose_game_assets()
+{
+    std::vector<LooseGameAsset> assets;
+    assets.reserve(g_direct_game_assets.size());
+    for (std::size_t i = 0; i < g_direct_game_assets.size(); ++i)
+    {
+        const auto &asset = g_direct_game_assets[i];
+        assets.push_back({static_cast<std::uint32_t>(i),
+            asset.size, asset.name});
+    }
+    return assets;
+}
+
+std::size_t read_loose_game_asset(std::uint32_t id,
+    std::uint64_t offset, void *destination, std::size_t capacity)
+{
+    if (!destination || id >= g_direct_game_assets.size() || !capacity)
+        return 0;
+    const auto &asset = g_direct_game_assets[id];
+    if (offset >= asset.size) return 0;
+
+    std::error_code error;
+    const auto canonical = fs::canonical(asset.path, error);
+    if (error || !is_inside(g_direct_game_root, canonical)
+        || !fs::is_regular_file(canonical, error) || error)
+        return 0;
+    const std::size_t count = static_cast<std::size_t>(
+        std::min<std::uint64_t>(capacity, asset.size - offset));
+    std::ifstream input(canonical, std::ios::binary);
+    if (!input) return 0;
+    input.seekg(static_cast<std::streamoff>(offset));
+    if (!input) return 0;
+    input.read(static_cast<char *>(destination),
+        static_cast<std::streamsize>(count));
+    return static_cast<std::size_t>(input.gcount());
+}
+
+void clear_loose_game_assets()
+{
+    g_direct_game_assets.clear();
+    g_direct_game_root.clear();
+}
 }
