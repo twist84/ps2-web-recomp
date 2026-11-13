@@ -41,7 +41,9 @@ struct s_pending_transfer
     std::uint32_t destination = 0;
     std::uint32_t serial = 0;
     bool valid = false;
-    bool initialize = false;
+    // 0 = full file DMA, 1 = CD init, 2..9 = CDVD commands 1..8.
+    // uint8_t preserves the previous v7 savestate field's one-byte size.
+    std::uint8_t command = 0;
 };
 
 s_pending_transfer g_pending;
@@ -220,11 +222,13 @@ void complete_native_read(const kernel::Job &job)
     const s_pending_transfer transfer = g_pending;
     g_pending.valid = false;
 
-    // 0x503/0x101 prepares the CDVD worker; unlike 0x102 it does not
-    // address an INFO filename or copy a file into EE memory.
-    if (transfer.initialize)
+    // 0x503/0x101 and 0x503/0x103 are drive commands rather than
+    // file reads. In the virtual-disc backend the eight motor/status
+    // operations share the same always-mounted media and completion
+    // semantics. Exact mechanical error conditions remain unmodelled.
+    if (transfer.command)
     {
-        g_transfer_state = disc::is_open() ? 0x30000000u : 0x40000064u;
+        g_transfer_state = disc::is_open() ? 0x30000000u : 0x40000190u;
         return;
     }
 
@@ -286,7 +290,7 @@ bool native_full_file_read(std::uint32_t args, std::uint32_t args_size,
         return true;
     }
 
-    g_pending = {*asset, destination, ++g_transfer_serial, true, false};
+    g_pending = {*asset, destination, ++g_transfer_serial, true, 0};
     g_transfer_state = 0x10000000u;
     const auto duration = kernel::usec_to_cycles(400)
         + static_cast<std::uint64_t>(
@@ -526,7 +530,42 @@ bool native_initialize_disc(std::uint32_t args, std::uint32_t args_size,
         reply_u32(ret, ret_size, 0x80000065u);
         return true;
     }
-    g_pending = {{}, 0, ++g_transfer_serial, true, true};
+    g_pending = {{}, 0, ++g_transfer_serial, true, 1};
+    g_transfer_state = 0x10000000u;
+    kernel::schedule(kernel::now() + kernel::usec_to_cycles(400),
+        kernel::Job{kernel::kJobArkdRead, g_pending.serial});
+    reply_u32(ret, ret_size, 0);
+    return true;
+}
+
+bool native_cdvd_control(std::uint32_t args, std::uint32_t args_size,
+    std::uint32_t ret, std::uint32_t ret_size)
+{
+    // IRX 0x2608 accepts the 0x503/0x103 worker only when the previous
+    // CDVD request has reached a success/error terminal state. A u32
+    // at request+0 selects CDVD operation 1 through 8 (IRX 0x1EB0).
+    if (args_size < 4 || !ee_range(args, 4))
+    {
+        reply_u32(ret, ret_size, 0x80000064u);
+        return true;
+    }
+    if (g_pending.valid
+        || (g_transfer_state & 0xF0000000u) != 0x30000000u
+           && (g_transfer_state & 0xF0000000u) != 0x40000000u)
+    {
+        reply_u32(ret, ret_size, 0xFFFFFFFFu);
+        return true;
+    }
+    const auto *bytes = ps2::g_ram + (args & (ps2::kRamSize - 1));
+    const std::uint32_t command = read_u32(bytes);
+    if (command < 1 || command > 8)
+    {
+        reply_u32(ret, ret_size, 0x80000064u);
+        return true;
+    }
+
+    g_pending = {{}, 0, ++g_transfer_serial, true,
+        static_cast<std::uint8_t>(command + 1)};
     g_transfer_state = 0x10000000u;
     kernel::schedule(kernel::now() + kernel::usec_to_cycles(400),
         kernel::Job{kernel::kJobArkdRead, g_pending.serial});
@@ -585,6 +624,8 @@ bool rpc(std::uint32_t server, std::uint32_t method, std::uint32_t args,
             return native_initialize_disc(args, args_size, ret, ret_size);
         case 0x102:
             return native_full_file_read(args, args_size, ret, ret_size);
+        case 0x103:
+            return native_cdvd_control(args, args_size, ret, ret_size);
         default:
             break;
         }
@@ -834,7 +875,7 @@ void state(ps2::state::Stream &stream)
     stream.pod(g_pending.destination);
     stream.pod(g_pending.serial);
     stream.pod(g_pending.valid);
-    stream.pod(g_pending.initialize);
+    stream.pod(g_pending.command);
     stream.pod(g_sound);
 
     if (stream.loading() && native && !g_catalog.open())
