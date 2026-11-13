@@ -37,7 +37,23 @@ struct s_voice_command
     std::uint16_t volume_0 = 0;
     std::uint16_t volume_1 = 0;
     std::uint32_t remaining = 0;
+    // The original 0x39C0 and 0x3A2C operations read +0x0E and
+    // +0x0C as independent control halfwords.
+    std::uint16_t start_control = 0;
+    std::uint16_t restart_control = 0;
 };
+
+struct s_pitch_interval
+{
+    std::uint32_t octave_count = 0;
+    std::uint32_t semitone_remainder = 0;
+    bool non_positive = false;
+};
+
+// Partial decomposition from IRX 0x33C4-0x3474 / 0x35D4-0x3688.
+// The resulting pitch-table lookups and SPU2 register writes are
+// deliberately not performed by this helper.
+s_pitch_interval decode_pitch_interval(std::int16_t pitch_request);
 
 std::optional<s_voice_command> inspect_voice_command(
     const std::uint8_t *data, std::size_t size,

@@ -1406,6 +1406,24 @@ std::uint32_t audio_worker_status()
     return g_audio_worker.state;
 }
 
+s_pitch_interval decode_pitch_interval(std::int16_t pitch_request)
+{
+    // IRX 0x33C4 tests signed +6 with blez. Positive requests use
+    // the value itself; zero and negative requests use its negation.
+    // The MIPS 0x2AAAAAAB multiply-high sequence divides by 12
+    // (truncation toward zero), with two separate computations:
+    // (magnitude + 12) / 12 and magnitude % 12.
+    const std::int32_t signed_value = pitch_request;
+    const bool non_positive = signed_value <= 0;
+    const std::uint32_t magnitude = static_cast<std::uint32_t>(
+        non_positive ? -signed_value : signed_value);
+    return s_pitch_interval{
+        (magnitude + 12u) / 12u,
+        magnitude % 12u,
+        non_positive
+    };
+}
+
 std::optional<s_voice_command> inspect_voice_command(
     const std::uint8_t *bytes, std::size_t size,
     std::uint32_t voice_index)
@@ -1432,6 +1450,8 @@ std::optional<s_voice_command> inspect_voice_command(
     result.volume_0 = u16(entry + 8);
     result.volume_1 = u16(entry + 10);
     result.remaining = read_u32(entry + 12);
+    result.start_control = u16(entry + 12);
+    result.restart_control = u16(entry + 14);
     return result;
 }
 

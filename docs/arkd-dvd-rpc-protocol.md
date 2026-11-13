@@ -282,6 +282,31 @@ requires bank-index resolution, sample address, pitch, ADSR and
 key-on validation against the original binary before the IRX can
 be disabled by default.
 
+## Pitch request interval arithmetic and start-control words
+
+The original voice-start path has two branches at `0x33C4` and
+`0x35D4`: strictly positive signed pitch-control values follow the
+first path, while zero/negative values follow the second. Both paths
+use the signed MIPS multiply-high constant `0x2AAAAAAB` to perform
+division by 12 on the **magnitude** and calculate two values:
+
+- interval `(magnitude + 12) / 12` (truncated division)
+- remainder `magnitude % 12`
+
+The second branch retains that the original request was non-positive.
+These intermediate values feed the pitch-table accesses at `0x34B4`
+and `0x36C8`, followed by interpolation. Native
+`decode_pitch_interval()` reproduces only this verified integer
+decomposition, with tests for values around 0, 12 and both signed
+16-bit extremes. The complete sample pitch-to-SPU2 conversion is
+still **unimplemented**.
+
+The original `0x39C0` and `0x3A2C` instructions separately read
+two halfwords at offsets `+0x0E` and `+0x0C` of each 16-byte
+voice command and update distinct per-core masks. The decoder
+therefore also exposes `start_control` and `restart_control`
+rather than treating their combined u32 as an uninterpreted field.
+
 ## Live voice gain recalculation (0x501/0x12, 0x13, 0x14)
 
 Original `ARKD_DVD.IRX` routines `0x505C`, `0x5108`, and
