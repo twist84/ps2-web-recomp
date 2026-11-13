@@ -48,6 +48,6 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_eu_beta_virtual_info.py' -v
           python3 -m unittest discover -s tests -p 'test_arkd_native.py' -v
           cmake -S . -B build-pr2-rebased -DCMAKE_CXX_COMPILER=clang++ -DPS2_BUILD_TESTS=ON
-          cmake --build build-pr2-rebased --target ps2runtime --parallel 2
+          cmake --build build-pr2-rebased --target sif_scratchpad_test kernel_exit_delete_thread_test gt3_initialization_test gt3_state_test --parallel 2
           ctest --test-dir build-pr2-rebased --output-on-failure
           git push origin HEAD:refs/heads/rebase-result/pr2-20261113
