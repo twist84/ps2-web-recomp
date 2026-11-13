@@ -1,0 +1,36 @@
+name: Windows native PNG decoder smoke
+
+on:
+  push:
+    branches:
+      - SDBZ
+      - "fix/**"
+    paths:
+      - "runtime/src/gs/native_texture.cpp"
+      - "runtime/src/gs/native_texture_wic.cpp"
+      - "runtime/src/gs/native_texture_residency.cpp"
+      - "tests/native_png_wic_smoke.cpp"
+      - "CMakeLists.txt"
+      - ".github/workflows/native-png-windows.yml"
+  pull_request:
+    paths:
+      - "runtime/src/gs/native_texture.cpp"
+      - "runtime/src/gs/native_texture_wic.cpp"
+      - "runtime/src/gs/native_texture_residency.cpp"
+      - "tests/native_png_wic_smoke.cpp"
+      - "CMakeLists.txt"
+      - ".github/workflows/native-png-windows.yml"
+
+jobs:
+  native-png-wic:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Compile WIC PNG decoder without zlib
+        shell: cmd
+        run: |
+          cl /nologo /EHsc /std:c++17 /DPS2_NATIVE_PNG_WIC /I runtime/include /I runtime/src tests/native_png_wic_smoke.cpp runtime/src/gs/native_texture.cpp runtime/src/gs/native_texture_wic.cpp /Fe:native_png_wic_smoke.exe /link windowscodecs.lib ole32.lib
+      - name: Decode and verify RGBA PNG pixels
+        shell: cmd
+        run: native_png_wic_smoke.exe
