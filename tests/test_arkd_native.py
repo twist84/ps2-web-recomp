@@ -268,7 +268,8 @@ int main(int argc, char **argv)
 #endif
 
     // Legacy v6 state files contain no native arkd section.
-    ps2::state::Reader old_state(nullptr, 0);
+    const std::uint8_t empty_state = 0;
+    ps2::state::Reader old_state(&empty_state, 0);
     old_state.set_version(6);
     arkd::state(old_state);
     ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
