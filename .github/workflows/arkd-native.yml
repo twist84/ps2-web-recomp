@@ -1,0 +1,56 @@
+name: Experimental ARKD native HLE
+
+on:
+  pull_request:
+    branches: [SDBZ]
+    paths:
+      - "runtime/src/iop/arika_dvd.cpp"
+      - "runtime/src/iop/arika_dvd.hpp"
+      - "runtime/src/iop/kernel.cpp"
+      - "runtime/src/iop/cdvd.cpp"
+      - "runtime/src/disc.cpp"
+      - "runtime/src/disc_folder.cpp"
+      - "tests/test_arkd_native.py"
+      - ".github/workflows/arkd-native.yml"
+  push:
+    branches: [SDBZ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-arkd:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        cxx: [g++, clang++]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and test native ARKD catalog and RPC adapter
+        env:
+          CXX: ${{ matrix.cxx }}
+        run: python3 -m unittest discover -s tests -p 'test_arkd_native.py' -v
+      - name: Compile integrated IOP source files
+        env:
+          CXX: ${{ matrix.cxx }}
+        run: |
+          $CXX -std=c++20 -Wall -Wextra -fsyntax-only \
+            -I runtime/include -I runtime/src \
+            runtime/src/iop/arika_dvd.cpp \
+            runtime/src/iop/kernel.cpp \
+            runtime/src/iop/cdvd.cpp
+      - name: Build the complete ps2runtime static library (Clang-only VU intrinsics)
+        if: matrix.cxx == 'clang++'
+        env:
+          CXX: ${{ matrix.cxx }}
+        run: |
+          cmake -S . -B build-native -DCMAKE_CXX_COMPILER="$CXX"
+          cmake --build build-native --target ps2runtime --parallel 2
+      - name: Check existing folder-disc regressions
+        env:
+          CXX: ${{ matrix.cxx }}
+        run: |
+          python3 -m unittest discover -s tests -p 'test_game_dat_loose_assets.py' -v
+          python3 -m unittest discover -s tests -p 'test_disc_folder_expansion.py' -v

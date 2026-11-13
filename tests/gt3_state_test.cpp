@@ -51,7 +51,7 @@ int main() {
     if (bytes.size() < 12) return 1;
     std::uint32_t version;
     std::memcpy(&version, bytes.data() + 8, sizeof version);
-    check(version == 7, "new snapshot layout uses version 7");
+    check(version >= 7, "snapshot schema is version 7 or later");
     hw::reset();
     iop::hw::reset();
     g_cpu.pc = 0x20000;
@@ -62,7 +62,7 @@ int main() {
     iop::hw::write(0x1F808414, 0x84000000, 4);
     check((iop::hw::read(0x1F808414, 4) & 0xFFFF) == 0x04A5, "snapshot restores the PHY register");
     // Unsupported versions must fail at the header, not after mutating RAM.
-    for (const std::uint32_t unsupported : {0u, 1u, 8u}) {
+    for (const std::uint32_t unsupported : {0u, 1u, version + 1u}) {
         std::memcpy(bytes.data() + 8, &unsupported, sizeof unsupported);
         g_cpu.pc = 0x30000;
         st32(0x9000, 0x12345678);

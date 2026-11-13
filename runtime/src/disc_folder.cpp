@@ -5,6 +5,7 @@
 #include <cctype>
 #include <climits>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -31,6 +32,23 @@ namespace ps2::disc
 namespace
 {
 namespace fs = std::filesystem;
+
+bool native_arkd_selected()
+{
+    const char *value = std::getenv("SDBZ_ARKD_NATIVE");
+    return value && (std::strcmp(value, "1") == 0
+        || std::strcmp(value, "true") == 0);
+}
+
+struct s_direct_game_asset
+{
+    std::string name;
+    fs::path path;
+    std::uint32_t size = 0;
+};
+
+std::vector<s_direct_game_asset> g_direct_game_assets;
+fs::path g_direct_game_root;
 
 std::string upper(std::string text)
 {
@@ -124,7 +142,8 @@ std::string archive_name_key(std::string name)
     return name;
 }
 
-std::string archive_name_from_path(const fs::path &relative)
+std::string archive_name_from_path(const fs::path &relative,
+    std::size_t maximum_name_bytes = 0x20)
 {
     std::string encoded;
 #ifdef _WIN32
@@ -152,7 +171,8 @@ std::string archive_name_from_path(const fs::path &relative)
     encoded = relative.generic_string();
     std::replace(encoded.begin(), encoded.end(), '/', '\\');
 #endif
-    if (encoded.empty() || encoded.size() > 0x20 || encoded.find('\0') != std::string::npos)
+    if (encoded.empty() || encoded.size() > maximum_name_bytes
+        || encoded.find('\0') != std::string::npos)
     {
         throw std::runtime_error("new GAME asset path does not fit INFO.DAT's 32-byte name field: " + relative.string());
     }
@@ -938,7 +958,15 @@ void synthetic_layout(const fs::path &root, s_folder &folder, std::vector<s_layo
     if (scan_error) throw std::runtime_error("cannot enumerate extracted disc folder: " + scan_error.message());
 
     const auto loose_game_dir = find_directory(root, "GAME");
-    if (nodes.find("INFO.DAT") == nodes.end())
+    if (nodes.find("INFO.DAT") == nodes.end() && native_arkd_selected())
+    {
+        // ARKD HLE reads GAME/ directly. An archive rebuilt for the
+        // original IRX would impose its 2047-record capacity needlessly.
+        if (loose_game_dir.empty())
+            std::fprintf(stderr,
+                "[disc] native ARKD selected without GAME/; INFO absent\n");
+    }
+    else if (nodes.find("INFO.DAT") == nodes.end())
     {
         if (loose_game_dir.empty())
             throw std::runtime_error("INFO.DAT is missing and GAME/ is not available to rebuild it");
@@ -1076,9 +1104,11 @@ void build_disc_layout(const fs::path &root, s_folder &folder)
     const auto *info_entry = find_layout_entry(entries, "INFO.DAT");
     const auto *game_entry = find_layout_entry(entries, "GAME.DAT");
     const auto loose_game = find_directory(root, "GAME");
-    if (!loose_game.empty() && (!info_entry || !game_entry) && !g_virtual_archive.active)
+    if (!loose_game.empty() && (!info_entry || !game_entry)
+        && !g_virtual_archive.active && !native_arkd_selected())
         throw std::runtime_error("loose GAME/ overrides require INFO.DAT and GAME.DAT metadata");
-    const bool loose_game_active = info_entry && game_entry && !loose_game.empty();
+    const bool loose_game_active =
+        !native_arkd_selected() && info_entry && game_entry && !loose_game.empty();
     bool game_dat_exists = false;
     bool expanded_info_extent = false;
     std::uint32_t expanded_info_lba = 0;
@@ -1526,6 +1556,51 @@ void build_disc_layout(const fs::path &root, s_folder &folder)
 }
 }
 
+std::vector<s_direct_game_asset> enumerate_direct_game(const fs::path &root)
+{
+    const fs::path loose = find_directory(root, "GAME");
+    if (loose.empty()) return {};
+    const fs::path canonical_root = fs::canonical(root);
+    const fs::path canonical_game = fs::canonical(loose);
+    if (!is_inside(canonical_root, canonical_game))
+        throw std::runtime_error("GAME/ escapes disc root");
+
+    std::vector<s_direct_game_asset> assets;
+    std::set<std::string> seen;
+    std::error_code error;
+    for (fs::recursive_directory_iterator it(canonical_game, error), end;
+        !error && it != end; it.increment(error))
+    {
+        if (it->is_symlink() || !it->is_regular_file()) continue;
+        const fs::path canonical_file = fs::canonical(it->path());
+        if (!is_inside(canonical_game, canonical_file))
+            throw std::runtime_error("native GAME asset escapes its directory");
+        const std::uint64_t size = fs::file_size(canonical_file);
+        if (!size || size > UINT32_MAX)
+            throw std::runtime_error("native GAME asset has invalid size");
+        const fs::path relative = it->path().lexically_relative(canonical_game);
+        const std::string name = archive_name_from_path(relative, 4096);
+        if (!seen.insert(archive_name_key(name)).second)
+            throw std::runtime_error("duplicate case-insensitive native GAME asset");
+        assets.push_back({name, canonical_file, static_cast<std::uint32_t>(size)});
+    }
+    if (error)
+        throw std::runtime_error("cannot enumerate native GAME assets: " + error.message());
+    // Native savestates refer to these assets by ID. Filesystem directory
+    // iteration order is not stable, especially across Windows/Linux.
+    // Give each name a deterministic ID before exposing it to the IOP.
+    std::sort(assets.begin(), assets.end(),
+        [](const s_direct_game_asset &left,
+            const s_direct_game_asset &right)
+        {
+            return archive_name_key(left.name) < archive_name_key(right.name);
+        });
+    std::fprintf(stderr,
+        "[disc] native GAME direct index: %zu assets, no INFO record cap\n",
+        assets.size());
+    return assets;
+}
+
 bool open_folder(const fs::path &root)
 {
     try
@@ -1536,13 +1611,70 @@ bool open_folder(const fs::path &root)
         std::uint8_t pvd[kSector] = {};
         if (folder->read(16 * kSector, pvd, kSector) != kSector || std::memcmp(pvd, "\x01" "CD001", 6) != 0)
             throw std::runtime_error("folder metadata has no valid ISO 9660 primary descriptor");
-        return open(root.string(), folder->size,
-            [folder](std::uint64_t offset, void *out, std::size_t bytes) { return folder->read(offset, out, bytes); });
+        const bool native = native_arkd_selected();
+        std::vector<s_direct_game_asset> direct_assets;
+        if (native) direct_assets = enumerate_direct_game(root);
+
+        const bool mounted = open(root.string(), folder->size,
+            [folder](std::uint64_t offset, void *out, std::size_t bytes)
+            {
+                return folder->read(offset, out, bytes);
+            });
+        if (mounted && native)
+        {
+            g_direct_game_assets = std::move(direct_assets);
+            const fs::path loose = find_directory(root, "GAME");
+            if (!loose.empty()) g_direct_game_root = fs::canonical(loose);
+        }
+        return mounted;
     }
     catch (const std::exception &error)
     {
         std::fprintf(stderr, "[disc] cannot mount folder %s: %s\n", root.string().c_str(), error.what());
         return false;
     }
+}
+
+std::vector<LooseGameAsset> loose_game_assets()
+{
+    std::vector<LooseGameAsset> assets;
+    assets.reserve(g_direct_game_assets.size());
+    for (std::size_t i = 0; i < g_direct_game_assets.size(); ++i)
+    {
+        const auto &asset = g_direct_game_assets[i];
+        assets.push_back({static_cast<std::uint32_t>(i),
+            asset.size, asset.name});
+    }
+    return assets;
+}
+
+std::size_t read_loose_game_asset(std::uint32_t id,
+    std::uint64_t offset, void *destination, std::size_t capacity)
+{
+    if (!destination || id >= g_direct_game_assets.size() || !capacity)
+        return 0;
+    const auto &asset = g_direct_game_assets[id];
+    if (offset >= asset.size) return 0;
+
+    std::error_code error;
+    const auto canonical = fs::canonical(asset.path, error);
+    if (error || !is_inside(g_direct_game_root, canonical)
+        || !fs::is_regular_file(canonical, error) || error)
+        return 0;
+    const std::size_t count = static_cast<std::size_t>(
+        std::min<std::uint64_t>(capacity, asset.size - offset));
+    std::ifstream input(canonical, std::ios::binary);
+    if (!input) return 0;
+    input.seekg(static_cast<std::streamoff>(offset));
+    if (!input) return 0;
+    input.read(static_cast<char *>(destination),
+        static_cast<std::streamsize>(count));
+    return static_cast<std::size_t>(input.gcount());
+}
+
+void clear_loose_game_assets()
+{
+    g_direct_game_assets.clear();
+    g_direct_game_root.clear();
 }
 }
