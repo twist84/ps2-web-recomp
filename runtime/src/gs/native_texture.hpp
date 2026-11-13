@@ -24,4 +24,10 @@ bool decode_png(const std::uint8_t *data, std::size_t size, s_image &output);
 // must use the original PS2 texture.
 bool load_png(const std::string &game_path, s_image &output);
 
+// FPIX containers may contain many XPIX/TIM2 textures. Chunk N of
+// dis/main_menu.pix maps to NATIVE/dis/main_menu.pix.NNN.png, where NNN
+// is the zero-padded three-digit FPIX directory index.
+bool load_fpix_chunk_png(const std::string &game_path,
+    std::uint32_t chunk_index, s_image &output);
+
 }
