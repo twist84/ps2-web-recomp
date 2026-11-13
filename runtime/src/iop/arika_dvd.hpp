@@ -17,6 +17,18 @@ struct s_asset
     std::uint32_t file_size = 0;
 };
 
+// The original 0x501/0x101 bank reader examines the first DVD sector:
+// +4 entry count, +8 declared SPU2 memory span, +0x0C pairs of u32s.
+// These describe the bank's metadata, not raw PCM or decoded ADPCM.
+struct s_sound_bank_info
+{
+    std::uint32_t entry_count = 0;
+    std::uint32_t spu_memory_bytes = 0;
+};
+
+std::optional<s_sound_bank_info> inspect_sound_bank(
+    const std::uint8_t *bytes, std::size_t size);
+
 class c_catalog
 {
 public:
