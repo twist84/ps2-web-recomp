@@ -183,7 +183,7 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    if (catalog.entry_count() != 4) return 2;
+    if (catalog.entry_count() != 5) return 2;
     const auto entry = catalog.find("PLY/SMALL.BIN");
     if (!entry || entry->file_size != 5000) return 3;
     if (catalog.find("missing.bin")) return 4;
@@ -655,6 +655,20 @@ int main(int argc, char **argv)
         || arkd::sound_upload_status() != 0x30000000u
         || kernel::g_captures.size() != 2)
         return 112;
+
+    // Growing a live bank must not silently relocate it: voice start
+    // addresses may still refer to the old allocation.
+    const auto stable_address = arkd::sound_bank_spu_address(upload_bank_id);
+    if (!stable_address) return 113;
+    std::memset(ps2::g_ram + 0x100, 0, 0x24);
+    std::memcpy(ps2::g_ram + 0x100, &upload_bank_id, 4);
+    std::memcpy(ps2::g_ram + 0x104, "snd\\big.bnk", 12);
+    if (!ps2::sif::g_handlers.at(0x501)(0x101, 0x100, 0x24, 0x180, 4)
+        || word(0x180) != 0) return 114;
+    kernel::g_bank_job(kernel::g_queued_bank);
+    if (arkd::sound_upload_status() != 0x40000064u
+        || arkd::sound_bank_spu_address(upload_bank_id) != stable_address)
+        return 115;
     return 0;
 }
 '''
@@ -679,10 +693,16 @@ class ArkdNativeHleTests(unittest.TestCase):
                          2, 0x9000, 0x1111, 0, 0x2222, 0x100)
         for index in range(0x8040):
             bank[0x800 + index] = index & 0xFF
+        big_bank = bytearray(0x800 + 0x10040)
+        struct.pack_into("<IIIIII", big_bank, 4,
+                         2, 0x11000, 0x1111, 0, 0x2222, 0x100)
+        for index in range(0x10040):
+            big_bank[0x800 + index] = index & 0xFF
         for name, content in {
             "dis/a_first.bin": b"A" * 13,
             "ply/small.bin": b"S" * 5000,
             "snd/test.bnk": bytes(bank),
+            "snd/big.bnk": bytes(big_bank),
             "trc/z_last.bin": b"Z" * 17,
         }.items():
             target = cls.game / name
