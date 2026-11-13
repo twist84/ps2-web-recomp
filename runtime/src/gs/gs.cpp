@@ -4,6 +4,9 @@
 #include "queue.hpp"
 #include "raster.hpp"
 #include "texture_upload_trace.hpp"
+#ifdef PS2_NATIVE_PNG
+#include "native_texture_residency.hpp"
+#endif
 #include "../hw.hpp"
 #ifdef PS2_GPU
 #include "gpu/gpu.hpp"
@@ -282,8 +285,21 @@ std::uint8_t g_carry[4];
 std::size_t g_carried = 0;
 
 void feed_image(const std::uint8_t *data, std::size_t bytes) {
-    if (trace_texture_uploads() && g_texture_trace.append(data, bytes))
+    if (g_texture_trace.append(data, bytes))
+    {
         report_texture_upload(true);
+#ifdef PS2_NATIVE_PNG
+        const int chunk = native_texture::complete_upload(g_texture_trace.current());
+#ifdef PS2_GPU
+        if (chunk >= 0 && gpu_on())
+        {
+            if (const auto *img = native_texture::chunk_image(chunk))
+                gpu::upload_native_atlas(static_cast<std::uint32_t>(chunk),
+                    img->width, img->height, img->rgba.data());
+        }
+#endif
+#endif
+    }
 #ifdef PS2_GPU
     if (gpu_on() && (g_state.trxdir & 3u) == 0) gpu::image_data(data, bytes);
 #endif
@@ -492,6 +508,9 @@ void render_reset() {
     g_transfer = Transfer{};
     g_texture_trace.reset();
     g_texture_trace_serial = 0;
+#ifdef PS2_NATIVE_PNG
+    native_texture::reset_residency();
+#endif
     g_primitives = 0;
     raster::reset();
 }
@@ -856,7 +875,17 @@ void write(std::uint32_t reg, std::uint64_t value) {
                          static_cast<unsigned long long>(s.bitbltbuf), static_cast<unsigned long long>(s.trxpos), static_cast<unsigned long long>(s.trxreg));
         }
         capture::transfer(s, value);
-        if (trace_texture_uploads())
+        bool need_trace = trace_texture_uploads();
+#ifdef PS2_NATIVE_PNG
+        const bool native_enabled = native_texture::replacements_available();
+        need_trace = need_trace || native_enabled;
+        if (native_enabled && (value & 3u) == 0)
+            native_texture::invalidate_destination(s.bitbltbuf, s.trxreg);
+        // Local-to-local copies can overwrite texture residency too.
+        if (native_enabled && (value & 3u) == 2)
+            native_texture::invalidate_destination(s.bitbltbuf, s.trxreg);
+#endif
+        if (need_trace)
         {
             if (g_texture_trace.current().active
                 && g_texture_trace.current().received_bytes)
@@ -1387,6 +1416,9 @@ void render_state(ps2::state::Stream &s) {
     {
         // Upload traces reflect live host data, not saved guest state.
         g_texture_trace.reset();
+#ifdef PS2_NATIVE_PNG
+        native_texture::reset_residency();
+#endif
     }
     s.pod(g_state);
     ++g_setup_generation;
