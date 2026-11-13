@@ -13,6 +13,8 @@ namespace {
 WGPUDevice g_font_device = nullptr;
 WGPUQueue g_font_queue = nullptr;
 WGPURenderPipeline g_font_pipeline = nullptr;
+WGPURenderPipeline g_panel_pipeline = nullptr;
+WGPUBuffer g_panel_uniform_buffer = nullptr;
 WGPUBindGroupLayout g_font_bind_group_layout = nullptr;
 WGPUBuffer g_font_uniform_buffer = nullptr;
 WGPUBuffer g_font_vertex_buffer = nullptr;
@@ -254,6 +256,8 @@ bool font_init(WGPUDevice device, WGPUQueue queue, const char* font_path) {
 
 void font_create_pipeline(WGPUDevice device, WGPUTextureFormat surface_format) {
     if (g_font_pipeline) wgpuRenderPipelineRelease(g_font_pipeline);
+    if (g_panel_pipeline) wgpuRenderPipelineRelease(g_panel_pipeline);
+    g_panel_pipeline = nullptr;
     if (g_font_bind_group_layout) wgpuBindGroupLayoutRelease(g_font_bind_group_layout);
     g_font_pipeline = nullptr;
     g_font_bind_group_layout = nullptr;
@@ -294,6 +298,11 @@ fn vs(@location(0) pos: vec2<f32>) -> VertexOut {
 fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     let a = textureSample(glyph_tex, tex_sampler, in.uv).a;
     return uni.color * a;
+}
+
+@fragment
+fn fs_panel(in: VertexOut) -> @location(0) vec4<f32> {
+    return uni.color;
 }
 )WGSL");
     WGPUShaderModuleDescriptor md = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
@@ -370,12 +379,25 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     rd.primitive = prim;
 
     g_font_pipeline = wgpuDeviceCreateRenderPipeline(device, &rd);
+    fragment.entryPoint = wv("fs_panel");
+    g_panel_pipeline = wgpuDeviceCreateRenderPipeline(device, &rd);
+    if (!g_panel_uniform_buffer)
+    {
+        WGPUBufferDescriptor uniform_desc = WGPU_BUFFER_DESCRIPTOR_INIT;
+        uniform_desc.size = 64;
+        uniform_desc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+        g_panel_uniform_buffer = wgpuDeviceCreateBuffer(device, &uniform_desc);
+    }
 
     wgpuShaderModuleRelease(module);
     wgpuPipelineLayoutRelease(pl);
 }
 
 void font_shutdown() {
+    if (g_panel_pipeline) wgpuRenderPipelineRelease(g_panel_pipeline);
+    if (g_panel_uniform_buffer) wgpuBufferRelease(g_panel_uniform_buffer);
+    g_panel_pipeline = nullptr;
+    g_panel_uniform_buffer = nullptr;
     if (g_font_pipeline) wgpuRenderPipelineRelease(g_font_pipeline);
     if (g_font_bind_group_layout) wgpuBindGroupLayoutRelease(g_font_bind_group_layout);
     if (g_font_uniform_buffer) wgpuBufferRelease(g_font_uniform_buffer);
@@ -394,6 +416,52 @@ void font_shutdown() {
     g_font_atlas = nullptr;
     g_font_queue = nullptr;
     g_font_device = nullptr;
+}
+
+
+void font_draw_panel_in_pass(WGPURenderPassEncoder rp,
+    std::uint32_t surface_width, std::uint32_t surface_height,
+    float x, float y, float width, float height,
+    float r, float g, float b, float alpha)
+{
+    if (!g_panel_pipeline || !g_panel_uniform_buffer
+        || !g_font_bind_group_layout || !g_font_vertex_buffer)
+        return;
+    const float uniform[16] = {
+        r, g, b, alpha,
+        x, y, width, height,
+        0.f, 0.f, 1.f, 1.f,
+        static_cast<float>(surface_width),
+        static_cast<float>(surface_height), 0.f, 0.f
+    };
+    wgpuQueueWriteBuffer(g_font_queue, g_panel_uniform_buffer,
+        0, uniform, sizeof uniform);
+    WGPUBindGroupEntry entries[3] = {
+        WGPU_BIND_GROUP_ENTRY_INIT,
+        WGPU_BIND_GROUP_ENTRY_INIT,
+        WGPU_BIND_GROUP_ENTRY_INIT
+    };
+    entries[0].binding = 0;
+    entries[0].buffer = g_panel_uniform_buffer;
+    entries[0].size = sizeof uniform;
+    entries[1].binding = 1;
+    entries[1].sampler = g_font_sampler;
+    entries[2].binding = 2;
+    entries[2].textureView = g_font_atlas_view;
+    WGPUBindGroupDescriptor descriptor = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
+    descriptor.layout = g_font_bind_group_layout;
+    descriptor.entryCount = 3;
+    descriptor.entries = entries;
+    WGPUBindGroup group = wgpuDeviceCreateBindGroup(g_font_device, &descriptor);
+    wgpuRenderPassEncoderSetViewport(rp, 0.f, 0.f,
+        static_cast<float>(surface_width),
+        static_cast<float>(surface_height), 0.f, 1.f);
+    wgpuRenderPassEncoderSetPipeline(rp, g_panel_pipeline);
+    wgpuRenderPassEncoderSetVertexBuffer(rp, 0,
+        g_font_vertex_buffer, 0, WGPU_WHOLE_SIZE);
+    wgpuRenderPassEncoderSetBindGroup(rp, 0, group, 0, nullptr);
+    wgpuRenderPassEncoderDraw(rp, 6, 1, 0, 0);
+    wgpuBindGroupRelease(group);
 }
 
 void font_draw_text_in_pass(WGPURenderPassEncoder rp, WGPUTextureView target,
