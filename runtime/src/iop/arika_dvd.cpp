@@ -150,14 +150,19 @@ void process_voice_mutes(const kernel::Job &job)
     }
     for (std::uint32_t index = 0; index < 46; ++index)
     {
+        // IRX 0x3194-0x31E8 indexes request masks by index / 32 and
+        // index % 32, while 0x3110-0x316C constructs the libsd
+        // register ID using index / 24 and index % 24. These are
+        // deliberately different addressing schemes.
+        const std::uint32_t mask_word = index >> 5;
+        const std::uint32_t mask_bit = 1u << (index & 31u);
         const std::uint32_t core = index / 24;
         const std::uint32_t voice = index % 24;
-        const std::uint32_t bit = 1u << voice;
         const auto *record = g_sound.sound_commands[parity].data()
             + static_cast<std::size_t>(index) * 18;
         const std::uint16_t flags = static_cast<std::uint16_t>(
             record[0] | (static_cast<std::uint16_t>(record[1]) << 8));
-        if (!(g_sound.command_flags[parity][core] & bit)
+        if (!(g_sound.command_flags[parity][mask_word] & mask_bit)
             && !(flags & 0x8u))
             continue;
 
@@ -173,8 +178,8 @@ void process_voice_mutes(const kernel::Job &job)
                 index);
             continue;
         }
-        g_sound.active_voice_masks[core] &= ~bit;
-        g_sound.command_flags[parity][core] &= ~bit;
+        g_sound.active_voice_masks[mask_word] &= ~mask_bit;
+        g_sound.command_flags[parity][mask_word] &= ~mask_bit;
     }
 }
 
