@@ -48,6 +48,23 @@ struct s_pending_transfer
 
 s_pending_transfer g_pending;
 
+// 0x501/0x101 is an audio-bank load. The original IOP worker obtains
+// the filename at request+4 and reads GAME.DAT through its file index.
+// The native worker stages the exact declared payload for later SPU2
+// processing; bank decoding and hardware upload remain separate tasks.
+struct s_pending_bank
+{
+    s_asset asset;
+    std::uint32_t serial = 0;
+    bool valid = false;
+};
+
+s_pending_bank g_pending_bank;
+std::uint32_t g_bank_serial = 0;
+bool g_bank_ready = false;
+std::vector<std::uint8_t> g_sound_bank_data;
+constexpr std::size_t k_max_bank_size = 64u * 1024u * 1024u;
+
 struct s_sound_rpc_state
 {
     // Original IRX 0x4A10 / 0x4BB8: alternating copies of two command
@@ -343,6 +360,78 @@ bool sound_effect_rpc(std::uint32_t args, std::uint32_t args_size,
     return true;
 }
 
+void complete_sound_bank(const kernel::Job &job)
+{
+    if (!g_pending_bank.valid || job.a != g_pending_bank.serial)
+        return;
+
+    const s_asset asset = g_pending_bank.asset;
+    g_pending_bank.valid = false;
+    g_bank_ready = false;
+    g_sound_bank_data.clear();
+
+    if (asset.file_size > k_max_bank_size)
+        return;
+
+    g_sound_bank_data.resize(asset.file_size);
+    const std::size_t loaded = g_catalog.read(
+        asset, 0, g_sound_bank_data.data(), g_sound_bank_data.size());
+    if (loaded != asset.file_size)
+    {
+        g_sound_bank_data.clear();
+        std::fprintf(stderr,
+            "[arkd-native] audio bank read failed (%zu / %u bytes)\n",
+            loaded, asset.file_size);
+        return;
+    }
+    g_bank_ready = true;
+}
+
+bool queue_sound_bank(std::uint32_t args, std::uint32_t args_size,
+    std::uint32_t ret, std::uint32_t ret_size)
+{
+    // IRX 0x6528 copies a 0x24-byte packet; worker 0x5894
+    // searches INFO.DAT using its 32-byte filename at +4.
+    if (args_size < 0x24 || !ee_range(args, 0x24))
+    {
+        reply_u32(ret, ret_size, 0x80000064u);
+        return true;
+    }
+    if (g_pending_bank.valid)
+    {
+        reply_u32(ret, ret_size, 0x80000065u);
+        return true;
+    }
+
+    const auto *packet = ps2::g_ram + (args & (ps2::kRamSize - 1));
+    const auto *name = packet + 4;
+    const auto *end = static_cast<const std::uint8_t *>(
+        std::memchr(name, 0, 32));
+    const std::size_t name_size = end
+        ? static_cast<std::size_t>(end - name) : 32;
+    const auto asset = g_catalog.find(std::string_view(
+        reinterpret_cast<const char *>(name), name_size));
+    if (!asset || asset->file_size > k_max_bank_size)
+    {
+        reply_u32(ret, ret_size, 0x80000064u);
+        return true;
+    }
+
+    g_pending_bank = {*asset, ++g_bank_serial, true};
+    g_bank_ready = false;
+    g_sound_bank_data.clear();
+
+    const std::uint64_t sectors =
+        (static_cast<std::uint64_t>(asset->file_size) + k_sector_bytes - 1)
+        / k_sector_bytes;
+    const std::uint64_t delay =
+        kernel::usec_to_cycles(400 + 200 * sectors);
+    kernel::schedule(kernel::now() + delay,
+        kernel::Job{kernel::kJobArkdBank, g_pending_bank.serial});
+    reply_u32(ret, ret_size, 0);
+    return true;
+}
+
 bool sound_command_rpc(std::uint32_t method, std::uint32_t args,
     std::uint32_t args_size, std::uint32_t ret, std::uint32_t ret_size)
 {
@@ -578,6 +667,8 @@ bool rpc(std::uint32_t server, std::uint32_t method, std::uint32_t args,
 {
     if (server == 0x501)
     {
+        if (method == 0x101)
+            return queue_sound_bank(args, args_size, ret, ret_size);
         if (method == 0x11)
             return sound_effect_rpc(args, args_size, ret, ret_size);
         if (sound_command_rpc(method, args, args_size, ret, ret_size))
@@ -804,6 +895,22 @@ std::size_t c_catalog::entry_count() const
     return m_assets.size();
 }
 
+bool sound_bank_ready()
+{
+    return g_bank_ready;
+}
+
+std::size_t copy_sound_bank(void *destination, std::size_t capacity)
+{
+    if (!g_bank_ready || !destination
+        || capacity < g_sound_bank_data.size())
+        return 0;
+    if (!g_sound_bank_data.empty())
+        std::memcpy(destination, g_sound_bank_data.data(),
+            g_sound_bank_data.size());
+    return g_sound_bank_data.size();
+}
+
 bool native_requested()
 {
     const char *value = std::getenv("SDBZ_ARKD_NATIVE");
@@ -826,6 +933,10 @@ void install()
 {
     g_catalog.clear();
     g_pending = {};
+    g_pending_bank = {};
+    g_bank_serial = 0;
+    g_bank_ready = false;
+    g_sound_bank_data.clear();
     g_transfer_state = 0x30000000u;
     g_transfer_serial = 0;
     g_control_value = g_transfer_block_bytes = 0;
@@ -833,6 +944,7 @@ void install()
     if (!native_requested()) return;
     kernel::register_job(kernel::kJobArkdRead, complete_native_read);
     kernel::register_job(kernel::kJobArkdVoice, process_voice_mutes);
+    kernel::register_job(kernel::kJobArkdBank, complete_sound_bank);
     kernel::register_hle_module("ARKD_DVD", start_module);
     std::fprintf(stderr,
         "[arkd-native] experimental native module selected; "
@@ -849,6 +961,10 @@ void state(ps2::state::Stream &stream)
         if (stream.loading())
         {
             g_pending = {};
+            g_pending_bank = {};
+            g_bank_serial = 0;
+            g_bank_ready = false;
+            g_sound_bank_data.clear();
             g_transfer_state = 0x30000000u;
             g_transfer_serial = 0;
             g_control_value = g_transfer_block_bytes = 0;
@@ -877,6 +993,26 @@ void state(ps2::state::Stream &stream)
     stream.pod(g_pending.valid);
     stream.pod(g_pending.command);
     stream.pod(g_sound);
+
+    if (stream.version() >= 8)
+    {
+        stream.pod(g_pending_bank.asset.relative_sector);
+        stream.pod(g_pending_bank.asset.file_size);
+        stream.pod(g_pending_bank.serial);
+        stream.pod(g_pending_bank.valid);
+        stream.pod(g_bank_serial);
+        stream.pod(g_bank_ready);
+        stream.vec(g_sound_bank_data);
+        if (stream.loading() && g_sound_bank_data.size() > k_max_bank_size)
+            throw std::runtime_error("native ARKD bank savestate exceeds size limit");
+    }
+    else if (stream.loading())
+    {
+        g_pending_bank = {};
+        g_bank_serial = 0;
+        g_bank_ready = false;
+        g_sound_bank_data.clear();
+    }
 
     if (stream.loading() && native && !g_catalog.open())
         throw std::runtime_error("cannot restore native ARKD asset catalog");
