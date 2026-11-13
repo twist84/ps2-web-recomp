@@ -1406,6 +1406,35 @@ std::uint32_t audio_worker_status()
     return g_audio_worker.state;
 }
 
+std::optional<s_voice_command> inspect_voice_command(
+    const std::uint8_t *bytes, std::size_t size,
+    std::uint32_t voice_index)
+{
+    constexpr std::size_t k_record_bytes = 16;
+    constexpr std::uint32_t k_voice_count = 46;
+
+    if (!bytes || voice_index >= k_voice_count
+        || size / k_record_bytes <= voice_index)
+        return std::nullopt;
+
+    const std::uint8_t *entry =
+        bytes + static_cast<std::size_t>(voice_index) * k_record_bytes;
+    const auto u16 = [](const std::uint8_t *p) -> std::uint16_t
+    {
+        return static_cast<std::uint16_t>(
+            p[0] | (static_cast<std::uint16_t>(p[1]) << 8));
+    };
+
+    s_voice_command result;
+    result.sample_selector = read_u32(entry);
+    result.control = u16(entry + 4);
+    result.pitch_request = static_cast<std::int16_t>(u16(entry + 6));
+    result.volume_0 = u16(entry + 8);
+    result.volume_1 = u16(entry + 10);
+    result.remaining = read_u32(entry + 12);
+    return result;
+}
+
 std::optional<s_sound_bank_info> inspect_sound_bank(
     const std::uint8_t *bytes, std::size_t size)
 {

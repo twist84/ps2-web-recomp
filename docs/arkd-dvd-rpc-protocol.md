@@ -248,6 +248,40 @@ ordinal 19 before changing or freeing the buffer. This sequence is
 covered by synthetic DMA tests, **not** by differential validation of
 the original IRQ, completion callback ordering, or gameplay playback.
 
+## Original 46-voice start command, 16-byte records
+
+The IRX's voice thread at `0x3020–0x4618` reads one of two
+alternating `0x2E0` command arrays (`46 * 16`). At `0x3330` it
+loads the first u32 from each record and compares it with
+`0xFFFFFFFF`, its no-sample sentinel. For a non-sentinel entry,
+`0x3374` reads a control u16 at `+4`, `0x33BC` reads a signed
+halfword at `+6`, and the subsequent voice logic inspects the
+remaining fields. The record's `+8` and `+10` source words
+are used in the live-gain path.
+
+The native `inspect_voice_command()` now decodes the full 16-byte
+record without unaligned host loads or out-of-bounds access:
+
+```cpp
+struct s_voice_command
+{
+    std::uint32_t sample_selector;  // +0, -1 = no new sample
+    std::uint16_t control;          // +4
+    std::int16_t pitch_request;     // +6, signed branch input
+    std::uint16_t volume_0;        // +8
+    std::uint16_t volume_1;        // +10
+    std::uint32_t remaining;       // +12, semantics pending
+};
+```
+
+The name `pitch_request` is provisional: signed `+6` influences
+the IRX's pitch calculation but further reverse engineering is
+needed to reproduce that calculation with exact SPU2 register values.
+This decoder **does not key on a voice**. The 46-voice startup branch
+requires bank-index resolution, sample address, pitch, ADSR and
+key-on validation against the original binary before the IRX can
+be disabled by default.
+
 ## Live voice gain recalculation (0x501/0x12, 0x13, 0x14)
 
 Original `ARKD_DVD.IRX` routines `0x505C`, `0x5108`, and
