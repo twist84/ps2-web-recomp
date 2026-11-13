@@ -874,6 +874,49 @@ int main(int argc, char **argv)
     if (!ps2::sif::g_handlers.at(0x501)(2, 0x800, 8, 0x180, 4)
         || word(0x180) != 0
         || kernel::g_queued_voice.a != 0) return 148;
+
+    // IRX 0x3330 reads the 16-byte start command for each of 46
+    // voices, including a signed pitch-control halfword at +6.
+    std::array<std::uint8_t, 46 * 16> voice_packet{};
+    auto write_field = [&](std::size_t offset, const auto &value)
+    {
+        std::memcpy(voice_packet.data() + offset, &value, sizeof(value));
+    };
+    const std::uint32_t sample_id = 0x12345678u;
+    const std::uint16_t command_flags = 0x40u;
+    const std::int16_t signed_pitch = -42;
+    const std::uint16_t left_source = 0x1000u;
+    const std::uint16_t right_source = 0x2000u;
+    const std::uint32_t tail_value = 0xDEADBEEFu;
+    constexpr std::size_t last_voice = 45;
+    constexpr std::size_t base = last_voice * 16;
+    write_field(base + 0, sample_id);
+    write_field(base + 4, command_flags);
+    write_field(base + 6, signed_pitch);
+    write_field(base + 8, left_source);
+    write_field(base + 10, right_source);
+    write_field(base + 12, tail_value);
+    const auto parsed = arkd::inspect_voice_command(
+        voice_packet.data(), voice_packet.size(), last_voice);
+    if (!parsed || parsed->sample_selector != sample_id
+        || parsed->control != command_flags
+        || parsed->pitch_request != signed_pitch
+        || parsed->volume_0 != left_source
+        || parsed->volume_1 != right_source
+        || parsed->remaining != tail_value) return 149;
+    if (arkd::inspect_voice_command(
+            voice_packet.data(), voice_packet.size() - 1, last_voice)
+        || arkd::inspect_voice_command(
+            voice_packet.data(), voice_packet.size(), 46)
+        || arkd::inspect_voice_command(nullptr, 46 * 16, 0))
+        return 150;
+
+    // -1 is the original 'no sample selected' sentinel at 0x3354.
+    const std::uint32_t sentinel = 0xFFFFFFFFu;
+    write_field(base, sentinel);
+    const auto empty = arkd::inspect_voice_command(
+        voice_packet.data(), voice_packet.size(), last_voice);
+    if (!empty || empty->sample_selector != sentinel) return 151;
     return 0;
 }
 '''
