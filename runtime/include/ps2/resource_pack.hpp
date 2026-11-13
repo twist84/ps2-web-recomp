@@ -52,6 +52,14 @@ const std::vector<s_pack_info> &discovered_packs();
 // discovered packs as disabled. The new order takes effect on next boot.
 bool save_selection(const std::vector<std::string> &enabled_ids);
 
+// The SDL thread stages a successful save. Only the GS render thread may
+// apply it, so currently-rendered textures never read a changing pack list.
+// Returns true once when a new selection was installed.
+bool apply_pending_selection();
+
+// Thread-safe snapshot for the SDL pack manager.
+std::vector<s_pack_info> active_packs_snapshot();
+
 // Logical keys are relative to assets/sdbz, e.g.
 // "textures/dis/main_menu.pix.001.png". Never accepts absolute/traversal paths.
 bool read_resource(const std::string &logical_path,
