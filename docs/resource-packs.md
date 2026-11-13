@@ -6,23 +6,24 @@ the original FPIX chunk; the pack manager only chooses replacement files.
 
 ## Installing packs
 
-Put loose packs beside `SDBZ.exe`. The runtime locates the executable
-directory directly, so the working directory does not matter. For older
-development layouts, the location beside the active `disc` directory is
-still supported if there is no executable-adjacent `resourcepacks` folder:
+Since `SDBZ.exe` lives inside `disc/`, put loose packs under
+`disc/resourcepacks/` next to that executable. The runtime locates the
+executable directory directly, so the working directory does not matter.
+For development layouts, the location beside `disc/` is still supported
+if there is no executable-adjacent `resourcepacks` directory:
 
 ```text
 games/SuperDragonBallZ/
-  SDBZ.exe
   disc/
+    SDBZ.exe
     NATIVE/dis/main_menu.pix.001.png
-  resourcepacks/
-    Red Menu/
-      pack.json
-      assets/sdbz/textures/dis/main_menu.pix.001.png
-    HD Pack/
-      pack.json
-      assets/sdbz/textures/dis/main_menu.pix.002.png
+    resourcepacks/
+      Red Menu/
+        pack.json
+        assets/sdbz/textures/dis/main_menu.pix.001.png
+      HD Pack/
+        pack.json
+        assets/sdbz/textures/dis/main_menu.pix.002.png
 ```
 
 `pack.json`:
