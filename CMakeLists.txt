@@ -55,6 +55,7 @@ add_library(ps2runtime STATIC
     runtime/src/cop.cpp
     runtime/src/disc.cpp
     runtime/src/disc_folder.cpp
+    runtime/src/resource_pack.cpp
     runtime/src/dmac.cpp
     runtime/src/vif.cpp
     runtime/src/vu_micro.cpp
