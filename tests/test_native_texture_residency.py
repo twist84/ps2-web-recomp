@@ -34,8 +34,8 @@ namespace ps2::gs::native_texture
 bool load_fpix_chunk_png(const std::string &, std::uint32_t chunk, s_image &out)
 {
     if (chunk != 0) return false;
-    out.width = out.height = 256;
-    out.rgba.assign(256 * 256 * 4, 255);
+    out.width = out.height = 512;
+    out.rgba.assign(512 * 512 * 4, 255);
     return true;
 }
 }
@@ -46,6 +46,15 @@ int main()
     using namespace ps2::gs::native_texture;
     reset_residency();
     if (!replacements_available()) return 1;
+    if (atlas_scale(0, 256, 256) != 1
+        || atlas_scale(0, 512, 512) != 2
+        || atlas_scale(1, 512, 512) != 1
+        || atlas_scale(1, 1024, 1024) != 2
+        || valid_atlas_size(1, 512, 1024)
+        || valid_atlas_size(1, 2048, 2048)
+        || valid_atlas_size(0, 768, 768)
+        || valid_atlas_size(13, 512, 512)) return 15;
+    if (!chunk_image(0) || chunk_image(0)->width != 512) return 16;
 
     s_texture_upload_signature upload{};
     upload.bitbltbuf = (0x3000ull << 32) | (4ull << 48) | (0x13ull << 56);
