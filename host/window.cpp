@@ -7,6 +7,8 @@
 
 #include "ps2/system.hpp"
 #include "ps2/presentation.hpp"
+#include "ps2/resource_pack.hpp"
+#include "ps2/resource_pack_overlay.hpp"
 
 #include <SDL.h>
 #include <SDL_syswm.h>
@@ -100,6 +102,142 @@ void notify(const char *message)
     g_notice_until = SDL_GetTicks64() + 3000;
     std::fprintf(stderr, "[window] %s\n", message);
     SDL_SetWindowTitle(g_window, message);
+}
+
+
+bool g_pack_manager_open = false;
+int g_pack_column = 1;
+int g_pack_row = 0;
+std::vector<std::string> g_pack_enabled;
+std::vector<std::string> g_pack_available;
+
+void refresh_pack_overlay()
+{
+    if (!g_pack_manager_open)
+    {
+        ps2::resource_pack_overlay::clear();
+        return;
+    }
+    std::vector<std::string> lines{
+        "RESOURCE PACKS",
+        "F6 / ESC: cancel   ENTER: save",
+        "ARROWS: select / enable   PAGE UP/DOWN: move pack",
+        "",
+        "ENABLED - highest priority first"
+    };
+    const std::size_t enabled_offset = g_pack_column == 1 && g_pack_row >= 9
+        ? static_cast<std::size_t>(g_pack_row - 8) : 0u;
+    for (std::size_t i = enabled_offset;
+        i < g_pack_enabled.size() && i < enabled_offset + 9; ++i)
+    {
+        lines.push_back(std::string(g_pack_column == 1
+            && g_pack_row == static_cast<int>(i) ? "> " : "  ")
+            + g_pack_enabled[i]);
+    }
+    lines.push_back("");
+    lines.push_back("AVAILABLE - disabled");
+    const std::size_t available_offset = g_pack_column == 0 && g_pack_row >= 9
+        ? static_cast<std::size_t>(g_pack_row - 8) : 0u;
+    for (std::size_t i = available_offset;
+        i < g_pack_available.size() && i < available_offset + 9; ++i)
+    {
+        lines.push_back(std::string(g_pack_column == 0
+            && g_pack_row == static_cast<int>(i) ? "> " : "  ")
+            + g_pack_available[i]);
+    }
+    lines.push_back("");
+    lines.push_back("Restart SDBZ to apply saved changes");
+    ps2::resource_pack_overlay::set_lines(std::move(lines));
+}
+
+void open_pack_manager()
+{
+    g_pack_enabled.clear();
+    g_pack_available.clear();
+    for (const auto &pack : ps2::resource_pack::packs())
+        g_pack_enabled.push_back(pack.m_id);
+    for (const auto &pack : ps2::resource_pack::discovered_packs())
+    {
+        if (std::find(g_pack_enabled.begin(), g_pack_enabled.end(), pack.m_id)
+            == g_pack_enabled.end())
+            g_pack_available.push_back(pack.m_id);
+    }
+    g_pack_manager_open = true;
+    g_pack_column = g_pack_enabled.empty() ? 0 : 1;
+    g_pack_row = 0;
+    refresh_pack_overlay();
+}
+
+void close_pack_manager(bool save)
+{
+    if (save && !ps2::resource_pack::save_selection(g_pack_enabled))
+    {
+        notify("Cannot save resource pack selection");
+        return;
+    }
+    g_pack_manager_open = false;
+    refresh_pack_overlay();
+    if (save) notify("Resource packs saved - restart SDBZ");
+}
+
+bool handle_pack_key(SDL_Scancode key)
+{
+    if (key == SDL_SCANCODE_F6)
+    {
+        if (g_pack_manager_open) close_pack_manager(false);
+        else open_pack_manager();
+        return true;
+    }
+    if (!g_pack_manager_open) return false;
+    if (key == SDL_SCANCODE_ESCAPE)
+    {
+        close_pack_manager(false);
+        return true;
+    }
+    if (key == SDL_SCANCODE_RETURN || key == SDL_SCANCODE_KP_ENTER)
+    {
+        close_pack_manager(true);
+        return true;
+    }
+    auto &current = g_pack_column ? g_pack_enabled : g_pack_available;
+    if (key == SDL_SCANCODE_UP || key == SDL_SCANCODE_DOWN)
+    {
+        if (!current.empty())
+            g_pack_row = std::clamp(g_pack_row
+                + (key == SDL_SCANCODE_UP ? -1 : 1), 0,
+                static_cast<int>(current.size()) - 1);
+    }
+    else if (key == SDL_SCANCODE_LEFT || key == SDL_SCANCODE_RIGHT)
+    {
+        const int destination = key == SDL_SCANCODE_RIGHT ? 1 : 0;
+        if (destination != g_pack_column && !current.empty())
+        {
+            const std::string id = current[g_pack_row];
+            current.erase(current.begin() + g_pack_row);
+            auto &other = destination ? g_pack_enabled : g_pack_available;
+            other.push_back(id);
+            g_pack_column = destination;
+            g_pack_row = static_cast<int>(other.size()) - 1;
+        }
+        else if (destination != g_pack_column)
+        {
+            g_pack_column = destination;
+            g_pack_row = 0;
+        }
+    }
+    else if ((key == SDL_SCANCODE_PAGEUP || key == SDL_SCANCODE_PAGEDOWN)
+        && g_pack_column == 1 && !current.empty())
+    {
+        const int target = g_pack_row
+            + (key == SDL_SCANCODE_PAGEUP ? -1 : 1);
+        if (target >= 0 && target < static_cast<int>(current.size()))
+        {
+            std::swap(current[g_pack_row], current[target]);
+            g_pack_row = target;
+        }
+    }
+    refresh_pack_overlay();
+    return true;
 }
 
 void apply_preferences()
@@ -393,6 +531,12 @@ void poll_port(int port) {
         rx = axis(pad, SDL_CONTROLLER_AXIS_RIGHTX);
         ry = axis(pad, SDL_CONTROLLER_AXIS_RIGHTY);
     }
+    if (g_pack_manager_open)
+    {
+        pressed = 0;
+        lx = ly = rx = ry = 0x80;
+        l2 = r2 = 0xFF;
+    }
     rumble(port);
     static std::uint64_t last[2] = {~0ull, ~0ull};
     const std::uint64_t state = pressed | (static_cast<std::uint64_t>(rx) << 16) | (static_cast<std::uint64_t>(ry) << 24) | (static_cast<std::uint64_t>(lx) << 32) |
@@ -412,7 +556,87 @@ void poll() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) { save_preferences(); ps2::halt("window closed"); }
-        if (e.type == SDL_KEYDOWN) handle_hotkey(e.key);
+        if (e.type == SDL_KEYDOWN && !e.key.repeat
+            && !handle_pack_key(e.key.keysym.scancode))
+            handle_hotkey(e.key);
+        if (g_pack_manager_open && e.type == SDL_CONTROLLERBUTTONDOWN
+            && g_pads[0] && e.cbutton.which
+                == SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pads[0])))
+        {
+            switch (e.cbutton.button)
+            {
+            case SDL_CONTROLLER_BUTTON_DPAD_UP:
+                handle_pack_key(SDL_SCANCODE_UP);
+                break;
+            case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+                handle_pack_key(SDL_SCANCODE_DOWN);
+                break;
+            case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+                handle_pack_key(SDL_SCANCODE_LEFT);
+                break;
+            case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+                handle_pack_key(SDL_SCANCODE_RIGHT);
+                break;
+            case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
+                handle_pack_key(SDL_SCANCODE_PAGEUP);
+                break;
+            case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
+                handle_pack_key(SDL_SCANCODE_PAGEDOWN);
+                break;
+            case SDL_CONTROLLER_BUTTON_A:
+            case SDL_CONTROLLER_BUTTON_START:
+                handle_pack_key(SDL_SCANCODE_RETURN);
+                break;
+            case SDL_CONTROLLER_BUTTON_B:
+                handle_pack_key(SDL_SCANCODE_ESCAPE);
+                break;
+            default:
+                break;
+            }
+        }
+        if (g_pack_manager_open && e.type == SDL_MOUSEWHEEL)
+        {
+            if (e.wheel.y)
+                handle_pack_key(e.wheel.y > 0
+                    ? SDL_SCANCODE_UP : SDL_SCANCODE_DOWN);
+        }
+        if (g_pack_manager_open && e.type == SDL_MOUSEBUTTONDOWN)
+        {
+            int window_w = 0, window_h = 0;
+            SDL_GetWindowSize(g_window, &window_w, &window_h);
+            if (window_w > 0 && window_h > 0)
+            {
+                const float scale = std::clamp(
+                    static_cast<float>(window_h) / 900.f, 0.55f, 1.5f);
+                const float step = 31.f * scale;
+                const float first_y = window_h * 0.10f;
+                const int line = static_cast<int>(
+                    (static_cast<float>(e.button.y) - first_y) / step);
+                const int enabled_offset = g_pack_column == 1
+                    && g_pack_row >= 9 ? g_pack_row - 8 : 0;
+                const int available_offset = g_pack_column == 0
+                    && g_pack_row >= 9 ? g_pack_row - 8 : 0;
+                const int enabled_start = 5;
+                const int available_start = 7
+                    + static_cast<int>(std::min<std::size_t>(9, g_pack_enabled.size()));
+                if (line >= enabled_start && line < enabled_start
+                    + static_cast<int>(std::min<std::size_t>(9, g_pack_enabled.size())))
+                {
+                    g_pack_column = 1;
+                    g_pack_row = line - enabled_start + enabled_offset;
+                }
+                else if (line >= available_start && line < available_start
+                    + static_cast<int>(std::min<std::size_t>(9, g_pack_available.size())))
+                {
+                    g_pack_column = 0;
+                    g_pack_row = line - available_start + available_offset;
+                }
+                if (e.button.button == SDL_BUTTON_RIGHT || e.button.clicks >= 2)
+                    handle_pack_key(g_pack_column == 1
+                        ? SDL_SCANCODE_LEFT : SDL_SCANCODE_RIGHT);
+                refresh_pack_overlay();
+            }
+        }
         if (e.type == SDL_KEYUP && e.key.keysym.scancode == SDL_SCANCODE_RETURN) g_fullscreen_enter = false;
         if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) g_fullscreen_enter = false;
         if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED &&
@@ -721,6 +945,7 @@ bool open_window(bool fullscreen) {
     SDL_SetWindowMinimumSize(g_window, 320, 240);
     save_preferences();
     std::fprintf(stderr, "[window] F5 GPU render scale | F7 filter | F8 field blending | F9 stats | F10 mute | +/- volume | F11 / Alt+Enter fullscreen\n");
+    std::fprintf(stderr, "[window] F6 resource pack manager (restart required)\n");
     std::fprintf(stderr, "[window] settings: %s\n", g_preferences_path.c_str());
     SDL_AudioSpec want{}, have{};
     want.freq = 48000;

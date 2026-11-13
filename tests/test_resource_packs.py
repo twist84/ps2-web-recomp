@@ -57,6 +57,15 @@ int main(int argc, char **argv)
         }
         return 0;
     }
+    if (argv[2] == std::string("save"))
+    {
+        if (discovered_packs().size() != 2 || packs().size() != 2)
+            return 40;
+        if (save_selection({"invalid/not_found"})) return 41;
+        if (save_selection({"lower", "lower"})) return 42;
+        if (!save_selection({"lower"})) return 43;
+        return 0;
+    }
     if (argv[2] == std::string("disabled"))
     {
         if (found.size() != 1 || found[0].m_id != "lower") return 20;
@@ -212,6 +221,12 @@ class ResourcePackTests(unittest.TestCase):
             path.write_bytes(payload)
 
         subprocess.run([str(self.binary), str(root), "test"], check=True)
+
+        subprocess.run([str(self.binary), str(root), "save"], check=True)
+        saved = (packs / "load_order.txt").read_text(encoding="utf-8")
+        self.assertIn("+lower\n", saved)
+        self.assertIn("-Higher Pack\n", saved)
+        (packs / "load_order.txt").unlink()
 
         # Disable a higher-priority pack without touching its manifest.
         order_file = packs / "load_order.txt"

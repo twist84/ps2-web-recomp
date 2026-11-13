@@ -116,6 +116,29 @@ A malformed or incompatible pack is skipped with a warning. An
 individual replacement that fails PNG decoding is rejected rather
 than changing guest-visible resources.
 
+## In-game manager (experimental)
+
+Press **F6** in the native SDBZ window to open the resource pack manager.
+It renders a simple, resolution-scaled dark panel with text from the
+original `5-24-2.fon` font on the WebGPU presentation surface. No SVG
+engine or decorative textures are required.
+
+- Up/Down selects a pack in the current list
+- Left moves an enabled pack to Available (disabled)
+- Right moves a disabled pack to Enabled (highest-to-lowest load order)
+- Page Up/Down reorders the selected enabled pack
+- Enter saves `disc/resourcepacks/load_order.txt` and closes
+- Escape or F6 cancels unsaved changes
+
+Controller input: D-pad navigation, shoulder buttons reorder, A/Start
+save, and B cancels. Mouse click selects a row, double-click/right-click
+toggles it, and the wheel scrolls the selection. While the manager is
+open, gameplay controller/keyboard state is neutralized.
+
+Changes apply after restarting SDBZ, because the current renderer caches
+the native PNG atlases. The overlay currently requires WebGPU and the
+game font; keyboard controls and persistence have no SVG dependency.
+
 ## Next steps
 
 - In-game pack list and order editor

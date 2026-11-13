@@ -5,6 +5,7 @@
 #include "ps2/system.hpp"
 #include "ps2/video.hpp"
 #include "ps2/presentation.hpp"
+#include "ps2/resource_pack_overlay.hpp"
 #include "ps2/render_scale.hpp"
 #include "font.hpp"
 
@@ -1024,6 +1025,33 @@ void submit(WGPUTextureView present_view = nullptr) {
         // over the game frame without needing LoadOp_Load on a separate pass.
         font_draw_text_in_pass(rp, present_view, g_surface_width, g_surface_height,
             g_stats_text, 10.f, 10.f, 1.f, 255, 255, 0);
+        // Native resource-pack selector: flat text, using SDBZ's FFON font.
+        // The SDL/UI thread publishes a thread-safe snapshot. This presentation
+        // path never accesses or mutates the pack catalogue.
+        const auto overlay_lines = ps2::resource_pack_overlay::get_lines();
+        if (!overlay_lines.empty())
+        {
+            // One quiet translucent backdrop: no image assets or SVG engine.
+            font_draw_panel_in_pass(rp, g_surface_width, g_surface_height,
+                static_cast<float>(g_surface_width) * 0.045f,
+                static_cast<float>(g_surface_height) * 0.055f,
+                static_cast<float>(g_surface_width) * 0.91f,
+                static_cast<float>(g_surface_height) * 0.89f,
+                0.035f, 0.045f, 0.06f, 0.89f);
+            const float scale = std::clamp(
+                static_cast<float>(g_surface_height) / 900.0f, 0.55f, 1.25f);
+            const float x = static_cast<float>(g_surface_width) * 0.08f;
+            const float y = static_cast<float>(g_surface_height) * 0.095f;
+            std::string text;
+            for (const auto &line : overlay_lines)
+            {
+                if (!text.empty()) text.push_back('\n');
+                text += line;
+            }
+            font_draw_overlay_text_in_pass(rp, present_view,
+                g_surface_width, g_surface_height,
+                text.c_str(), x, y, scale, 255, 245, 218);
+        }
         wgpuRenderPassEncoderEnd(rp);
         wgpuRenderPassEncoderRelease(rp);
     }
