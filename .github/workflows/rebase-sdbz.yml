@@ -1,9 +1,7 @@
 name: One-shot SDBZ rebase staging
 
 on:
-  push:
-    branches:
-      - rebase-work/sdbz-20261113
+  workflow_dispatch:
 
 permissions:
   contents: write
