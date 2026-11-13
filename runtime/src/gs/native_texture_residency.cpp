@@ -41,6 +41,7 @@ std::array<s_resident, 64> g_residents{};
 std::size_t g_next_resident = 0;
 bool g_available = false;
 bool g_catalog_reported = false;
+bool g_catalog_missing_reported = false;
 std::array<bool, 13> g_image_reported{};
 
 
@@ -104,6 +105,14 @@ bool replacements_available()
             break;
         }
     }
+    if (!g_available && trace_native_textures() && disc::is_open()
+        && !g_catalog_missing_reported)
+    {
+        std::fprintf(stderr,
+            "[gs-native] no menu PNG in native asset catalog; "
+            "expected disc/NATIVE/dis/main_menu.pix.001.png\n");
+        g_catalog_missing_reported = true;
+    }
     return g_available;
 }
 
@@ -116,6 +125,7 @@ void reset_residency()
     g_images = {};
     g_available = false;
     g_catalog_reported = false;
+    g_catalog_missing_reported = false;
     g_image_reported.fill(false);
 }
 
