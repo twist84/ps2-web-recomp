@@ -64,6 +64,7 @@ struct s_capture
 };
 std::vector<s_capture> g_captures;
 std::vector<std::pair<std::uint32_t, std::uint32_t>> g_voice_writes;
+std::vector<std::pair<std::uint32_t, std::uint32_t>> g_switch_writes;
 std::vector<std::vector<std::uint8_t>> g_effect_calls;
 std::vector<std::uint32_t> g_effect_cores;
 bool library_exists(const std::string &name) { return name == "libsd"; }
@@ -93,6 +94,12 @@ bool call_library_export(const std::string &name, std::uint32_t ordinal,
     if (ordinal == 19)
     {
         result = 1;
+        return true;
+    }
+    if (ordinal == 7)
+    {
+        g_switch_writes.emplace_back(a0, a1);
+        result = 0;
         return true;
     }
     if (ordinal == 5)
@@ -341,6 +348,10 @@ int main(int argc, char **argv)
         if (reg == 0x100 && value == 0) right_muted = true;
     }
     if (!left_muted || !right_muted) return 52;
+    if (kernel::g_switch_writes.empty()
+        || kernel::g_switch_writes.back()
+            != std::pair<std::uint32_t, std::uint32_t>(0x1600u, 1u))
+        return 125;
 
     // Reset the synthetic test's earlier voice-command bytes. Their
     // pseudo-random flags otherwise request unrelated sound writes.
@@ -350,6 +361,7 @@ int main(int argc, char **argv)
     // The IRX splits command masks at 32 voices, but chooses SPU2
     // register IDs using 24 voices per core. Exercise both boundaries.
     kernel::g_voice_writes.clear();
+    kernel::g_switch_writes.clear();
     const std::uint32_t boundary_masks[2] = {1u << 24, 1u << 0};
     std::memcpy(ps2::g_ram + 0x400, boundary_masks, sizeof(boundary_masks));
     if (!ps2::sif::g_handlers.at(0x501)(2, 0x400, 8, 0x180, 4)
@@ -361,6 +373,11 @@ int main(int argc, char **argv)
         {0x011u, 0}, {0x111u, 0}  // index 32: core 1, voice 8
     };
     if (kernel::g_voice_writes != expected_writes) return 54;
+    if (kernel::g_switch_writes.size() != 1
+        || kernel::g_switch_writes[0]
+            != std::pair<std::uint32_t, std::uint32_t>(
+                0x1601u, (1u << 0) | (1u << 8)))
+        return 126;
 
     // Save an unfinished native DMA, cancel it, then restore. The
     // in-flight job must still match the preserved request serial.
