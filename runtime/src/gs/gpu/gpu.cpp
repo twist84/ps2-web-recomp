@@ -1,6 +1,7 @@
 #include "gpu.hpp"
 #ifdef PS2_NATIVE_PNG
 #include "../native_texture_residency.hpp"
+#include "../native_menu_manifest.hpp"
 #endif
 #include "ps2/system.hpp"
 #include "ps2/video.hpp"
@@ -51,7 +52,7 @@ constexpr std::uint32_t kPrimWords = 28;
 constexpr std::uint32_t kSetupWords = 26;
 constexpr std::uint32_t kNativeAtlasSide = 1024u;
 constexpr std::uint32_t kNativeAtlasPixels = kNativeAtlasSide * kNativeAtlasSide;
-constexpr std::uint32_t kNativeAtlasCount = 13;
+constexpr std::uint32_t kNativeAtlasCount = static_cast<std::uint32_t>(native_texture::k_menu_atlases.size());
 constexpr std::uint32_t kDecodedWords = 4u << 20;
 constexpr std::uint32_t kDecodePrims = 64;
 
