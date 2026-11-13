@@ -129,7 +129,7 @@ Controller-only controls:
 - D-pad Left moves an enabled pack into Available (disabled)
 - D-pad Right moves a disabled pack into Enabled
 - A toggles the selected pack between lists
-- LB / RB reorders the selected enabled pack
+- LB / RB moves the selected enabled pack up / down in priority (requires at least two enabled packs; no wrapping at the ends)
 - Start saves `disc/resourcepacks/load_order.txt` and closes
 - B or Select + Start cancels unsaved changes
 
