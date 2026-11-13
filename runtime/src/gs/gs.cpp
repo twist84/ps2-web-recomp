@@ -70,6 +70,10 @@ struct Transfer {
 // reused, so neither it nor TEX0 alone establishes an asset identity.
 c_texture_upload_trace g_texture_trace;
 std::uint64_t g_texture_trace_serial = 0;
+#ifdef PS2_NATIVE_PNG
+bool g_native_gpu_uploaded[13] = {};
+bool g_native_match_logged[13] = {};
+#endif
 
 bool trace_texture_uploads()
 {
@@ -290,15 +294,29 @@ void feed_image(const std::uint8_t *data, std::size_t bytes) {
         report_texture_upload(true);
 #ifdef PS2_NATIVE_PNG
         const int chunk = native_texture::complete_upload(g_texture_trace.current());
+        if (chunk >= 0 && chunk < 13 && !g_native_match_logged[chunk])
+        {
+            const auto &upload = g_texture_trace.current();
+            std::fprintf(stderr,
+                "[gs-native] matched dis/main_menu.pix.%03d at BP=%04X "
+                "hash=%016llX; using native PNG\n",
+                chunk, static_cast<unsigned>((upload.bitbltbuf >> 32) & 0x3fffu),
+                static_cast<unsigned long long>(upload.fnv1a64));
+            g_native_match_logged[chunk] = true;
+        }
 #ifndef PS2_GPU
         (void)chunk;
 #endif
 #ifdef PS2_GPU
-        if (chunk >= 0 && gpu_on())
+        if (chunk >= 0 && chunk < 13 && gpu_on()
+            && !g_native_gpu_uploaded[chunk])
         {
             if (const auto *img = native_texture::chunk_image(chunk))
+            {
                 gpu::upload_native_atlas(static_cast<std::uint32_t>(chunk),
                     img->width, img->height, img->rgba.data());
+                g_native_gpu_uploaded[chunk] = true;
+            }
         }
 #endif
 #endif
@@ -513,6 +531,8 @@ void render_reset() {
     g_texture_trace_serial = 0;
 #ifdef PS2_NATIVE_PNG
     native_texture::reset_residency();
+    std::memset(g_native_gpu_uploaded, 0, sizeof g_native_gpu_uploaded);
+    std::memset(g_native_match_logged, 0, sizeof g_native_match_logged);
 #endif
     g_primitives = 0;
     raster::reset();
@@ -1422,6 +1442,8 @@ void render_state(ps2::state::Stream &s) {
         g_texture_trace.reset();
 #ifdef PS2_NATIVE_PNG
         native_texture::reset_residency();
+        std::memset(g_native_gpu_uploaded, 0, sizeof g_native_gpu_uploaded);
+        std::memset(g_native_match_logged, 0, sizeof g_native_match_logged);
 #endif
     }
     s.pod(g_state);
