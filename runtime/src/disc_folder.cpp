@@ -1506,6 +1506,42 @@ void build_disc_layout(const fs::path &root, s_folder &folder)
 }
 }
 
+std::vector<s_direct_game_asset> enumerate_direct_game(const fs::path &root)
+{
+    const fs::path loose = find_directory(root, "GAME");
+    if (loose.empty()) return {};
+    const fs::path canonical_root = fs::canonical(root);
+    const fs::path canonical_game = fs::canonical(loose);
+    if (!is_inside(canonical_root, canonical_game))
+        throw std::runtime_error("GAME/ escapes disc root");
+
+    std::vector<s_direct_game_asset> assets;
+    std::set<std::string> seen;
+    std::error_code error;
+    for (fs::recursive_directory_iterator it(canonical_game, error), end;
+        !error && it != end; it.increment(error))
+    {
+        if (it->is_symlink() || !it->is_regular_file()) continue;
+        const fs::path canonical_file = fs::canonical(it->path());
+        if (!is_inside(canonical_game, canonical_file))
+            throw std::runtime_error("native GAME asset escapes its directory");
+        const std::uint64_t size = fs::file_size(canonical_file);
+        if (!size || size > UINT32_MAX)
+            throw std::runtime_error("native GAME asset has invalid size");
+        const fs::path relative = it->path().lexically_relative(canonical_game);
+        const std::string name = archive_name_from_path(relative, 4096);
+        if (!seen.insert(archive_name_key(name)).second)
+            throw std::runtime_error("duplicate case-insensitive native GAME asset");
+        assets.push_back({name, canonical_file, static_cast<std::uint32_t>(size)});
+    }
+    if (error)
+        throw std::runtime_error("cannot enumerate native GAME assets: " + error.message());
+    std::fprintf(stderr,
+        "[disc] native GAME direct index: %zu assets, no INFO record cap\n",
+        assets.size());
+    return assets;
+}
+
 bool open_folder(const fs::path &root)
 {
     try
@@ -1516,8 +1552,22 @@ bool open_folder(const fs::path &root)
         std::uint8_t pvd[kSector] = {};
         if (folder->read(16 * kSector, pvd, kSector) != kSector || std::memcmp(pvd, "\x01" "CD001", 6) != 0)
             throw std::runtime_error("folder metadata has no valid ISO 9660 primary descriptor");
-        return open(root.string(), folder->size,
-            [folder](std::uint64_t offset, void *out, std::size_t bytes) { return folder->read(offset, out, bytes); });
+        const bool native = native_arkd_selected();
+        std::vector<s_direct_game_asset> direct_assets;
+        if (native) direct_assets = enumerate_direct_game(root);
+
+        const bool mounted = open(root.string(), folder->size,
+            [folder](std::uint64_t offset, void *out, std::size_t bytes)
+            {
+                return folder->read(offset, out, bytes);
+            });
+        if (mounted && native)
+        {
+            g_direct_game_assets = std::move(direct_assets);
+            const fs::path loose = find_directory(root, "GAME");
+            if (!loose.empty()) g_direct_game_root = fs::canonical(loose);
+        }
+        return mounted;
     }
     catch (const std::exception &error)
     {
