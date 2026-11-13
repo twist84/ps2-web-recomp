@@ -34,6 +34,9 @@ private:
 
 // Asset data staged by the 0x501/0x101 sound-bank worker. These accessors
 // are for subsequent SPU2 upload work, not an EE-facing game API.
+// Status of the separate 0x501/0x102-0x103 audio command worker.
+// 0x10000000 = queued, 0x40000064 = unimplemented SPU2 operation.
+std::uint32_t audio_worker_status();
 bool sound_bank_ready();
 std::uint32_t sound_bank_id();
 std::size_t copy_sound_bank(void *destination, std::size_t capacity);
