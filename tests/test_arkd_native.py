@@ -831,6 +831,9 @@ int main(int argc, char **argv)
         gain_writer.out.data(), gain_writer.out.size());
     gain_reader.set_version(13);
     arkd::state(gain_reader);
+    // The preceding 0x13 RPC left the stereo-mode value at +0x400.
+    // Restore the intended master gain before exercising 0x12 again.
+    std::memcpy(ps2::g_ram + 0x400, &master_gain, 2);
     kernel::g_voice_writes.clear();
     if (!ps2::sif::g_handlers.at(0x501)(0x12, 0x400, 2, 0x180, 4)
         || !check_voice_writes({
