@@ -41,6 +41,8 @@ on:
       - "runtime/src/gs/gpu/gpu.hpp"
       - "runtime/src/gs/gpu/gs.wgsl"
       - "scripts/match_sdbz_fpix_gs.py"
+      - "scripts/dump_sdbz_game_textures.py"
+      - "tests/test_dump_sdbz_game_textures.py"
       - "scripts/crosswalk_sdbz_texture_candidates.py"
       - "scripts/analyze_sdbz_texture_log.py"
       - "runtime/src/gs/gs.cpp"
@@ -88,6 +90,8 @@ on:
       - "runtime/src/gs/gpu/gpu.hpp"
       - "runtime/src/gs/gpu/gs.wgsl"
       - "scripts/match_sdbz_fpix_gs.py"
+      - "scripts/dump_sdbz_game_textures.py"
+      - "tests/test_dump_sdbz_game_textures.py"
       - "scripts/crosswalk_sdbz_texture_candidates.py"
       - "scripts/analyze_sdbz_texture_log.py"
       - "runtime/src/gs/gs.cpp"
@@ -135,6 +139,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_sdbz_texture_log_analysis.py' -v
           python3 -m unittest discover -s tests -p 'test_sdbz_texture_crosswalk.py' -v
           python3 -m unittest discover -s tests -p 'test_sdbz_fpix_gs_match.py' -v
+          python3 -m unittest discover -s tests -p 'test_dump_sdbz_game_textures.py' -v
           python3 -m unittest discover -s tests -p 'test_native_texture_residency.py' -v
           python3 -m unittest discover -s tests -p 'test_gs_shader_setup_stride.py' -v
           python3 scripts/generate_native_menu_manifest.py --check
