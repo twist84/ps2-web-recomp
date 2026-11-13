@@ -1031,6 +1031,13 @@ void submit(WGPUTextureView present_view = nullptr) {
         const auto overlay_lines = ps2::resource_pack_overlay::get_lines();
         if (!overlay_lines.empty())
         {
+            // One quiet translucent backdrop: no image assets or SVG engine.
+            font_draw_panel_in_pass(rp, g_surface_width, g_surface_height,
+                static_cast<float>(g_surface_width) * 0.045f,
+                static_cast<float>(g_surface_height) * 0.055f,
+                static_cast<float>(g_surface_width) * 0.91f,
+                static_cast<float>(g_surface_height) * 0.89f,
+                0.035f, 0.045f, 0.06f, 0.89f);
             const float scale = std::clamp(
                 static_cast<float>(g_surface_height) / 900.0f, 0.55f, 1.5f);
             const float x = static_cast<float>(g_surface_width) * 0.08f;
