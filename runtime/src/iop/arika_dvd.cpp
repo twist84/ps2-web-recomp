@@ -80,6 +80,37 @@ struct s_audio_worker
 s_audio_worker g_audio_worker;
 
 constexpr std::size_t k_max_bank_size = 64u * 1024u * 1024u;
+constexpr std::uint32_t k_spu_limit = 2u * 1024u * 1024u;
+constexpr std::uint32_t k_sound_bank_slots = 16;
+constexpr std::uint32_t k_iop_stage_bytes = 0x8000;
+constexpr std::uint32_t k_spu_base_start = 0x5050;
+
+// The audio-bank loader follows the original 0x5894 worker: an
+// initial 0x800-byte metadata sector, then contiguous sample data.
+struct s_spu_bank_allocation
+{
+    std::uint32_t base = 0;
+    std::uint32_t size = 0;
+};
+
+struct s_spu_upload
+{
+    std::uint32_t bank_id = 0;
+    std::uint32_t spu_address = 0;
+    std::uint32_t staging_iop = 0;
+    std::uint32_t data_size = 0;
+    std::uint32_t offset = 0;
+    std::uint32_t chunk = 0;
+    std::uint32_t serial = 0;
+    std::uint32_t polls = 0;
+    std::uint32_t state = 0x30000000u;
+    bool pending = false;
+    bool waiting_for_dma = false;
+};
+
+std::array<s_spu_bank_allocation, k_sound_bank_slots> g_spu_banks{};
+std::uint32_t g_spu_next = k_spu_base_start;
+s_spu_upload g_spu_upload;
 
 struct s_sound_rpc_state
 {
