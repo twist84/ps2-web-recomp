@@ -53,6 +53,26 @@ sparse: if a pack lacks a texture, resolution falls through to lower
 priority packs. If no pack supplies it, `disc/NATIVE/` remains the
 legacy fallback. If neither exists, the original GS texture is sampled.
 
+## Enable, disable and reorder packs
+
+Create `disc/resourcepacks/load_order.txt` alongside the pack folders.
+Entries are evaluated **top to bottom**; the first enabled pack takes
+precedence for files it contains, regardless of its manifest priority:
+
+```text
+# Topmost enabled pack wins
++Red Menu
++HD Pack
+-Experimental Pack
+```
+
+`+` explicitly enables a pack; `-` disables it without deleting the
+folder. Use the **exact folder name** after the prefix. Packs not listed
+remain enabled and follow the listed packs, ordered by their numeric
+`pack.json` priorities. Duplicate entries and invalid lines are ignored
+with a warning. The file is optional: without it, the old manifest-priority
+behavior is unchanged. Restart SDBZ after editing this file.
+
 Files in `assets/sdbz/` are addressed by logical keys, currently
 `textures/dis/main_menu.pix.001.png`. A pack does not need GS
 fingerprints; the runtime's verified mapping establishes texture identity.
@@ -60,7 +80,7 @@ fingerprints; the runtime's verified mapping establishes texture identity.
 Pack paths cannot be absolute, contain traversal components, or escape
 their pack directory through symlinks. Resources exceeding 64 MiB are
 ignored. `resourcepacks` contains folder packs only in v1; ZIP archives,
-on/off switching, user order preferences, and live reload are future
+a graphical pack manager and live reload are future
 features. To apply edits, restart the game. Packs are enumerated at
 disc startup, with active packs logged as `[resource-pack] enabled ...`.
 
@@ -71,6 +91,6 @@ than changing guest-visible resources.
 ## Next steps
 
 - ZIP/pack archive support
-- User-defined enable/disable and order
+- In-game pack list and order editor
 - More verified FPIX/TIM2 mappings
 - Shared resource resolver for audio and other asset formats
