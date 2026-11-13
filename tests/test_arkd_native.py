@@ -41,8 +41,10 @@ namespace ps2::iop::kernel {
 HleModuleStart g_start;
 JobHandler g_read_job = nullptr;
 JobHandler g_voice_job = nullptr;
+JobHandler g_bank_job = nullptr;
 Job g_queued_read;
 Job g_queued_voice;
+Job g_queued_bank;
 std::vector<std::pair<std::uint32_t, std::uint32_t>> g_voice_writes;
 std::vector<std::vector<std::uint8_t>> g_effect_calls;
 std::vector<std::uint32_t> g_effect_cores;
@@ -76,12 +78,14 @@ void register_job(std::uint32_t kind, JobHandler callback)
 {
     if (kind == kJobArkdRead) g_read_job = callback;
     else if (kind == kJobArkdVoice) g_voice_job = callback;
+    else if (kind == kJobArkdBank) g_bank_job = callback;
 }
 std::uint64_t now() { return 0; }
 std::uint64_t usec_to_cycles(std::uint64_t us) { return us; }
 void schedule(std::uint64_t, const Job &job)
 {
     if (job.kind == kJobArkdVoice) g_queued_voice = job;
+    else if (job.kind == kJobArkdBank) g_queued_bank = job;
     else g_queued_read = job;
 }
 }
@@ -354,6 +358,50 @@ int main(int argc, char **argv)
     std::memcpy(ps2::g_ram + 0x400, &invalid_drive_command, 4);
     if (!ps2::sif::g_handlers.at(0x503)(0x103, 0x400, 4, 0x180, 4)
         || word(0x180) != 0x80000064u) return 62;
+
+    // 0x501/0x101 accepts a 36-byte named audio bank and stages the
+    // bytes asynchronously. It does not yet upload the bank to SPU2.
+    std::memset(ps2::g_ram + 0x100, 0, 0x24);
+    std::memcpy(ps2::g_ram + 0x104, "ply\\small.bin", 14);
+    if (!ps2::sif::g_handlers.at(0x501)(0x101, 0x100, 0x24, 0x180, 4)
+        || word(0x180) != 0) return 63;
+    if (arkd::sound_bank_ready() || !kernel::g_bank_job
+        || kernel::g_queued_bank.kind != kernel::kJobArkdBank)
+        return 64;
+    if (!ps2::sif::g_handlers.at(0x501)(0x101, 0x100, 0x24, 0x180, 4)
+        || word(0x180) != 0x80000065u) return 65;
+
+    // Native v8 state retains pending bank request and job serial.
+    const auto pending_bank_job = kernel::g_queued_bank;
+    ps2::state::Writer bank_writer;
+    bank_writer.set_version(8);
+    arkd::state(bank_writer);
+    kernel::g_bank_job(pending_bank_job);
+    if (!arkd::sound_bank_ready()) return 66;
+
+    // Reload the pending state; completion must remain deterministic.
+    ps2::state::Reader bank_reader(
+        bank_writer.out.data(), bank_writer.out.size());
+    bank_reader.set_version(8);
+    arkd::state(bank_reader);
+    if (arkd::sound_bank_ready()) return 67;
+    kernel::g_bank_job(pending_bank_job);
+    if (!arkd::sound_bank_ready()) return 68;
+    std::vector<std::uint8_t> bank(5000);
+    if (arkd::copy_sound_bank(bank.data(), bank.size()) != 5000)
+        return 69;
+    for (const std::uint8_t value : bank)
+        if (value != 'S') return 70;
+
+    // Test a completed-bank round trip as well.
+    ps2::state::Writer loaded_writer;
+    loaded_writer.set_version(8);
+    arkd::state(loaded_writer);
+    ps2::state::Reader loaded_reader(
+        loaded_writer.out.data(), loaded_writer.out.size());
+    loaded_reader.set_version(8);
+    arkd::state(loaded_reader);
+    if (!arkd::sound_bank_ready()) return 71;
     return 0;
 }
 '''
