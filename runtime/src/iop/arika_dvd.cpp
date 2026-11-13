@@ -119,7 +119,14 @@ bool allocate_spu_bank(std::uint32_t id, std::uint32_t bytes)
 {
     if (id >= k_sound_bank_slots || !bytes) return false;
     auto &selected = g_spu_banks[id];
-    if (selected.base && selected.size >= bytes) return true;
+    if (selected.base)
+    {
+        if (selected.size >= bytes) return true;
+        // Moving an active bank would invalidate SPU2 start/loop
+        // addresses already assigned to voices. Reject growth until
+        // the game explicitly releases the allocation via 0x501/0x102.
+        return false;
+    }
 
     std::uint32_t cursor = k_spu_base_start;
     for (std::uint32_t iteration = 0; iteration <= k_sound_bank_slots;
