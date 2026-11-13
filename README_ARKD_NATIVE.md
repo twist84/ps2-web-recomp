@@ -152,6 +152,21 @@ is available to regression tests through
 equivalent to implementing successful sound streaming or playback.
 The original IRX remains the default.
 
+## IOP sound-transfer ABI groundwork
+
+The original `ARKD_DVD.IRX` calls `libsd` export **#17**
+(`sceSdVoiceTrans`) during bank streaming. This function takes five
+MIPS o32 parameters: channel, mode, IOP buffer address, SPU2 destination,
+and transfer byte count. The last parameter is on the guest stack at
+`sp+0x10`.
+
+The native IOP guest-library bridge now supports this optional fifth
+argument and restores the previous stack contents after the call.
+Existing four-argument calls do not modify the stack argument area.
+This is a prerequisite for the eventual sample-transfer implementation;
+the real `libsd #17` upload and its asynchronous completion are not
+yet wired into native ARKD.
+
 ## Validation
 
 Run the synthetic native catalog and RPC test:
