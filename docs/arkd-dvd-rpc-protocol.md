@@ -126,6 +126,34 @@ operations.** The original `0x5228`/`0x5F08` code manipulates
 per-bank IOP state and performs sound hardware interactions. Until
 those calls are ported, these RPCs cannot complete successfully.
 
+## Verified bank-header layout (original 0x5894–0x5C04)
+
+The original loader first reads one 0x800-byte sector from the audio bank.
+It then reads `u32` at `+0x04` as an entry count and `u32` at
+`+0x08` as its SPU2 allocation span. The subsequent per-entry table
+starts at `+0x0C` with an eight-byte stride:
+
+```cpp
+struct s_arkd_bank_entry
+{
+    std::uint32_t parameter;  // +0: used in the bank's parameter scaler
+    std::uint32_t spu_offset; // +4: added to the allocated SPU2 base
+};
+```
+
+The per-entry base calculation at `0x5B20–0x5B68` reads the second
+field and adds the bank's SPU2 memory base. The parameter calculation
+at `0x5BAC–0x5BEC` reads the first field and scales it by a global
+coefficient. The native `inspect_sound_bank` function now parses
+these fields without assuming they are PCM samples. It limits the table
+to the first 2048 bytes, checks the declared SPU2 span against 2 MiB,
+and rejects relative entry offsets outside that span.
+
+This is **header structural validation only**. The original also
+uses per-bank sound allocation tables and synthesizes voice parameters;
+we still need to reconstruct the sample payload partition before
+issuing `sceSdVoiceTrans` calls.
+
 ## Native 0x501/0x101 sound-bank preload (partial)
 
 The original `0x6528` method copies 36 bytes to its worker request
