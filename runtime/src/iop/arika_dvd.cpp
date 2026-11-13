@@ -112,6 +112,61 @@ std::array<s_spu_bank_allocation, k_sound_bank_slots> g_spu_banks{};
 std::uint32_t g_spu_next = k_spu_base_start;
 s_spu_upload g_spu_upload;
 
+// The original bank-release worker compacts sample memory. Native
+// allocations retain stable SPU2 addresses, reuse holes, and never move
+// an allocation while voices could still reference it.
+bool allocate_spu_bank(std::uint32_t id, std::uint32_t bytes)
+{
+    if (id >= k_sound_bank_slots || !bytes) return false;
+    auto &selected = g_spu_banks[id];
+    if (selected.base && selected.size >= bytes) return true;
+
+    std::uint32_t cursor = k_spu_base_start;
+    for (std::uint32_t iteration = 0; iteration <= k_sound_bank_slots;
+         ++iteration)
+    {
+        std::uint32_t next_base = k_spu_limit;
+        std::uint32_t next_end = k_spu_limit;
+        for (std::uint32_t index = 0; index < k_sound_bank_slots; ++index)
+        {
+            if (index == id) continue;
+            const auto &bank = g_spu_banks[index];
+            if (!bank.base || bank.base < cursor
+                || bank.base >= next_base)
+                continue;
+            next_base = bank.base;
+            next_end = bank.base + bank.size;
+        }
+
+        if (cursor <= next_base && bytes <= next_base - cursor)
+        {
+            selected = {cursor, bytes};
+            g_spu_next = std::max(g_spu_next, cursor + bytes);
+            return true;
+        }
+        if (next_base == k_spu_limit || next_end <= cursor
+            || next_end > k_spu_limit)
+            return false;
+        cursor = next_end;
+    }
+    return false;
+}
+
+bool release_spu_bank(std::uint32_t id)
+{
+    if (id >= k_sound_bank_slots || !g_spu_banks[id].base)
+        return false;
+    g_spu_banks[id] = {};
+    g_spu_next = k_spu_base_start;
+    for (const auto &bank : g_spu_banks)
+    {
+        if (bank.base)
+            g_spu_next = std::max(g_spu_next,
+                bank.base + bank.size);
+    }
+    return true;
+}
+
 struct s_sound_rpc_state
 {
     // Original IRX 0x4A10 / 0x4BB8: alternating copies of two command
