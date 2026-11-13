@@ -468,8 +468,17 @@ void complete_audio_command(const kernel::Job &job)
         return;
 
     g_audio_worker.pending = false;
-    // These commands need the original worker's 0x5228/0x5F08 SPU2
-    // hardware path. Do not fabricate a successful audio operation.
+    // IRX worker opcode 1 executes 0x5228, releasing the selected bank.
+    // Keep other banks at stable SPU addresses instead of physically
+    // compacting them; the allocator will reuse the freed interval.
+    if (g_audio_worker.opcode == 1)
+    {
+        g_audio_worker.state = release_spu_bank(g_audio_worker.selector)
+            ? 0x30000000u : 0x4000012Cu;
+        return;
+    }
+    // Opcode 2 also manipulates SPU2 bank/stream state and is not yet
+    // reconstructed. Never claim success for its hardware operations.
     g_audio_worker.state = 0x40000064u;
     std::fprintf(stderr,
         "[arkd-native] audio command 0x501/0x%X selector %u "
@@ -623,15 +632,9 @@ void begin_spu_upload()
     if (samples > allocation || samples > k_spu_limit)
         return;
 
+    if (!allocate_spu_bank(g_loaded_bank_id, allocation))
+        return;
     auto &bank = g_spu_banks[g_loaded_bank_id];
-    if (bank.size < allocation)
-    {
-        if (g_spu_next > k_spu_limit
-            || allocation > k_spu_limit - g_spu_next)
-            return;
-        bank = {g_spu_next, allocation};
-        g_spu_next += allocation;
-    }
 
     const std::uint32_t staging = kernel::alloc(k_iop_stage_bytes);
     if (!staging || (iop::phys(staging) & (iop::kRamSize - 1))
@@ -1272,6 +1275,13 @@ std::optional<s_sound_bank_info> inspect_sound_bank(
 std::uint32_t sound_upload_status()
 {
     return g_spu_upload.state;
+}
+
+std::optional<std::uint32_t> sound_bank_spu_address(std::uint32_t bank_id)
+{
+    if (bank_id >= k_sound_bank_slots || !g_spu_banks[bank_id].base)
+        return std::nullopt;
+    return g_spu_banks[bank_id].base;
 }
 
 bool sound_bank_ready()
