@@ -281,6 +281,7 @@ void process_voice_mutes(const kernel::Job &job)
             "[arkd-native] voice worker needs libsd for sound register writes\n");
         return;
     }
+    std::array<std::uint32_t, 2> key_off_masks{};
     for (std::uint32_t index = 0; index < 46; ++index)
     {
         // IRX 0x3194-0x31E8 indexes request masks by index / 32 and
@@ -311,8 +312,23 @@ void process_voice_mutes(const kernel::Job &job)
                 index);
             continue;
         }
+        key_off_masks[core] |= 1u << voice;
         g_sound.active_voice_masks[mask_word] &= ~mask_bit;
         g_sound.command_flags[parity][mask_word] &= ~mask_bit;
+    }
+
+    // IRX 0x4730-0x4784 accumulates stopped voices per SPU2 core
+    // and calls sceSdSetSwitch (libsd export #7) on SD_S_KOFF
+    // (0x1600 | core). Volume zeroing alone does not stop a voice.
+    for (std::uint32_t core = 0; core < 2; ++core)
+    {
+        if (!key_off_masks[core]) continue;
+        std::uint32_t result = 0;
+        if (!kernel::call_library_export("libsd", 7,
+                0x1600u | core, key_off_masks[core], 0, 0, result))
+            std::fprintf(stderr,
+                "[arkd-native] libsd voice key-off unavailable (core %u)\n",
+                core);
     }
 }
 
