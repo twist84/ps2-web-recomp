@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <fstream>
 #include <limits>
+#include <mutex>
 #include <map>
 #include <set>
 #include <string>
@@ -17,6 +18,9 @@ namespace
 {
 namespace fs = std::filesystem;
 std::vector<s_pack_info> g_packs;
+std::mutex g_selection_mutex;
+std::vector<std::string> g_pending_selection;
+bool g_selection_pending = false;
 std::vector<s_pack_info> g_discovered;
 fs::path g_pack_directory;
 constexpr std::uint64_t k_max_resource = 64ull * 1024 * 1024;
@@ -239,6 +243,9 @@ bool load_pack(const fs::path &source_path, s_pack_info &pack,
 
 void clear()
 {
+    std::lock_guard<std::mutex> lock(g_selection_mutex);
+    g_selection_pending = false;
+    g_pending_selection.clear();
     g_packs.clear();
     g_discovered.clear();
     g_pack_directory.clear();
@@ -397,6 +404,35 @@ const std::vector<s_pack_info> &discovered_packs()
     return g_discovered;
 }
 
+std::vector<s_pack_info> active_packs_snapshot()
+{
+    std::lock_guard<std::mutex> lock(g_selection_mutex);
+    return g_packs;
+}
+
+bool apply_pending_selection()
+{
+    std::lock_guard<std::mutex> lock(g_selection_mutex);
+    if (!g_selection_pending) return false;
+    g_selection_pending = false;
+    std::vector<s_pack_info> active;
+    for (const auto &id : g_pending_selection)
+    {
+        const auto it = std::find_if(g_discovered.begin(), g_discovered.end(),
+            [&id](const s_pack_info &pack)
+            {
+                return pack.m_id == id;
+            });
+        if (it != g_discovered.end())
+            active.push_back(*it);
+    }
+    g_packs = std::move(active);
+    std::fprintf(stderr,
+        "[resource-pack] applied %zu enabled packs without restarting\n",
+        g_packs.size());
+    return true;
+}
+
 bool save_selection(const std::vector<std::string> &enabled_ids)
 {
     if (g_pack_directory.empty()) return false;
@@ -429,12 +465,21 @@ bool save_selection(const std::vector<std::string> &enabled_ids)
             output << '-' << pack.m_id << '\n';
     }
     output.flush();
-    return output.good();
+    if (!output.good()) return false;
+    // The UI thread only publishes the selection. The GS render thread
+    // installs it between commands, before invalidating its native caches.
+    {
+        std::lock_guard<std::mutex> lock(g_selection_mutex);
+        g_pending_selection = enabled_ids;
+        g_selection_pending = true;
+    }
+    return true;
 }
 
 
 bool find_resource(const std::string &logical_path, s_resource &resource)
 {
+    std::lock_guard<std::mutex> lock(g_selection_mutex);
     resource = {};
     if (!valid_logical_path(logical_path)) return false;
     for (const auto &pack : g_packs)
