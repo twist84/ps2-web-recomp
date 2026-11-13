@@ -15,6 +15,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 HARNESS = r'''#include "iop/arika_dvd.hpp"
 #include "iop/kernel.hpp"
 #include "iop/sif.hpp"
+#include "iop/spu2.hpp"
 #include "ps2/disc.hpp"
 #include "ps2/memory.hpp"
 #include "ps2/state.hpp"
@@ -38,6 +39,11 @@ void watch_span(std::uint32_t, std::uint32_t, const char *) {}
 
 namespace ps2::iop {
 std::uint8_t g_ram[kRamSize] = {};
+}
+
+namespace ps2::iop::spu2 {
+std::array<std::uint16_t, 0x100000> g_test_spu_ram{};
+std::uint16_t *ram() { return g_test_spu_ram.data(); }
 }
 
 namespace ps2::iop::kernel {
@@ -75,6 +81,8 @@ std::vector<std::pair<std::uint32_t, std::uint32_t>> g_voice_writes;
 std::vector<std::pair<std::uint32_t, std::uint32_t>> g_switch_writes;
 std::vector<std::vector<std::uint8_t>> g_effect_calls;
 std::vector<std::uint32_t> g_effect_cores;
+std::map<int, Module> g_modules;
+const std::map<int, Module> &modules() { return g_modules; }
 bool library_exists(const std::string &name) { return name == "libsd"; }
 std::uint32_t alloc(std::uint32_t size, int, std::uint32_t) { return size >= 0x10000 ? 0x10000 : 0x1000; }
 void free(std::uint32_t) {}
@@ -228,7 +236,7 @@ int test_streams()
     if (streams().size() != 1 || streams()[0].contents[2] != 0x11) return 181;
     const auto pending = kernel::g_queued_stream;
     ps2::state::Writer writer;
-    writer.set_version(15);
+    writer.set_version(16);
     arkd::state(writer);
     const std::uint32_t immediate = 0;
     std::memcpy(ps2::g_ram + 0x400, &immediate, 4);
@@ -236,9 +244,11 @@ int test_streams()
     step();
     if (streams().size() != 1 || ps2::iop::g_ram[0x10002] != 0x11) return 182;
     ps2::state::Reader reader(writer.out.data(), writer.out.size());
-    reader.set_version(15);
+    reader.set_version(16);
     arkd::state(reader);
     kernel::g_stream_job(pending);
+    if (streams().size() != 2 || streams()[1].destination != 0x190000)
+        return 201; // Right DMA starts while the left channel is still busy.
     kernel::g_dma_done[0] = 1;
     for (unsigned n = 0; n < 12 && status() != 0x30000000u; ++n) step();
     auto uploaded = streams();
@@ -617,7 +627,13 @@ int main(int argc, char **argv)
 
     ps2::state::Reader reader(writer.out.data(), writer.out.size());
     reader.set_version(7);
+    auto *silent_spu = reinterpret_cast<std::uint8_t *>(ps2::iop::spu2::ram()) + 0x5010;
+    std::memset(silent_spu, 0x5A, 64);
     arkd::state(reader);
+    for (std::size_t i = 0; i < 64; ++i)
+        if (silent_spu[i]
+            != (i == 1 ? 1 : (i == 17 || i == 33 || i == 49 ? 7 : 0)))
+            return 198;
     ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
     if (word(0x180) != 0x10000000u) return 46;
     kernel::g_read_job(saved_job);
@@ -1337,6 +1353,39 @@ int main(int argc, char **argv)
     for (const auto &test : voice_pitch_cases)
         if (arkd::calculate_voice_pitch(test.base, test.request) != test.expected)
             return 153;
+
+    // A different game never started ARKD_DVD. Its state must remain
+    // inactive even though native ARKD is the default selection.
+    arkd::install();
+    ps2::state::Writer inactive_writer;
+    inactive_writer.set_version(15);
+    arkd::state(inactive_writer);
+#ifdef _WIN32
+    _putenv_s("SDBZ_ARKD_NATIVE", "0");
+#else
+    setenv("SDBZ_ARKD_NATIVE", "0", 1);
+#endif
+    ps2::state::Reader inactive_reader(
+        inactive_writer.out.data(), inactive_writer.out.size());
+    inactive_reader.set_version(15);
+    try { arkd::state(inactive_reader); }
+    catch (const std::runtime_error &) { return 199; }
+
+    // An inactive state from SDBZ with the original IRX loaded still
+    // rejects a change of backend on restore.
+    kernel::g_modules[1] = {1, "ARKD_DVD", 0, 0, 0, 0};
+#ifdef _WIN32
+    _putenv_s("SDBZ_ARKD_NATIVE", "1");
+#else
+    setenv("SDBZ_ARKD_NATIVE", "1", 1);
+#endif
+    ps2::state::Reader original_reader(
+        inactive_writer.out.data(), inactive_writer.out.size());
+    original_reader.set_version(15);
+    bool rejected_original = false;
+    try { arkd::state(original_reader); }
+    catch (const std::runtime_error &) { rejected_original = true; }
+    if (!rejected_original) return 200;
     return 0;
 }
 '''

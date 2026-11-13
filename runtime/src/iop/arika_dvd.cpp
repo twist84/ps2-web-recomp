@@ -2,6 +2,7 @@
 
 #include "kernel.hpp"
 #include "sif.hpp"
+#include "spu2.hpp"
 
 #include "ps2/disc.hpp"
 #include "ps2/memory.hpp"
@@ -120,6 +121,7 @@ std::uint32_t g_spu_next = k_spu_base_start;
 // libsd DMA reads this source asynchronously. Keep it allocated for the
 // lifetime of the IOP boot, including after the initial transfer completes.
 std::uint32_t g_silence_staging = 0;
+bool g_native_active = false;
 s_spu_upload g_spu_upload;
 // 0 = free, 1 = bank, 2 = stream, 3 = silence. A channel owner retains its IOP
 // source until sceSdVoiceTransStatus reports completion.
@@ -134,6 +136,13 @@ bool dma_channel_available(std::uint32_t channel)
             && done) g_dma_owner[channel] = 0;
     }
     return g_dma_owner[channel] == 0;
+}
+
+void fill_silent_loop(std::uint8_t *bytes)
+{
+    std::memset(bytes, 0, 64);
+    bytes[1] = 1;
+    bytes[17] = bytes[33] = bytes[49] = 7;
 }
 
 struct s_ams_stream
@@ -863,9 +872,7 @@ bool initialize_sound_hardware()
     if (!g_silence_staging || iop::phys(g_silence_staging) > iop::kRamSize - 64)
         return false;
     auto *silence = iop::ram_ptr(g_silence_staging);
-    std::memset(silence, 0, 64);
-    silence[1] = 1;
-    silence[17] = silence[33] = silence[49] = 7;
+    fill_silent_loop(silence);
     // The original module uploads four silent ADPCM blocks at 0x5010.
     // Without their end flags, redirected voices run into the first bank.
     const bool transferred = kernel::call_library_export("libsd", 17, 0, 0,
@@ -1054,26 +1061,36 @@ void process_stream(const kernel::Job &job)
         return;
     }
 
-    // Finish an admitted DMA before honoring replacement, stop or error.
+    // Both stereo DMA channels may run at once. Retain their shared IOP
+    // staging buffer until each channel reports completion.
     if (g_stream.waiting)
     {
-        std::uint32_t done = 0;
-        if (!kernel::call_library_export("libsd", 19, g_stream.channel, 0, 0, 0, done)
-            || !done)
+        bool pending = false;
+        for (std::uint32_t channel = 0; channel < 2; ++channel)
         {
-            if (++g_stream.polls == 10000)
+            if (g_dma_owner[channel] != 2) continue;
+            std::uint32_t done = 0;
+            if (!kernel::call_library_export("libsd", 19, channel, 0, 0, 0, done)
+                || !done)
             {
-                g_stream.error = 0x40000065u;
-                g_sound.stream_status = g_stream.error;
-                std::fprintf(stderr, "[arkd-native] stream DMA completion timed out; retaining source RAM\n");
+                pending = true;
+                continue;
             }
+            g_dma_owner[channel] = 0;
+        }
+        g_stream.waiting = pending;
+        if (pending && ++g_stream.polls == 10000)
+        {
+            g_stream.error = 0x40000065u;
+            g_sound.stream_status = g_stream.error;
+            std::fprintf(stderr, "[arkd-native] stream DMA completion timed out; retaining source RAM\n");
+        }
+        if (!pending) g_stream.polls = 0;
+        if (pending && (g_stream.request || g_stream.error))
+        {
             schedule_stream();
             return;
         }
-        g_dma_owner[g_stream.channel] = 0;
-        g_stream.waiting = false;
-        g_stream.polls = 0;
-        ++g_stream.channel;
     }
     if (g_stream.error)
     {
@@ -1155,10 +1172,26 @@ void process_stream(const kernel::Job &job)
         if (g_stream.running)
         {
             std::uint32_t address = 0;
-            if (!kernel::call_library_export("libsd", 10, 0x226F, 0, 0, 0, address)
+            const bool address_read = kernel::call_library_export(
+                "libsd", 10, 0x226F, 0, 0, 0, address);
+            if (!address_read
                 || address < k_stream_left || address >= k_stream_left + k_stream_half * 2
                 || (address - k_stream_left) / k_stream_half == g_stream.target_half)
-            { stop_stream(0x40000065u); return; }
+            {
+                std::fprintf(stderr,
+                    "[arkd-native] stream refill missed half %u: NAX 0x%08X, "
+                    "channel %u owner %u, block %u\n",
+                    g_stream.target_half, address, channel,
+                    g_dma_owner[channel], g_stream.block);
+                if (g_stream.waiting)
+                {
+                    g_stream.error = 0x40000065u;
+                    schedule_stream();
+                    return;
+                }
+                stop_stream(0x40000065u);
+                return;
+            }
         }
         const auto destination = (channel ? k_stream_right : k_stream_left)
             + g_stream.target_half * k_stream_half;
@@ -1170,14 +1203,22 @@ void process_stream(const kernel::Job &job)
         {
             std::fprintf(stderr, "[arkd-native] stream DMA rejected: channel %u, result 0x%08X\n",
                 channel, transferred);
+            if (g_stream.waiting)
+            {
+                g_stream.error = 0x40000064u;
+                schedule_stream();
+                return;
+            }
             stop_stream(0x40000064u);
             return;
         }
         g_dma_owner[channel] = 2;
         g_stream.waiting = true;
+        ++g_stream.channel;
         schedule_stream();
         return;
     }
+    if (g_stream.waiting) { schedule_stream(); return; }
     if (g_stream.phase == 1 && g_stream.target_half == 0)
     {
         g_stream.target_half = 1;
@@ -1381,7 +1422,11 @@ void complete_spu_upload(const kernel::Job &job)
     }
 
     const auto channel = (upload.offset / k_iop_stage_bytes) & 1u;
-    if (!dma_channel_available(channel))
+    // A stream refill has one half of audio to complete both stereo DMAs.
+    // Yield this channel between bank chunks when that refill is ready.
+    if (!dma_channel_available(channel)
+        || ((g_stream.phase == 1 || g_stream.phase == 2)
+            && g_stream.channel == channel))
     {
         kernel::schedule(kernel::now() + kernel::usec_to_cycles(200),
             kernel::Job{kernel::kJobArkdSpuUpload, upload.serial});
@@ -1946,6 +1991,7 @@ void register_rpc_servers()
 
 void start_module()
 {
+    g_native_active = true;
     if (!g_catalog.open())
     {
         std::fprintf(stderr, "[arkd-native] INFO/GAME catalog unavailable\n");
@@ -2346,6 +2392,7 @@ void install()
     g_cached_banks = {};
     g_spu_next = k_spu_base_start;
     g_silence_staging = 0;
+    g_native_active = false;
     g_transfer_state = 0x30000000u;
     g_transfer_serial = 0;
     g_control_value = 0x1000;
@@ -2398,11 +2445,18 @@ void state(ps2::state::Stream &stream)
     }
 
     stream.tag("arkd");
-    bool native = native_requested();
+    bool native = stream.loading() ? false : g_native_active;
     stream.pod(native);
-    if (stream.loading() && native != native_requested())
-        throw std::runtime_error(
-            "ARKD native backend must match the savestate's SDBZ_ARKD_NATIVE setting");
+    if (stream.loading())
+    {
+        bool original_arkd_loaded = false;
+        for (const auto &entry : kernel::modules())
+            if (entry.second.name == "ARKD_DVD") original_arkd_loaded = true;
+        if (native != native_requested() && (native || original_arkd_loaded))
+            throw std::runtime_error(
+                "ARKD native backend must match the savestate's SDBZ_ARKD_NATIVE setting");
+        g_native_active = native;
+    }
 
     stream.pod(g_transfer_state);
     stream.pod(g_transfer_serial);
@@ -2532,11 +2586,18 @@ void state(ps2::state::Stream &stream)
         stream.pod(g_dma_owner);
         if (stream.loading())
         {
+            // V15 recorded the channel currently in flight. V16 records
+            // the next channel to submit so left and right can overlap.
+            if (stream.version() == 15 && g_stream.waiting
+                && g_stream.channel < 2
+                && g_dma_owner[g_stream.channel] == 2)
+                ++g_stream.channel;
+            const bool stream_dma_pending = g_dma_owner[0] == 2
+                || g_dma_owner[1] == 2;
             if (g_stream.phase > 3 || g_stream.channel > 2 || g_stream.target_half > 1
                 || g_stream.read_half > 1 || g_stream.request > 2
                 || (g_stream.staging && iop::phys(g_stream.staging) > iop::kRamSize - 0x10000u)
-                || (g_stream.waiting && (g_stream.channel >= 2
-                    || g_dma_owner[g_stream.channel] != 2)))
+                || (g_stream.waiting != stream_dma_pending))
                 throw std::runtime_error("invalid native AMS stream state");
             for (auto owner : g_dma_owner)
                 if (owner > 3) throw std::runtime_error("invalid native audio DMA owner");
@@ -2563,6 +2624,10 @@ void state(ps2::state::Stream &stream)
 
     if (stream.loading() && native)
     {
+        // Older native snapshots predate the silent-loop upload. SPU2
+        // state has already been restored, so repair its reserved region
+        // before any redirected one-shot voice can advance into a bank.
+        fill_silent_loop(reinterpret_cast<std::uint8_t *>(spu2::ram()) + 0x5010);
         if (!g_catalog.open())
             throw std::runtime_error("cannot restore native ARKD asset catalog");
         // A fresh process has not loaded the intercepted IRX yet. The

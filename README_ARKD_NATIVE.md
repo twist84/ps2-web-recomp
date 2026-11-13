@@ -72,7 +72,7 @@ some exact error codes/timing are modeled approximately.
 
 Queued IOP events, bank transfers, multi-bank source caches, and
 per-voice source gains and pending silent-loop redirects are saved in
-**version 15** savestates. Older
+**version 16** savestates. Older
 versions retain their original layouts; native-only fields introduced
 later are reset safely during restoration. A savestate captured with one backend cannot
 be loaded with the other backend selected.
@@ -161,6 +161,13 @@ confirmed those voices end at `0x5010` while music streaming continues.
 Bank and AMS uploads wait for that initial silence DMA to finish. Stream
 startup also tolerates a short interval before SPU2 reports a valid playback
 address. The desktop launcher now reports the selected SDL audio driver.
+Loading an older native savestate repairs the same reserved SPU silence
+region after SPU2 restoration. Games that never start `ARKD_DVD` save an
+inactive ARKD state, so enabling native mode by default does not make their
+savestates depend on this game's asset catalog.
+Version 16 can submit the two AMS stereo DMA channels concurrently, then
+waits for both before reusing their IOP source buffer. Version-15 in-flight
+stream states are translated when loaded.
 
 ## Tests
 
