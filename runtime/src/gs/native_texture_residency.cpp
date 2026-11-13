@@ -126,6 +126,32 @@ void reset_residency()
     g_image_reported.fill(false);
 }
 
+void reload_replacements()
+{
+    // Residency records prove which original image the game uploaded.
+    // They must survive pack changes, including disabling every pack.
+    g_attempted.fill(false);
+    g_images = {};
+    g_available = false;
+    g_catalog_reported = false;
+    g_catalog_missing_reported = false;
+    g_image_reported.fill(false);
+    replacements_available();
+}
+
+std::vector<int> resident_chunks()
+{
+    std::vector<int> chunks;
+    for (const auto &resident : g_residents)
+    {
+        if (resident.chunk < 0) continue;
+        if (std::find(chunks.begin(), chunks.end(), resident.chunk)
+            == chunks.end())
+            chunks.push_back(resident.chunk);
+    }
+    return chunks;
+}
+
 void invalidate_destination(std::uint64_t bitbltbuf, std::uint64_t trxreg)
 {
     if (!g_available) return;
@@ -193,7 +219,7 @@ const s_image *chunk_image(int index)
 
 int complete_upload(const s_texture_upload_signature &upload)
 {
-    if (!g_available || upload.received_bytes != upload.expected_bytes)
+    if (upload.received_bytes != upload.expected_bytes)
         return -1;
     const std::uint32_t psm = static_cast<std::uint32_t>(upload.bitbltbuf >> 56) & 0x3fu;
     if (psm != 0x13 || upload.trxpos != 0) return -1;
@@ -208,7 +234,8 @@ int complete_upload(const s_texture_upload_signature &upload)
         if (width != expected || height != expected
             || upload.fnv1a64 != k_menu_atlases[i].fingerprint)
             continue;
-        if (!chunk_image(static_cast<int>(i))) return -1;
+        // Record original texture identity even with all packs disabled,
+        // enabling a future pack without requiring the game to upload again.
         s_resident *slot = nullptr;
         for (auto &resident : g_residents)
         {
