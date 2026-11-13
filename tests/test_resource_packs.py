@@ -22,14 +22,14 @@ int main(int argc, char **argv)
     if (argc != 3) return 1;
     mount(argv[1]);
     const auto &found = packs();
-    if (found.size() != 2 || found[0].m_id != "higher"
+    if (found.size() != 2 || found[0].m_id != "Higher Pack"
         || found[1].m_id != "lower"
         || found[0].m_priority != 50
         || found[1].m_priority != -5) return 2;
 
     const std::string key = "textures/dis/main_menu.pix.001.png";
     s_resource resource;
-    if (!find_resource(key, resource) || resource.m_pack_id != "higher")
+    if (!find_resource(key, resource) || resource.m_pack_id != "Higher Pack")
         return 3;
     std::vector<std::uint8_t> data;
     if (!read_resource(key, data)
@@ -95,7 +95,7 @@ class ResourcePackTests(unittest.TestCase):
             return folder
 
         low = add_pack("lower", -5)
-        high = add_pack("higher", 50)
+        high = add_pack("Higher Pack", 50)
         add_pack("us", 100, ',"disabled":0')  # invalidated below by region
         us = packs / "us" / "pack.json"
         us.write_text('{"pack":{"format":1,"game":"sdbz","region":"us","priority":100}}',
