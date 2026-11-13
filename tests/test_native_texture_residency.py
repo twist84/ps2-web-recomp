@@ -109,6 +109,7 @@ class NativeResidencyTests(unittest.TestCase):
                 "-I", str(ROOT / "runtime/src"),
                 "-I", str(ROOT / "runtime/include"),
                 str(src), str(ROOT / "runtime/src/gs/native_texture_residency.cpp"),
+                str(ROOT / "runtime/src/resource_pack.cpp"),
                 "-o", str(exe)], check=True)
             subprocess.run([str(exe)], check=True)
 

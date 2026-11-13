@@ -2,6 +2,7 @@
 #include "native_menu_manifest.hpp"
 
 #include "ps2/disc.hpp"
+#include "ps2/resource_pack.hpp"
 
 #include <algorithm>
 #include <array>
@@ -85,7 +86,10 @@ bool replacements_available()
         char suffix[5] = {'.', static_cast<char>('0' + index / 100),
             static_cast<char>('0' + index / 10 % 10),
             static_cast<char>('0' + index % 10), 0};
-        if (disc::find_native_asset(std::string("dis/main_menu.pix") + suffix, "png"))
+        const std::string original = std::string("dis/main_menu.pix") + suffix;
+        resource_pack::s_resource replacement;
+        if (resource_pack::find_resource("textures/" + original + ".png",
+                replacement) || disc::find_native_asset(original, "png"))
         {
             g_available = true;
             if (trace_native_textures() && !g_catalog_reported)

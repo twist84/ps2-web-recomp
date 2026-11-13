@@ -1,6 +1,7 @@
 #include "native_texture.hpp"
 
 #include "ps2/disc.hpp"
+#include "ps2/resource_pack.hpp"
 
 #include <algorithm>
 #include <array>
@@ -162,6 +163,13 @@ bool load_fpix_chunk_png(const std::string &game_path,
 bool load_png(const std::string &game_path, s_image &output)
 {
     output = {};
+    // Folder resource packs override legacy NATIVE. A pack supplies the
+    // same original .pix chunk name under assets/sdbz/textures/.
+    std::vector<std::uint8_t> packed_bytes;
+    if (resource_pack::read_resource("textures/" + game_path + ".png",
+            packed_bytes))
+        return decode_png(packed_bytes.data(), packed_bytes.size(), output);
+
     const auto asset = disc::find_native_asset(game_path, "png");
     if (!asset || asset->size < 8 || asset->size > k_max_file_bytes)
         return false;
