@@ -1539,7 +1539,7 @@ void state(ps2::state::Stream &stream)
         g_spu_next = k_spu_base_start;
     }
 
-    if (stream.version() >= 11)
+    if (stream.version() >= 12)
     {
         std::size_t total = 0;
         for (auto &bank : g_cached_banks)
