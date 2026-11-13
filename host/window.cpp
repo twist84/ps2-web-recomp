@@ -159,7 +159,7 @@ void open_pack_manager()
     g_pack_feedback.clear();
     g_pack_enabled.clear();
     g_pack_available.clear();
-    for (const auto &pack : ps2::resource_pack::packs())
+    for (const auto &pack : ps2::resource_pack::active_packs_snapshot())
         g_pack_enabled.push_back(pack.m_id);
     for (const auto &pack : ps2::resource_pack::discovered_packs())
     {
