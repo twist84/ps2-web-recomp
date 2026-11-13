@@ -327,6 +327,33 @@ int main(int argc, char **argv)
     arkd::state(old_state);
     ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
     if (word(0x180) != 0x30000000u) return 49;
+
+    // 0x503/0x103 accepts CDVD worker commands 1..8 after a
+    // terminal state, reports busy while queued, then completes.
+    const std::uint32_t first_drive_command = 1;
+    std::memcpy(ps2::g_ram + 0x400, &first_drive_command, 4);
+    if (!ps2::sif::g_handlers.at(0x503)(0x103, 0x400, 4, 0x180, 4)
+        || word(0x180) != 0) return 56;
+    if (!ps2::sif::g_handlers.at(0x503)(0x103, 0x400, 4, 0x180, 4)
+        || word(0x180) != 0xFFFFFFFFu) return 57;
+    ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
+    if (word(0x180) != 0x10000000u) return 58;
+    kernel::g_read_job(kernel::g_queued_read);
+    ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
+    if (word(0x180) != 0x30000000u) return 59;
+
+    const std::uint32_t last_drive_command = 8;
+    std::memcpy(ps2::g_ram + 0x400, &last_drive_command, 4);
+    if (!ps2::sif::g_handlers.at(0x503)(0x103, 0x400, 4, 0x180, 4)
+        || word(0x180) != 0) return 60;
+    kernel::g_read_job(kernel::g_queued_read);
+    ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
+    if (word(0x180) != 0x30000000u) return 61;
+
+    const std::uint32_t invalid_drive_command = 9;
+    std::memcpy(ps2::g_ram + 0x400, &invalid_drive_command, 4);
+    if (!ps2::sif::g_handlers.at(0x503)(0x103, 0x400, 4, 0x180, 4)
+        || word(0x180) != 0x80000064u) return 62;
     return 0;
 }
 '''
