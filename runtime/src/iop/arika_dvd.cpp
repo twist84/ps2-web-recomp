@@ -1136,71 +1136,97 @@ void c_catalog::clear()
 bool c_catalog::open()
 {
     clear();
-    // A folder-backed native mount exposes the entire GAME/ tree,
-    // without rebuilding INFO.DAT or relying on the IRX's 2047 slots.
+
+    // The original archive supplies unmodified assets; loose GAME/
+    // files override entries and can also introduce new names. Do not
+    // discard original archive entries merely because an overlay exists.
     const auto loose = disc::loose_game_assets();
-    if (!loose.empty())
-    {
-        for (const auto &asset : loose)
-        {
-            if (!m_assets.emplace(name_key(asset.name),
-                    s_asset{0, asset.size, asset.id}).second)
-                return false;
-        }
-        return true;
-    }
+    std::map<std::string, s_asset> assets;
 
     const auto info = disc::find("INFO.DAT");
     const auto game = disc::find("GAME.DAT");
-    if (!info || !game || info->directory || game->directory
-        || info->size < k_header_bytes || info->size > k_max_info_size)
-        return false;
-
-    const std::uint32_t sectors = (info->size + k_sector_bytes - 1) / k_sector_bytes;
-    std::vector<std::uint8_t> encoded(static_cast<std::size_t>(sectors) * k_sector_bytes);
-    if (!disc::read(info->sector, sectors, encoded.data()))
-        return false;
-    if (encoded[0] != 0x7F
-        || std::memcmp(encoded.data() + 1, "www.arika.co.jp", 15) != 0)
-        return false;
-
-    for (std::size_t offset = 16; offset < info->size; ++offset)
+    const auto load_archive = [&]() -> bool
     {
-        const std::uint8_t value = encoded[offset];
-        const std::uint8_t swapped = static_cast<std::uint8_t>((value << 4) | (value >> 4));
-        encoded[offset] = static_cast<std::uint8_t>(
-            static_cast<std::uint8_t>(~swapped) - encoded[offset & 15]);
-    }
-    const std::uint32_t count = read_u32(encoded.data() + 0x2C);
-    if (count > (info->size - k_header_bytes) / k_record_bytes)
-        return false;
+        if (!info || !game || info->directory || game->directory
+            || info->size < k_header_bytes || info->size > k_max_info_size)
+            return false;
 
-    const std::uint64_t game_sectors =
-        (static_cast<std::uint64_t>(game->size) + k_sector_bytes - 1) / k_sector_bytes;
-    std::map<std::string, s_asset> assets;
-    for (std::uint32_t index = 0; index < count; ++index)
+        const std::uint32_t sectors =
+            (info->size + k_sector_bytes - 1) / k_sector_bytes;
+        std::vector<std::uint8_t> encoded(
+            static_cast<std::size_t>(sectors) * k_sector_bytes);
+        if (!disc::read(info->sector, sectors, encoded.data()))
+            return false;
+        if (encoded[0] != 0x7F
+            || std::memcmp(encoded.data() + 1, "www.arika.co.jp", 15) != 0)
+            return false;
+
+        for (std::size_t offset = 16; offset < info->size; ++offset)
+        {
+            const std::uint8_t value = encoded[offset];
+            const std::uint8_t swapped =
+                static_cast<std::uint8_t>((value << 4) | (value >> 4));
+            encoded[offset] = static_cast<std::uint8_t>(
+                static_cast<std::uint8_t>(~swapped) - encoded[offset & 15]);
+        }
+
+        const std::uint32_t count = read_u32(encoded.data() + 0x2C);
+        if (count > (info->size - k_header_bytes) / k_record_bytes)
+            return false;
+
+        const std::uint64_t game_sectors =
+            (static_cast<std::uint64_t>(game->size) + k_sector_bytes - 1)
+            / k_sector_bytes;
+        for (std::uint32_t index = 0; index < count; ++index)
+        {
+            const std::uint8_t *record = encoded.data()
+                + k_header_bytes
+                + static_cast<std::size_t>(index) * k_record_bytes;
+            const auto *end = static_cast<const std::uint8_t *>(
+                std::memchr(record, 0, 32));
+            const std::size_t name_size =
+                end ? static_cast<std::size_t>(end - record) : 32;
+            if (!name_size) return false;
+
+            const std::string name(
+                reinterpret_cast<const char *>(record), name_size);
+            const std::uint32_t sector = read_u32(record + 0x24);
+            const std::uint32_t allocated = read_u32(record + 0x28);
+            const std::uint32_t size = read_u32(record + 0x2C);
+            if (!size || !allocated
+                || static_cast<std::uint64_t>(size)
+                    > static_cast<std::uint64_t>(allocated) * k_sector_bytes
+                || static_cast<std::uint64_t>(sector) + allocated
+                    > game_sectors)
+                return false;
+
+            if (!assets.emplace(name_key(name),
+                    s_asset{sector, size}).second)
+                return false;
+        }
+        m_game_sector = game->sector;
+        return true;
+    };
+
+    const bool archive_ok = load_archive();
+    if (!archive_ok)
     {
-        const std::uint8_t *record =
-            encoded.data() + k_header_bytes + static_cast<std::size_t>(index) * k_record_bytes;
-        const auto *end = static_cast<const std::uint8_t *>(std::memchr(record, 0, 32));
-        const std::size_t name_size = end
-            ? static_cast<std::size_t>(end - record) : 32;
-        if (!name_size) return false;
-
-        const std::string name(reinterpret_cast<const char *>(record), name_size);
-        const std::uint32_t sector = read_u32(record + 0x24);
-        const std::uint32_t allocated = read_u32(record + 0x28);
-        const std::uint32_t size = read_u32(record + 0x2C);
-        if (!size || !allocated
-            || static_cast<std::uint64_t>(size) > static_cast<std::uint64_t>(allocated) * k_sector_bytes
-            || static_cast<std::uint64_t>(sector) + allocated > game_sectors)
-            return false;
-        if (!assets.emplace(name_key(name), s_asset{sector, size}).second)
-            return false;
+        // A pure loose-asset mount may exceed the legacy INFO table
+        // capacity (2047 records). It must remain fully accessible.
+        if (loose.empty()) return false;
+        assets.clear();
+        m_game_sector = 0;
     }
-    m_game_sector = game->sector;
+
+    for (const auto &asset : loose)
+    {
+        // Override original archive records by normalised filename.
+        // The loose_id selects direct folder reading in c_catalog::read.
+        assets[name_key(asset.name)] = s_asset{0, asset.size, asset.id};
+    }
+
     m_assets = std::move(assets);
-    return true;
+    return !m_assets.empty();
 }
 
 std::optional<s_asset> c_catalog::find(std::string_view name) const
