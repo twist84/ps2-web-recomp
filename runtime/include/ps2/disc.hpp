@@ -31,6 +31,24 @@ std::size_t read_loose_game_asset(std::uint32_t id,
     std::uint64_t offset, void *destination, std::size_t capacity);
 void clear_loose_game_assets();
 
+// Converted host assets live in NATIVE/ beside GAME/. A logical asset
+// such as GAME/ply/p01/p01a.mdl maps to NATIVE/ply/p01/p01a.mdl.png.
+// These bytes must be consumed by a native renderer/audio decoder, never
+// returned to guest PS2 file reads. IDs are mount-local and deterministic.
+struct NativeAsset
+{
+    std::uint32_t id = 0;
+    std::uint32_t size = 0;
+    std::string name;
+    std::string format;
+};
+
+std::vector<NativeAsset> native_assets();
+std::optional<NativeAsset> find_native_asset(
+    const std::string &game_path, const std::string &format);
+std::size_t read_native_asset(std::uint32_t id,
+    std::uint64_t offset, void *destination, std::size_t capacity);
+
 using Reader = std::function<std::size_t(std::uint64_t offset, void *out, std::size_t size)>;
 using Probe = std::function<bool(std::uint64_t offset, std::size_t size)>;
 
