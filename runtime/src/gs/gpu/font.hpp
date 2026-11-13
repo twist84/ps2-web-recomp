@@ -38,6 +38,14 @@ void font_draw_panel_in_pass(WGPURenderPassEncoder rp,
     float x, float y, float width, float height,
     float r, float g, float b, float alpha);
 
+// Separate uniform buffer from performance stats: both overlays are drawn
+// in the same pass but must not overwrite each other's glyph uniforms.
+void font_draw_overlay_text_in_pass(WGPURenderPassEncoder rp,
+    WGPUTextureView target,
+    std::uint32_t surface_width, std::uint32_t surface_height,
+    const char *text, float x, float y, float scale,
+    std::uint8_t r, std::uint8_t g, std::uint8_t b);
+
 void font_shutdown();
 
 }
