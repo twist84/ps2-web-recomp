@@ -40,7 +40,9 @@ struct Envelope {
         if (exponential && !decrease && level > 0x6000) cycles *= 4;
         if (++counter < cycles) return;
         counter = 0;
-        int delta = (decrease ? -8 + (rate & 3) : 7 - (rate & 3)) << std::max(0, 11 - shift);
+        // Left-shifting a negative signed value is undefined in C++.
+        const int magnitude = (decrease ? -8 + (rate & 3) : 7 - (rate & 3));
+        int delta = magnitude * (1 << std::max(0, 11 - shift));
         if (exponential && decrease) delta = (delta * level) >> 15;
         level = std::clamp(level + delta, 0, 0x7FFF);
     }
@@ -81,9 +83,19 @@ std::uint32_t g_statx_settling[2] = {};
 bool g_block_end[2][24][2];
 std::uint8_t g_block_flags[2][24][2];
 
+// Resolve the owning core without ordering or subtracting pointers that
+// belong to different arrays. This is used only when decoding a voice block.
+unsigned voice_slot(const Voice &v) {
+    for (unsigned i = 0; i < 24; ++i) {
+        if (&v == &g_cores[0].voices[i]) return i;
+        if (&v == &g_cores[1].voices[i]) return 24u + i;
+    }
+    std::abort(); // All decoded voices must belong to one of the two cores.
+}
+
 std::uint8_t *block_flags(const Voice &v) {
-    const int c = &v >= g_cores[1].voices ? 1 : 0;
-    return g_block_flags[c][&v - g_cores[c].voices];
+    const unsigned slot = voice_slot(v);
+    return g_block_flags[slot / 24u][slot % 24u];
 }
 std::uint16_t g_spdif_out = 0, g_spdif_mode = 0, g_spdif_media = 0;
 std::vector<std::int16_t> g_audio;
@@ -129,11 +141,10 @@ void decode_block(Voice &v, std::int16_t *out) {
         v.next = v.lsax;
         static const bool trace_arkd_voices = std::getenv("SDBZ_TRACE_ARKD_VOICES") != nullptr;
         if (trace_arkd_voices) {
-            const Core *core = &g_cores[0];
-            if (&v >= &g_cores[1].voices[0]) core = &g_cores[1];
+            const unsigned slot = voice_slot(v);
             std::fprintf(stderr,
-                "[spu2-voice] decode-end core=%td voice=%td block=0x%05X flags=%X lsax=0x%05X next=0x%05X\n",
-                core - &g_cores[0], &v - &core->voices[0], at, flags,
+                "[spu2-voice] decode-end core=%zu voice=%zu block=0x%05X flags=%X lsax=0x%05X next=0x%05X\n",
+                static_cast<std::size_t>(slot / 24u), static_cast<std::size_t>(slot % 24u), at, flags,
                 v.lsax, v.next);
         }
     }
@@ -151,11 +162,10 @@ void key_on(Voice &v) {
     decode_block(v, v.buffer + 28);
     static const bool trace_arkd_voices = std::getenv("SDBZ_TRACE_ARKD_VOICES") != nullptr;
     if (trace_arkd_voices) {
-        const Core *core = &g_cores[0];
-        if (&v >= &g_cores[1].voices[0]) core = &g_cores[1];
+        const unsigned slot = voice_slot(v);
         std::fprintf(stderr,
-            "[spu2-voice] keyon core=%td voice=%td ssa=0x%05X lsax=0x%05X blocks=0x%05X/%05X flags=%X/%X next=0x%05X\n",
-            core - &g_cores[0], &v - &core->voices[0], v.ssa, v.lsax,
+            "[spu2-voice] keyon core=%zu voice=%zu ssa=0x%05X lsax=0x%05X blocks=0x%05X/%05X flags=%X/%X next=0x%05X\n",
+            static_cast<std::size_t>(slot / 24u), static_cast<std::size_t>(slot % 24u), v.ssa, v.lsax,
             v.block[0], v.block[1], block_flags(v)[0], block_flags(v)[1], v.next);
     }
     check_irq(v.block[0], 8);
@@ -210,11 +220,10 @@ void render_voice(Voice &v, std::int32_t (*sum)[2], std::int16_t *raw) {
             if (flags & 1u) {
                 static const bool trace_arkd_voices = std::getenv("SDBZ_TRACE_ARKD_VOICES") != nullptr;
                 if (trace_arkd_voices) {
-                    const Core *core = &g_cores[0];
-                    if (&v >= &g_cores[1].voices[0]) core = &g_cores[1];
+                    const unsigned slot = voice_slot(v);
                     std::fprintf(stderr,
-                        "[spu2-voice] consume-end core=%td voice=%td block=0x%05X flags=%X queued=0x%05X/0x%05X next=0x%05X\n",
-                        core - &g_cores[0], &v - &core->voices[0],
+                        "[spu2-voice] consume-end core=%zu voice=%zu block=0x%05X flags=%X queued=0x%05X/0x%05X next=0x%05X\n",
+                        static_cast<std::size_t>(slot / 24u), static_cast<std::size_t>(slot % 24u),
                         v.block[0], flags, v.block[1], v.lsax, v.next);
                 }
             }
