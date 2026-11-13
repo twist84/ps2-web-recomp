@@ -1002,9 +1002,17 @@ void state(ps2::state::Stream &stream)
         stream.pod(g_pending_bank.valid);
         stream.pod(g_bank_serial);
         stream.pod(g_bank_ready);
-        stream.vec(g_sound_bank_data);
-        if (stream.loading() && g_sound_bank_data.size() > k_max_bank_size)
-            throw std::runtime_error("native ARKD bank savestate exceeds size limit");
+        std::uint32_t bank_size =
+            static_cast<std::uint32_t>(g_sound_bank_data.size());
+        stream.pod(bank_size);
+        // Validate the length BEFORE resizing the vector. A malformed
+        // savestate must not allocate arbitrary gigabytes of host RAM.
+        if (bank_size > k_max_bank_size)
+            throw std::runtime_error(
+                "native ARKD bank savestate exceeds size limit");
+        if (stream.loading()) g_sound_bank_data.resize(bank_size);
+        if (bank_size)
+            stream.bytes(g_sound_bank_data.data(), bank_size);
     }
     else if (stream.loading())
     {
