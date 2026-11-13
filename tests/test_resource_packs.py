@@ -20,8 +20,17 @@ int main(int argc, char **argv)
 {
     using namespace ps2::resource_pack;
     if (argc != 3) return 1;
-    mount(argv[1]);
+    mount(argv[1], argv[2] == std::string("exe")
+        ? std::filesystem::path(argv[3]) : std::filesystem::path{});
     const auto &found = packs();
+    if (argv[2] == std::string("exe"))
+    {
+        if (found.size() != 1 || found[0].m_id != "Executable Pack") return 11;
+        std::vector<std::uint8_t> bytes;
+        if (!read_resource("textures/dis/main_menu.pix.001.png", bytes)
+            || std::string(bytes.begin(), bytes.end()) != "EXEC") return 12;
+        return 0;
+    }
     if (found.size() != 2 || found[0].m_id != "higher"
         || found[1].m_id != "lower"
         || found[0].m_priority != 50
@@ -120,6 +129,19 @@ class ResourcePackTests(unittest.TestCase):
             path.write_bytes(payload)
 
         subprocess.run([str(self.binary), str(root), "test"], check=True)
+
+        # Pack discovery is relative to SDBZ.exe, not the process CWD.
+        executable_directory = self.base / "standalone"
+        executable_pack = executable_directory / "resourcepacks" / "Executable Pack"
+        executable_pack.mkdir(parents=True)
+        (executable_pack / "pack.json").write_text(
+            '{"pack":{"format":1,"game":"sdbz","region":"eu-beta","priority":5}}',
+            encoding="utf-8")
+        target = executable_pack / sub / "main_menu.pix.001.png"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"EXEC")
+        subprocess.run([str(self.binary), str(root), "exe",
+                        str(executable_directory)], check=True)
 
 
 
