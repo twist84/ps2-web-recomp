@@ -840,6 +840,20 @@ int main(int argc, char **argv)
             {0, 0x200}, {0x100, 0xC00},
             {1, 0x200}, {0x101, 0x1200}
         })) return 141;
+
+    // A legacy v12 state may contain an active-voice mask but has no
+    // original source-gain words. Clear those stale masks on load,
+    // rather than emitting register writes from invented zero gains.
+    ps2::state::Writer legacy_writer;
+    legacy_writer.set_version(12);
+    arkd::state(legacy_writer);
+    ps2::state::Reader legacy_reader(
+        legacy_writer.out.data(), legacy_writer.out.size());
+    legacy_reader.set_version(12);
+    arkd::state(legacy_reader);
+    kernel::g_voice_writes.clear();
+    if (!ps2::sif::g_handlers.at(0x501)(0x12, 0x400, 2, 0x180, 4)
+        || !kernel::g_voice_writes.empty()) return 142;
     return 0;
 }
 '''
