@@ -66,6 +66,7 @@ enum JobKind : std::uint32_t {
     kJobFsvIopRead,
     kJobSifDmaCallback,
     kJobSifReply,
+    kJobCdSeek,
     kJobArkdRead,
     kJobArkdVoice,
     kJobArkdBank,
