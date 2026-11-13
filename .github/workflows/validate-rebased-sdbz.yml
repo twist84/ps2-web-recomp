@@ -1,0 +1,31 @@
+name: Validate staged SDBZ rebase
+
+on:
+  push:
+    branches:
+      - rebase-work/sdbz-20261113
+
+permissions:
+  contents: read
+
+jobs:
+  validate-rebased-sdbz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rebase-result/sdbz-20261113
+          fetch-depth: 0
+      - name: Verify main ancestry and clean patch
+        run: |
+          git merge-base --is-ancestor d8a0a452274447b8e1da984bba1a82f7716e3e8f HEAD
+          test "$(git rev-list --count d8a0a452274447b8e1da984bba1a82f7716e3e8f..HEAD)" = 13
+          git diff --check d8a0a452274447b8e1da984bba1a82f7716e3e8f...HEAD
+      - name: Validate loose disc and ISO folder expansion
+        run: |
+          python3 -m unittest discover -s tests -p 'test_game_dat_loose_assets.py' -v
+          python3 -m unittest discover -s tests -p 'test_disc_folder_expansion.py' -v
+      - name: Compile complete ps2runtime target using Clang
+        run: |
+          cmake -S . -B build-rebased -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
+          cmake --build build-rebased --target ps2runtime --parallel 2
