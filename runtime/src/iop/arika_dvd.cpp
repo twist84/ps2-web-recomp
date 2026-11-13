@@ -550,8 +550,8 @@ bool native_cdvd_control(std::uint32_t args, std::uint32_t args_size,
         return true;
     }
     if (g_pending.valid
-        || (g_transfer_state & 0xF0000000u) != 0x30000000u
-           && (g_transfer_state & 0xF0000000u) != 0x40000000u)
+        || ((g_transfer_state & 0xF0000000u) != 0x30000000u
+            && (g_transfer_state & 0xF0000000u) != 0x40000000u))
     {
         reply_u32(ret, ret_size, 0xFFFFFFFFu);
         return true;
