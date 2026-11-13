@@ -413,7 +413,7 @@ bool find_resource(const std::string &logical_path, s_resource &resource)
         if (error || !contained(pack.m_root, canonical)) continue;
         const auto size = fs::file_size(canonical, error);
         if (error || !size || size > k_max_resource) continue;
-        resource = {pack.m_id, canonical, size};
+        resource = {pack.m_id, canonical, size, false, {}};
         return true;
     }
     return false;
