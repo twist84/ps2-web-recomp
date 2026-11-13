@@ -100,6 +100,11 @@ class ResourcePackTests(unittest.TestCase):
         us = packs / "us" / "pack.json"
         us.write_text('{"pack":{"format":1,"game":"sdbz","region":"us","priority":100}}',
                       encoding="utf-8")
+        escaped = packs / "escaped"
+        escaped.mkdir()
+        (escaped / "pack.json").write_text(
+            '{"pack":{"format":1,"game":"sdbz","name":"hello\\\\world"}}',
+            encoding="utf-8")
         bad = packs / "broken"
         bad.mkdir()
         (bad / "pack.json").write_text('{"pack":{garbled}}', encoding="utf-8")
@@ -116,19 +121,6 @@ class ResourcePackTests(unittest.TestCase):
 
         subprocess.run([str(self.binary), str(root), "test"], check=True)
 
-    def test_manifest_rejects_escaped_traversal(self):
-        # Run after the first test with new disallowed input pack.
-        root = self.base / "test" / "disc"
-        if not root.exists():
-            self.skipTest("other fixture not initialized")
-        p = root.parent / "resourcepacks" / "escape"
-        p.mkdir(exist_ok=True)
-        (p / "pack.json").write_text(
-            '{"pack":{"format":1,"game":"sdbz","name":"hello\\\\world"}}',
-            encoding="utf-8")
-        # This pack has a malicious escaped string; the strict manifest
-        # parser rejects it without changing already valid packs.
-        subprocess.run([str(self.binary), str(root), "test"], check=True)
 
 
 if __name__ == "__main__":
