@@ -104,6 +104,34 @@ so supporting them means reproducing actual SPU2 interactions and
 interrupt/completion semantics. A generic zero-valued reply is not
 a correct substitute.
 
+## Native 0x501/0x101 sound-bank preload (partial)
+
+The original `0x6528` method copies 36 bytes to its worker request
+storage. In `0x5894`, the worker calls archive lookup at `0x0A60`
+using the filename at request offset `+4`. The original then performs
+a more involved bank allocation and read sequence, followed by SPU2
+transfers and additional state changes.
+
+Native HLE now implements the **confirmed initial archive-read step**:
+the first word is retained as opaque request metadata, the following
+32 bytes identify the archive asset, and a `kJobArkdBank` event copies
+the actual file payload from the virtual `GAME.DAT` into a bounded
+native cache. Requests that overlap a pending bank transfer return an
+explicit busy error. Zero-length packets, missing assets, and a file
+larger than 64 MiB are rejected.
+
+The bank cache can subsequently be read through
+`arkd::sound_bank_ready()` and `arkd::copy_sound_bank()`. These
+are internal runtime helpers, **not** EE-visible replacements for the
+original bank-upload protocol. No SPU2 data DMA, bank decode, playback
+start, or exact completion interrupt is claimed here.
+
+The pending bank identity, serial, and cache bytes are serialized in
+**version 8 savestates**, with the size checked before allocating on
+restore. A v7 state still loads and initializes the new bank state to
+empty. The native-only bank state is independent of the `0x503`
+file-transfer state machine.
+
 ## Server 0x502 dispatch (0x9D38)
 
 | Method | Called routine | Static result |
