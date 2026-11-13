@@ -1132,6 +1132,19 @@ std::uint32_t make_setup(const State &st, std::uint64_t attr, std::uint32_t *w) 
             w[14], 1u << (w[15] & 0xffu), 1u << (w[15] >> 8));
         if (chunk >= 0 && native_texture::chunk_image(chunk))
             w[25] = static_cast<std::uint32_t>(chunk);
+        // Limit logging to menu-atlas draws; avoid dumping the game's
+        // thousands of unrelated GS texture bindings per frame.
+        if (native_texture::trace_native_textures()
+            && w[12] == 0x2a00 && w[14] == 0x13
+            && (1u << (w[15] & 0xffu)) == 512)
+        {
+            static unsigned samples = 0;
+            if (samples++ < 16)
+                std::fprintf(stderr,
+                    "[gs-native] gpu draw BP=%04X BW=%u size=%ux%u selector=%d\n",
+                    w[12], w[13], 1u << (w[15] & 0xffu),
+                    1u << (w[15] >> 8), chunk);
+        }
     }
 #endif
     return flags;
