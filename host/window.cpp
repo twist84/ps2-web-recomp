@@ -608,6 +608,9 @@ void poll() {
         }
         if (g_pack_manager_open && e.type == SDL_MOUSEBUTTONDOWN)
         {
+            // SDL sends a second mouse-down with clicks=2 for a double click.
+            // The first down already toggles; never toggle it back.
+            if (e.button.clicks > 1) continue;
             int window_w = 0, window_h = 0;
             SDL_GetWindowSize(g_window, &window_w, &window_h);
             if (window_w > 0 && window_h > 0)
