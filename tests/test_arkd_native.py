@@ -376,6 +376,13 @@ int main(int argc, char **argv)
         return 64;
     if (!ps2::sif::g_handlers.at(0x501)(0x101, 0x100, 0x24, 0x180, 4)
         || word(0x180) != 0x80000065u) return 65;
+    // The bank reader and both control opcodes wake one shared worker.
+    const std::uint32_t blocked_selector = 1;
+    std::memcpy(ps2::g_ram + 0x400, &blocked_selector, 4);
+    if (!ps2::sif::g_handlers.at(0x501)(0x102, 0x400, 4, 0x180, 4)
+        || word(0x180) != 0x80000065u) return 81;
+    if (!ps2::sif::g_handlers.at(0x501)(0x103, 0x400, 4, 0x180, 4)
+        || word(0x180) != 0x80000065u) return 82;
 
     // Native v8 state retains pending bank request and job serial.
     const auto pending_bank_job = kernel::g_queued_bank;
@@ -421,6 +428,8 @@ int main(int argc, char **argv)
         || arkd::audio_worker_status() != 0x10000000u) return 73;
     if (!ps2::sif::g_handlers.at(0x501)(0x103, 0x400, 4, 0x180, 4)
         || word(0x180) != 0x80000065u) return 74;
+    if (!ps2::sif::g_handlers.at(0x501)(0x101, 0x100, 0x24, 0x180, 4)
+        || word(0x180) != 0x80000065u) return 83;
 
     const auto pending_audio_job = kernel::g_queued_audio;
     ps2::state::Writer audio_writer;
