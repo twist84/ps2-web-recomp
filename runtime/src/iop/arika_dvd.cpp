@@ -477,7 +477,8 @@ void complete_spu_upload(const kernel::Job &job)
     if (upload.waiting_for_dma)
     {
         std::uint32_t completed = 0;
-        if (!kernel::call_library_export("libsd", 19, upload.bank_id & 1u,
+        if (!kernel::call_library_export("libsd", 19,
+                (upload.offset / k_iop_stage_bytes) & 1u,
                 0, 0, 0, completed))
         {
             fail();
@@ -533,7 +534,8 @@ void complete_spu_upload(const kernel::Job &job)
         g_sound_bank_data.data() + 0x800u + upload.offset, chunk);
 
     std::uint32_t transferred = 0;
-    if (!kernel::call_library_export("libsd", 17, upload.bank_id & 1u,
+    if (!kernel::call_library_export("libsd", 17,
+            (upload.offset / k_iop_stage_bytes) & 1u,
             0, upload.staging_iop, upload.spu_address + upload.offset,
             transferred, padded)
         || static_cast<std::int32_t>(transferred) < 0)
