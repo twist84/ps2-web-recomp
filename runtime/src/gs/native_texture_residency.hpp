@@ -23,4 +23,12 @@ int resident_chunk(std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
     std::uint32_t width, std::uint32_t height);
 const s_image *chunk_image(int index);
 
+// High-resolution replacements retain the game's base atlas dimensions.
+// Support exact 1x and 2x images; reject nonuniform scales and dimensions
+// exceeding the native GPU atlas capacity.
+bool valid_atlas_size(std::uint32_t chunk, std::uint32_t width,
+    std::uint32_t height);
+std::uint32_t atlas_scale(std::uint32_t chunk, std::uint32_t width,
+    std::uint32_t height);
+
 }

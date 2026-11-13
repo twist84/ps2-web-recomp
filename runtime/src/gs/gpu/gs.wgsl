@@ -567,9 +567,6 @@ fn load_texel(l: Loc, k: u32) -> u32 {
 fn fetch(s: Setup, xi: i32, yi: i32, k: u32) -> u32 {
     let x = texel_x(s, xi);
     let y = texel_y(s, yi);
-    if (s.native != 0xFFFFFFFFu) {
-        return native_atlases[s.native * 262144u + y * 512u + x];
-    }
     if (s.dec != 0xFFFFFFFFu) {
         return decoded[s.dec + (y << s.tw) + x];
     }
@@ -611,7 +608,47 @@ fn convert(s: Setup, raw: u32) -> u32 {
     }
 }
 
+fn native_wrap(v: i32, size: u32, mode: u32,
+    mn: u32, mx: u32, scale: u32) -> u32 {
+    switch mode {
+        case 0u { return u32(v) & (size - 1u); }
+        case 1u { return u32(clamp(v, 0, i32(size) - 1)); }
+        case 2u { return u32(clamp(v, i32(mn * scale),
+            i32((mx + 1u) * scale) - 1)); }
+        default {
+            return (u32(v) & (mn * scale + scale - 1u)) | (mx * scale);
+        }
+    }
+}
+
+fn native_fetch(s: Setup, xi: i32, yi: i32) -> u32 {
+    let scale = s.native >> 16u;
+    let atlas = s.native & 0xffffu;
+    let x = native_wrap(xi, (1u << s.tw) * scale,
+        mode(s, 24u, 2u), s.minu, s.maxu, scale);
+    let y = native_wrap(yi, (1u << s.th) * scale,
+        mode(s, 26u, 2u), s.minv, s.maxv, scale);
+    return native_atlases[atlas * 1048576u + y * 1024u + x];
+}
+
 fn sample(s: Setup, uin: f32, vin: f32, k: u32) -> u32 {
+    if (s.native != 0xFFFFFFFFu) {
+        let scale = f32(s.native >> 16u);
+        let su = uin * scale;
+        let sv = vin * scale;
+        if (!has(s, F_BILINEAR)) {
+            return native_fetch(s, i32(floor(su)), i32(floor(sv)));
+        }
+        let u = su - 0.5;
+        let v = sv - 0.5;
+        let x0 = i32(floor(u));
+        let y0 = i32(floor(v));
+        return blend4(native_fetch(s, x0, y0),
+            native_fetch(s, x0 + 1, y0),
+            native_fetch(s, x0, y0 + 1),
+            native_fetch(s, x0 + 1, y0 + 1),
+            u - f32(x0), v - f32(y0));
+    }
     if (!has(s, F_BILINEAR)) {
         return fetch(s, i32(floor(uin)), i32(floor(vin)), k);
     }

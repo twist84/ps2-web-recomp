@@ -1,4 +1,5 @@
 #include "native_texture_residency.hpp"
+#include "native_menu_manifest.hpp"
 
 #include "ps2/disc.hpp"
 
@@ -15,15 +16,7 @@ namespace ps2::gs::native_texture
 namespace
 {
 constexpr std::uint32_t k_gs_blocks = (4u << 20) / 256u;
-constexpr std::array<std::uint64_t, 13> k_fingerprints = {
-    0x825F7B0566C19109ull, 0xB51AF81B5A15B2A7ull,
-    0xDFD3DFF097489FA5ull, 0xD307C2ED0BE864BDull,
-    0xA5A58F8B1540184Full, 0x307DBE18E48C1E8Bull,
-    0x12060A392E8C6231ull, 0x11359618DED2A3F6ull,
-    0x7B54AC6672C00390ull, 0x50E1EDC598A80DD3ull,
-    0x5B0B861DA2F05F13ull, 0x5141C17CB77119C4ull,
-    0x89A12DC009425F4Dull,
-};
+
 
 struct s_resident
 {
@@ -35,14 +28,14 @@ struct s_resident
     int chunk = -1;
 };
 
-std::array<s_image, 13> g_images;
-std::array<bool, 13> g_attempted{};
+std::array<s_image, k_menu_atlases.size()> g_images;
+std::array<bool, k_menu_atlases.size()> g_attempted{};
 std::array<s_resident, 64> g_residents{};
 std::size_t g_next_resident = 0;
 bool g_available = false;
 bool g_catalog_reported = false;
 bool g_catalog_missing_reported = false;
-std::array<bool, 13> g_image_reported{};
+std::array<bool, k_menu_atlases.size()> g_image_reported{};
 
 
 bool intersects(std::uint32_t begin, std::uint32_t end,
@@ -87,7 +80,7 @@ bool replacements_available()
     if (g_available) return true;
     // The catalog is populated when a folder-backed disc is mounted, so
     // do not cache a negative result from early GS initialization.
-    for (std::uint32_t index = 0; index < 13; ++index)
+    for (std::uint32_t index = 0; index < k_menu_atlases.size(); ++index)
     {
         char suffix[5] = {'.', static_cast<char>('0' + index / 100),
             static_cast<char>('0' + index / 10 % 10),
@@ -150,6 +143,23 @@ void invalidate_destination(std::uint64_t bitbltbuf, std::uint64_t trxreg)
     }
 }
 
+std::uint32_t atlas_scale(std::uint32_t chunk, std::uint32_t width,
+    std::uint32_t height)
+{
+    if (chunk >= k_menu_atlases.size()) return 0;
+    const std::uint32_t base = k_menu_atlases[chunk].width;
+    if (width != height) return 0;
+    if (width == base) return 1;
+    if (width == base * 2u) return 2;
+    return 0;
+}
+
+bool valid_atlas_size(std::uint32_t chunk, std::uint32_t width,
+    std::uint32_t height)
+{
+    return atlas_scale(chunk, width, height) != 0;
+}
+
 const s_image *chunk_image(int index)
 {
     if (index < 0 || index >= static_cast<int>(g_images.size())) return nullptr;
@@ -160,10 +170,10 @@ const s_image *chunk_image(int index)
         if (!load_fpix_chunk_png("dis/main_menu.pix",
                 static_cast<std::uint32_t>(index), g_images[at]))
             g_images[at] = {};
-        const std::uint32_t expected = at == 0 ? 256u : 512u;
-        if (g_images[at].width != expected || g_images[at].height != expected
+        if (!valid_atlas_size(static_cast<std::uint32_t>(at),
+                g_images[at].width, g_images[at].height)
             || g_images[at].rgba.size() !=
-                static_cast<std::size_t>(expected) * expected * 4)
+                static_cast<std::size_t>(g_images[at].width) * g_images[at].height * 4)
             g_images[at] = {};
         if (trace_native_textures() && !g_image_reported[at])
         {
@@ -188,11 +198,11 @@ int complete_upload(const s_texture_upload_signature &upload)
     const std::uint32_t bw = static_cast<std::uint32_t>((upload.bitbltbuf >> 48) & 0x3fu);
     const std::uint32_t bp = static_cast<std::uint32_t>((upload.bitbltbuf >> 32) & 0x3fffu);
     if (!bw || bp >= k_gs_blocks) return -1;
-    for (std::size_t i = 0; i < k_fingerprints.size(); ++i)
+    for (std::size_t i = 0; i < k_menu_atlases.size(); ++i)
     {
-        const std::uint32_t expected = i == 0 ? 256u : 512u;
+        const std::uint32_t expected = k_menu_atlases[i].width;
         if (width != expected || height != expected
-            || upload.fnv1a64 != k_fingerprints[i])
+            || upload.fnv1a64 != k_menu_atlases[i].fingerprint)
             continue;
         if (!chunk_image(static_cast<int>(i))) return -1;
         s_resident *slot = nullptr;

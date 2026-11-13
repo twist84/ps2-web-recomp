@@ -49,7 +49,8 @@ constexpr std::uint32_t kClutSlots = 2048;
 constexpr std::uint32_t kClutEntries = 512;
 constexpr std::uint32_t kPrimWords = 28;
 constexpr std::uint32_t kSetupWords = 26;
-constexpr std::uint32_t kNativeAtlasPixels = 512u * 512u;
+constexpr std::uint32_t kNativeAtlasSide = 1024u;
+constexpr std::uint32_t kNativeAtlasPixels = kNativeAtlasSide * kNativeAtlasSide;
 constexpr std::uint32_t kNativeAtlasCount = 13;
 constexpr std::uint32_t kDecodedWords = 4u << 20;
 constexpr std::uint32_t kDecodePrims = 64;
@@ -1130,8 +1131,14 @@ std::uint32_t make_setup(const State &st, std::uint64_t attr, std::uint32_t *w) 
     {
         const int chunk = native_texture::resident_chunk(w[12], w[13],
             w[14], 1u << (w[15] & 0xffu), 1u << (w[15] >> 8));
-        if (chunk >= 0 && native_texture::chunk_image(chunk))
-            w[25] = static_cast<std::uint32_t>(chunk);
+        if (chunk >= 0)
+        {
+            if (const auto *image = native_texture::chunk_image(chunk))
+            {
+                const std::uint32_t scale = image->width / (1u << (w[15] & 0xffu));
+                w[25] = (scale << 16) | static_cast<std::uint32_t>(chunk);
+            }
+        }
         // Limit logging to menu-atlas draws; avoid dumping the game's
         // thousands of unrelated GS texture bindings per frame.
         if (native_texture::trace_native_textures()
@@ -1387,7 +1394,7 @@ void upload_native_atlas(std::uint32_t index, std::uint32_t width,
     std::uint32_t height, const std::uint8_t *rgba)
 {
     if (!g_native_atlases || !rgba || index >= kNativeAtlasCount
-        || (width != 256 && width != 512) || height != width)
+        || !native_texture::valid_atlas_size(index, width, height))
         return;
     // Each atlas has a fixed 512x512 slot. PNGs contain conventional
     // 0..255 alpha; PS2 texture arithmetic uses 0..128 alpha.
@@ -1401,22 +1408,15 @@ void upload_native_atlas(std::uint32_t index, std::uint32_t width,
             | (static_cast<std::uint32_t>(pixel[2]) << 16)
             | (alpha << 24);
     }
-    // The shader addresses slots with a constant 512 pixel row stride.
-    // Compact 256x256 rows must be padded to that stride.
-    if (width == 256)
-    {
-        std::vector<std::uint32_t> padded(kNativeAtlasPixels, 0);
-        for (std::uint32_t y = 0; y < height; ++y)
-            std::copy_n(converted.data() + static_cast<std::size_t>(y) * width,
-                width, padded.data() + static_cast<std::size_t>(y) * 512);
-        wgpuQueueWriteBuffer(g_queue, g_native_atlases,
-            static_cast<std::uint64_t>(index) * kNativeAtlasPixels * 4,
-            padded.data(), padded.size() * 4);
-    }
-    else
-        wgpuQueueWriteBuffer(g_queue, g_native_atlases,
-            static_cast<std::uint64_t>(index) * kNativeAtlasPixels * 4,
-            converted.data(), converted.size() * 4);
+    // All slots have a fixed 1024-pixel stride, independent of actual
+    // atlas dimensions. Both 1x and 2x uploads use the same shader layout.
+    std::vector<std::uint32_t> padded(kNativeAtlasPixels, 0);
+    for (std::uint32_t y = 0; y < height; ++y)
+        std::copy_n(converted.data() + static_cast<std::size_t>(y) * width,
+            width, padded.data() + static_cast<std::size_t>(y) * kNativeAtlasSide);
+    wgpuQueueWriteBuffer(g_queue, g_native_atlases,
+        static_cast<std::uint64_t>(index) * kNativeAtlasPixels * 4,
+        padded.data(), padded.size() * 4);
 }
 
 void draw(const State &st, const Vertex *v, int count) {
