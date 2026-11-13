@@ -160,7 +160,14 @@ bool valid_logical_path(const std::string &path)
 
 bool valid_pack_id(const std::string &id)
 {
-    return valid_component(id) && id.size() <= 80;
+    if (id.empty() || id.size() > 80 || id.front() == ' '
+        || id.back() == ' ' || id == "." || id == "..")
+        return false;
+    for (unsigned char ch : id)
+        if (!(std::isalnum(ch) || ch == '_' || ch == '-'
+            || ch == '.' || ch == ' '))
+            return false;
+    return true;
 }
 
 void warn(const fs::path &path, const char *reason)
