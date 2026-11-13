@@ -24,6 +24,7 @@ HARNESS = r'''#include "iop/arika_dvd.hpp"
 #include <cstring>
 #include <functional>
 #include <map>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -39,7 +40,10 @@ std::uint8_t g_ram[kRamSize] = {};
 namespace ps2::iop::kernel {
 HleModuleStart g_start;
 JobHandler g_read_job = nullptr;
+JobHandler g_voice_job = nullptr;
 Job g_queued_read;
+Job g_queued_voice;
+std::vector<std::pair<std::uint32_t, std::uint32_t>> g_voice_writes;
 std::vector<std::vector<std::uint8_t>> g_effect_calls;
 std::vector<std::uint32_t> g_effect_cores;
 bool library_exists(const std::string &name) { return name == "libsd"; }
@@ -49,7 +53,14 @@ bool call_library_export(const std::string &name, std::uint32_t ordinal,
     std::uint32_t a0, std::uint32_t a1, std::uint32_t,
     std::uint32_t, std::uint32_t &result)
 {
-    if (name != "libsd" || ordinal != 23 || a0 > 1 || a1 != 0x1000)
+    if (name != "libsd") return false;
+    if (ordinal == 5)
+    {
+        g_voice_writes.emplace_back(a0, a1);
+        result = 0;
+        return true;
+    }
+    if (ordinal != 23 || a0 > 1 || a1 != 0x1000)
         return false;
     g_effect_cores.push_back(a0);
     const auto *bytes = ps2::iop::ram_ptr(a1);
@@ -64,10 +75,15 @@ void register_hle_module(const std::string &name, HleModuleStart callback)
 void register_job(std::uint32_t kind, JobHandler callback)
 {
     if (kind == kJobArkdRead) g_read_job = callback;
+    else if (kind == kJobArkdVoice) g_voice_job = callback;
 }
 std::uint64_t now() { return 0; }
 std::uint64_t usec_to_cycles(std::uint64_t us) { return us; }
-void schedule(std::uint64_t, const Job &job) { g_queued_read = job; }
+void schedule(std::uint64_t, const Job &job)
+{
+    if (job.kind == kJobArkdVoice) g_queued_voice = job;
+    else g_queued_read = job;
+}
 }
 
 namespace ps2::sif {
@@ -214,6 +230,23 @@ int main(int argc, char **argv)
     kernel::g_read_job(kernel::g_queued_read);
     ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
     if (word(0x180) != 0x30000000u) return 42;
+
+    // IRX's voice worker mutes both registers for flagged slots.
+    // On voice 0, libsd #5 parameters 0x000 and 0x100 must be zero.
+    const std::uint32_t voice_stop_mask[2] = {1u, 0u};
+    std::memcpy(ps2::g_ram + 0x400, voice_stop_mask, sizeof(voice_stop_mask));
+    if (!ps2::sif::g_handlers.at(0x501)(2, 0x400, 8, 0x180, 4)
+        || word(0x180) != 0) return 50;
+    if (!kernel::g_voice_job
+        || kernel::g_queued_voice.kind != kernel::kJobArkdVoice) return 51;
+    kernel::g_voice_job(kernel::g_queued_voice);
+    bool left_muted = false, right_muted = false;
+    for (const auto &[reg, value] : kernel::g_voice_writes)
+    {
+        if (reg == 0 && value == 0) left_muted = true;
+        if (reg == 0x100 && value == 0) right_muted = true;
+    }
+    if (!left_muted || !right_muted) return 52;
 
     // Save an unfinished native DMA, cancel it, then restore. The
     // in-flight job must still match the preserved request serial.
