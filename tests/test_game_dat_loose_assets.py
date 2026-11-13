@@ -72,17 +72,29 @@ int main(int argc, char **argv)
     if (!ps2::disc::read(info->sector, static_cast<std::uint32_t>(info_data.size() / 2048), info_data.data())) return 4;
     decode_info(info_data, info->size);
     if (read_le32(info_data.data() + 0x2c) != expected_records) return 5;
-    const std::size_t added_record = 0x30 + (expected_records - 1) * 0x30;
     const std::uint8_t cp932_name[6] = {0x83, 0x5c, '.', 'b', 'i', 'n'};
-    const bool name_matches = mode == "cp932"
-        ? std::memcmp(info_data.data() + added_record, cp932_name, sizeof(cp932_name)) == 0
-        : std::memcmp(info_data.data() + added_record, "new.bin", 7) == 0;
-    if (!name_matches
+    const bool cp932 = mode == "cp932";
+    const char *wanted = mode == "first" ? "a_first.bin" : "new.bin";
+    std::size_t added_record = 0;
+    for (std::uint32_t i = 0; i < expected_records; ++i)
+    {
+        const std::size_t candidate = 0x30 + i * 0x30;
+        if ((cp932 && std::memcmp(info_data.data() + candidate, cp932_name, sizeof(cp932_name)) == 0)
+            || (!cp932
+                && std::memcmp(info_data.data() + candidate, wanted, std::strlen(wanted)) == 0
+                && info_data[candidate + std::strlen(wanted)] == 0))
+        {
+            added_record = candidate;
+            break;
+        }
+    }
+    if (!added_record
         || read_le32(info_data.data() + added_record + 0x24) != new_asset_offset
         || read_le32(info_data.data() + added_record + 0x28) != 1
         || read_le32(info_data.data() + added_record + 0x2c) != 100
         || std::memcmp(info_data.data() + added_record + 0x20, info_data.data() + 0x30 + 0x20, 4) != 0) return 6;
 
+    if (mode == "first" && added_record != 0x30) return 13;
     std::vector<std::uint8_t> asset(2048);
     if (!ps2::disc::read(game->sector + new_asset_offset, 1, asset.data())) return 7;
     for (std::size_t i = 0; i < 100; ++i) if (asset[i] != 'N') return 8;
@@ -197,6 +209,12 @@ class NewGameAssetTests(unittest.TestCase):
         shutil.rmtree(fixture, ignore_errors=True)
         fixture_in_place(fixture, True)
         self.run_fixture(fixture, "inplace")
+
+    def test_new_asset_sorts_before_existing_first_letter_group(self):
+        fixture = self.work / "new-first"
+        shutil.rmtree(fixture, ignore_errors=True)
+        fixture_in_place(fixture, True, new_name="a_first.bin")
+        self.run_fixture(fixture, "first")
 
     def test_adds_new_asset_without_game_dat_fallback(self):
         fixture = self.work / "new-without-fallback"
