@@ -153,6 +153,15 @@ A version-15 real-game stream savestate resumed for 1,200 frames in a fresh
 process, loading more banks and starting subsequent streams. A separate
 300-frame run resumed that snapshot with no selection variable set.
 
+The native sound initializer also uploads the original four silent ADPCM
+blocks at SPU address `0x5010`. One-shot voices redirected there now stop at
+the flagged silence block. Without the upload, they ran into sound-bank data
+and caused repeated, overlapping effects. A fresh 6,200-frame game run
+confirmed those voices end at `0x5010` while music streaming continues.
+Bank and AMS uploads wait for that initial silence DMA to finish. Stream
+startup also tolerates a short interval before SPU2 reports a valid playback
+address. The desktop launcher now reports the selected SDL audio driver.
+
 ## Tests
 
 ```sh

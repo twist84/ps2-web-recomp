@@ -729,9 +729,12 @@ bool open_window(bool fullscreen) {
     want.samples = 1024;
     g_audio = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
     if (g_audio) {
+        std::fprintf(stderr, "[window] audio output: %s, %d Hz, %u channels\n",
+            SDL_GetCurrentAudioDriver(), have.freq, have.channels);
         SDL_PauseAudioDevice(g_audio, 0);
         ps2::set_audio_sink(queue_audio);
     }
+    else std::fprintf(stderr, "[window] audio output unavailable: %s\n", SDL_GetError());
     for (int i = 0; i < SDL_NumJoysticks(); ++i)
         if (SDL_IsGameController(i)) open_pad(i);
     if (fullscreen) SDL_ShowCursor(SDL_DISABLE);

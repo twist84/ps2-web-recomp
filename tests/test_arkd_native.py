@@ -248,6 +248,15 @@ int test_streams()
         || uploaded[2].contents[2] != 0x21 || uploaded[3].contents[2] != 0x22)
         return 183;
 
+    // Right after key-on, libsd may still report the previous NAX. It
+    // must not tear down the newly started stream before SPU2 advances.
+    kernel::g_loop_addresses[0x226F] = 0;
+    step();
+    if (status() != 0x30000000u || streams().size() != 4) return 196;
+    kernel::g_loop_addresses[0x226F] = 0x180010;
+    step();
+    if (status() != 0x30000000u) return 197;
+
     // Pause freezes the hardware pitch, retaining both prepared halves.
     ps2::sif::g_handlers.at(0x502)(0x103, 0x400, 4, 0x180, 4);
     step();
@@ -559,6 +568,14 @@ int main(int argc, char **argv)
         || kernel::g_effect_calls.back()[0] != 1
         || kernel::g_effect_calls.back()[4] != 5
         || kernel::g_effect_calls.back()[5] != 1) return 172;
+    if (kernel::g_captures.size() != 1
+        || kernel::g_captures[0].destination != 0x5010
+        || kernel::g_captures[0].size != 64) return 194;
+    for (std::size_t i = 0; i < 64; ++i)
+        if (kernel::g_captures[0].contents[i]
+            != (i == 1 ? 1 : (i == 17 || i == 33 || i == 49 ? 7 : 0)))
+            return 195;
+    kernel::g_captures.clear();
 
     // The IRX splits command masks at 32 voices, but chooses SPU2
     // register IDs using 24 voices per core. Exercise both boundaries.
