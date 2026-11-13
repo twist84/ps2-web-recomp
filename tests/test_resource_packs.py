@@ -87,6 +87,9 @@ int main(int argc, char **argv)
         s_resource resource;
         if (find_resource("textures/dis/main_menu.pix.001.png", resource))
             return 54;
+        // Restore the original fixture's saved file for the Python assertion.
+        if (!save_selection({"lower"}) || !apply_pending_selection())
+            return 55;
         return 0;
     }
     if (argv[2] == std::string("disabled"))
