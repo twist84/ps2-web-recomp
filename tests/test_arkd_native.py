@@ -158,6 +158,25 @@ int main(int argc, char **argv)
     arkd::c_catalog catalog;
     if (!catalog.open()) return 2;
 
+    if (argc == 3 && std::strcmp(argv[2], "mixed") == 0)
+    {
+        // One original archived file, a loose override of a second
+        // archived file, and one brand-new loose asset must coexist.
+        if (catalog.entry_count() != 3) return 120;
+        const auto original = catalog.find("archived.bin");
+        const auto override = catalog.find("override.bin");
+        const auto added = catalog.find("new.bin");
+        if (!original || !override || !added) return 121;
+        std::array<std::uint8_t, 100> bytes{};
+        if (catalog.read(*original, 0, bytes.data(), bytes.size()) != 100
+            || bytes[0] != 'A') return 122;
+        if (catalog.read(*override, 0, bytes.data(), bytes.size()) != 100
+            || bytes[0] != 'N') return 123;
+        if (catalog.read(*added, 0, bytes.data(), bytes.size()) != 100
+            || bytes[0] != 'Z') return 124;
+        return 0;
+    }
+
     if (argc == 3)
     {
         const auto expected = static_cast<std::size_t>(
@@ -732,6 +751,32 @@ class ArkdNativeHleTests(unittest.TestCase):
         self.assertFalse((self.root / "disc" / "INFO.DAT").exists())
         self.assertFalse((self.root / "disc" / "GAME.DAT").exists())
         self.assertFalse((self.root / "disc" / "ARKD_DVD.IRX").exists())
+
+    def test_original_archive_and_partial_loose_overrides(self):
+        # The native index must not lose untouched GAME.DAT entries just
+        # because one or more assets are present in a loose GAME/ tree.
+        from test_game_dat_loose_assets import SECTOR, write_info
+
+        root = self.root / "mixed_overlay"
+        root.mkdir()
+        (root / "GAME").mkdir()
+        assets = [
+            ("archived.bin", 0, b"A" * 100),
+            ("override.bin", 1, b"O" * 100),
+        ]
+        write_info(root, assets, 512)
+        archive = bytearray(2 * SECTOR)
+        archive[:100] = assets[0][2]
+        archive[SECTOR:SECTOR + 100] = assets[1][2]
+        (root / "GAME.DAT").write_bytes(archive)
+        (root / "GAME" / "override.bin").write_bytes(b"N" * 100)
+        (root / "GAME" / "new.bin").write_bytes(b"Z" * 100)
+
+        environment = os.environ.copy()
+        environment["SDBZ_ARKD_NATIVE"] = "1"
+        subprocess.run(
+            [str(self.executable), str(root), "mixed"],
+            env=environment, check=True)
 
     def test_direct_catalog_beyond_legacy_info_limit(self):
         root = self.root / "native_direct"
