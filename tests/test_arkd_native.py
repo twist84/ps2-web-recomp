@@ -903,7 +903,9 @@ int main(int argc, char **argv)
         || parsed->pitch_request != signed_pitch
         || parsed->volume_0 != left_source
         || parsed->volume_1 != right_source
-        || parsed->remaining != tail_value) return 149;
+        || parsed->remaining != tail_value
+        || parsed->start_control != 0xBEEFu
+        || parsed->restart_control != 0xDEADu) return 149;
     if (arkd::inspect_voice_command(
             voice_packet.data(), voice_packet.size() - 1, last_voice)
         || arkd::inspect_voice_command(
@@ -917,6 +919,39 @@ int main(int argc, char **argv)
     const auto empty = arkd::inspect_voice_command(
         voice_packet.data(), voice_packet.size(), last_voice);
     if (!empty || empty->sample_selector != sentinel) return 151;
+
+    // IRX 0x33C4/0x35D4 selects positive vs. nonpositive signed
+    // pitch, then divides the magnitude into 12-step intervals.
+    // Include octave boundaries and int16 endpoints.
+    struct s_pitch_case
+    {
+        std::int16_t request;
+        std::uint32_t octaves;
+        std::uint32_t remainder;
+        bool non_positive;
+    };
+    const s_pitch_case pitch_cases[]
+    {
+        {0, 1, 0, true},
+        {1, 1, 1, false},
+        {11, 1, 11, false},
+        {12, 2, 0, false},
+        {13, 2, 1, false},
+        {-1, 1, 1, true},
+        {-11, 1, 11, true},
+        {-12, 2, 0, true},
+        {-13, 2, 1, true},
+        {32767, 2731, 7, false},
+        {-32768, 2731, 8, true}
+    };
+    for (const auto &test : pitch_cases)
+    {
+        const auto pitch = arkd::decode_pitch_interval(test.request);
+        if (pitch.octave_count != test.octaves
+            || pitch.semitone_remainder != test.remainder
+            || pitch.non_positive != test.non_positive)
+            return 152;
+    }
     return 0;
 }
 '''
