@@ -70,9 +70,10 @@ some exact error codes/timing are modeled approximately.
 - `0x501/0x11`: effect-attribute forwarding through `libsd` #23.
 - `0x502`: selected stream-state and command-buffer operations.
 
-Queued IOP events and native bank/transfer state are saved in the
-**version 11** savestate format. Loading older states clears newer
-native-only fields. A savestate captured with one backend cannot
+Queued IOP events, bank transfers, multi-bank source caches, and
+per-voice source gains are saved in **version 13** savestates. Older
+versions retain their original layouts; native-only fields introduced
+later are reset safely during restoration. A savestate captured with one backend cannot
 be loaded with the other backend selected.
 
 ## What still blocks making native mode the default
@@ -110,6 +111,13 @@ for unverified behaviours, not a permanent design requirement.
   IDs after newer loads. Only admitted uploads update the cache, so
   failed growth leaves the previous source intact. Version **12**
   savestates preserve the bank cache, with a 128 MiB total limit.
+- RPC `0x501/0x12`, `0x13`, and `0x14` now recalculate
+  live SPU2 voice gains, matching the original IRX's two-stage
+  14-bit scaling and per-core register mapping. The `0x14` handler
+  rejects truncated four-byte stereo control packets.
+  Per-voice source gains are persisted in version 13 savestates.
+  **The voice-start worker remains incomplete**, so gain bookkeeping
+  is not yet driven by actual native key-on events.
 - `SDBZ_TRACE_ARKD_RPC=1` enables diagnostics for the first 48
   request bytes of RPC servers `0x500`–`0x503` under either the
   original IRX or native implementation.
