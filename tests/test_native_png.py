@@ -99,15 +99,12 @@ class PngDecodeTests(unittest.TestCase):
         cls.executable = cls.root / ("test_png.exe" if os.name == "nt" else "test_png")
         source = cls.root / "test_png.cpp"
         source.write_text(HARNESS, encoding="utf-8")
-        try:
-            subprocess.run(compiler + [
-                "-std=c++20", "-Wall", "-Wextra",
-                "-I", str(ROOT / "runtime/include"),
-                "-I", str(ROOT / "runtime/src"),
-                str(source), str(ROOT / "runtime/src/gs/native_texture.cpp"),
-                "-lz", "-o", str(cls.executable)], check=True)
-        except subprocess.CalledProcessError:
-            raise unittest.SkipTest("zlib development libraries unavailable")
+        subprocess.run(compiler + [
+            "-std=c++20", "-Wall", "-Wextra",
+            "-I", str(ROOT / "runtime/include"),
+            "-I", str(ROOT / "runtime/src"),
+            str(source), str(ROOT / "runtime/src/gs/native_texture.cpp"),
+            "-lz", "-o", str(cls.executable)], check=True)
 
     @classmethod
     def tearDownClass(cls):
