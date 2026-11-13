@@ -26,7 +26,7 @@ jobs:
           git config user.name "SDBZ Rebase Bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch --create rebase-scratch origin/SDBZ
-          if ! git rebase origin/main; then
+          if ! git rebase -X theirs origin/main; then
             echo 'SDBZ rebase requires conflict resolution:'
             git status --short
             git diff --name-only --diff-filter=U
