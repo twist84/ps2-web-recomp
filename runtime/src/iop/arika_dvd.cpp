@@ -434,7 +434,8 @@ bool queue_audio_command(std::uint32_t method,
         return true;
     }
     // All three 0x501/0x101-0x103 methods wake the same IRX worker.
-    if (g_audio_worker.pending || g_pending_bank.valid)
+    if (g_audio_worker.pending || g_pending_bank.valid
+        || g_spu_upload.pending)
     {
         reply_u32(ret, ret_size, 0x80000065u);
         return true;
@@ -626,6 +627,7 @@ void complete_sound_bank(const kernel::Job &job)
             "[arkd-native] bank %u preloaded: %u entries, %u SPU bytes\n",
             g_loaded_bank_id, metadata->entry_count,
             metadata->spu_memory_bytes);
+        begin_spu_upload();
     }
 }
 
@@ -640,7 +642,8 @@ bool queue_sound_bank(std::uint32_t args, std::uint32_t args_size,
         return true;
     }
     // The bank preload and stream-control commands share an IOP worker.
-    if (g_pending_bank.valid || g_audio_worker.pending)
+    if (g_pending_bank.valid || g_audio_worker.pending
+        || g_spu_upload.pending)
     {
         reply_u32(ret, ret_size, 0x80000065u);
         return true;
@@ -1192,6 +1195,11 @@ std::optional<s_sound_bank_info> inspect_sound_bank(
     return result;
 }
 
+std::uint32_t sound_upload_status()
+{
+    return g_spu_upload.state;
+}
+
 bool sound_bank_ready()
 {
     return g_bank_ready;
@@ -1241,6 +1249,9 @@ void install()
     g_bank_ready = false;
     g_sound_bank_data.clear();
     g_audio_worker = {};
+    g_spu_upload = {};
+    g_spu_banks = {};
+    g_spu_next = k_spu_base_start;
     g_transfer_state = 0x30000000u;
     g_transfer_serial = 0;
     g_control_value = g_transfer_block_bytes = 0;
@@ -1250,6 +1261,7 @@ void install()
     kernel::register_job(kernel::kJobArkdVoice, process_voice_mutes);
     kernel::register_job(kernel::kJobArkdBank, complete_sound_bank);
     kernel::register_job(kernel::kJobArkdAudio, complete_audio_command);
+    kernel::register_job(kernel::kJobArkdSpuUpload, complete_spu_upload);
     kernel::register_hle_module("ARKD_DVD", start_module);
     std::fprintf(stderr,
         "[arkd-native] experimental native module selected; "
@@ -1272,6 +1284,9 @@ void state(ps2::state::Stream &stream)
             g_bank_ready = false;
             g_sound_bank_data.clear();
             g_audio_worker = {};
+            g_spu_upload = {};
+            g_spu_banks = {};
+            g_spu_next = k_spu_base_start;
             g_transfer_state = 0x30000000u;
             g_transfer_serial = 0;
             g_control_value = g_transfer_block_bytes = 0;
@@ -1339,6 +1354,19 @@ void state(ps2::state::Stream &stream)
     else if (stream.loading())
     {
         g_audio_worker = {};
+    }
+
+    if (stream.version() >= 10)
+    {
+        stream.pod(g_spu_next);
+        stream.pod(g_spu_banks);
+        stream.pod(g_spu_upload);
+    }
+    else if (stream.loading())
+    {
+        g_spu_upload = {};
+        g_spu_banks = {};
+        g_spu_next = k_spu_base_start;
     }
 
     if (stream.loading() && native && !g_catalog.open())
