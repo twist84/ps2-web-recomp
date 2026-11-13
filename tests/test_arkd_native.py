@@ -18,6 +18,7 @@ HARNESS = r'''#include "iop/arika_dvd.hpp"
 #include "ps2/memory.hpp"
 #include "ps2/state.hpp"
 
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -456,6 +457,29 @@ int main(int argc, char **argv)
     legacy_audio.set_version(8);
     arkd::state(legacy_audio);
     if (arkd::audio_worker_status() != 0x30000000u) return 80;
+
+    // The bank's first sector is a metadata table, not raw sample
+    // bytes. Verify sizes and reject malformed metadata before future
+    // SPU2 upload code consumes these fields.
+    std::array<std::uint8_t, 2048> header{};
+    const std::uint32_t two_entries = 2;
+    const std::uint32_t spu_span = 0x18000;
+    std::memcpy(header.data() + 4, &two_entries, 4);
+    std::memcpy(header.data() + 8, &spu_span, 4);
+    auto info = arkd::inspect_sound_bank(header.data(), header.size());
+    if (!info || info->entry_count != 2 ||
+        info->spu_memory_bytes != spu_span) return 84;
+    if (arkd::inspect_sound_bank(header.data(), 11)) return 85;
+    const std::uint32_t excessive_entries = 255;
+    std::memcpy(header.data() + 4, &excessive_entries, 4);
+    if (arkd::inspect_sound_bank(header.data(), header.size())) return 86;
+    const std::uint32_t zero = 0;
+    std::memcpy(header.data() + 4, &two_entries, 4);
+    std::memcpy(header.data() + 8, &zero, 4);
+    if (arkd::inspect_sound_bank(header.data(), header.size())) return 87;
+    const std::uint32_t excessive_spu_span = 0x200001;
+    std::memcpy(header.data() + 8, &excessive_spu_span, 4);
+    if (arkd::inspect_sound_bank(header.data(), header.size())) return 88;
     return 0;
 }
 '''
