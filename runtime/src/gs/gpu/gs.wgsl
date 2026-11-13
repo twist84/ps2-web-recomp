@@ -10,6 +10,7 @@ struct Params {
 @group(0) @binding(5) var<storage, read_write> scratch: array<u32>;
 @group(0) @binding(6) var<storage, read> cache: array<u32>;
 @group(0) @binding(7) var<storage, read_write> decoded: array<u32>;
+@group(0) @binding(8) var<storage, read> native_atlases: array<u32>;
 
 override SCALE: u32 = 1u;
 
@@ -438,6 +439,7 @@ struct Setup {
     clut: u32,
     zmax: u32,
     dec: u32,
+    native: u32,
     tf: Fmt,
     ff: Fmt,
     zf: Fmt,
@@ -493,6 +495,7 @@ fn load_setup(at: u32) -> Setup {
     s.clut = data[at + 22u];
     s.zmax = data[at + 23u];
     s.dec = data[at + 24u];
+    s.native = data[at + 25u];
     s.tf = fmt_of(s.tpsm, s.tbp, s.tbw);
     s.ff = fmt_of(s.fpsm, s.fbp, s.fbw);
     s.zf = fmt_of(s.zpsm, s.zbp, s.fbw);
@@ -564,6 +567,9 @@ fn load_texel(l: Loc, k: u32) -> u32 {
 fn fetch(s: Setup, xi: i32, yi: i32, k: u32) -> u32 {
     let x = texel_x(s, xi);
     let y = texel_y(s, yi);
+    if (s.native != 0xFFFFFFFFu) {
+        return native_atlases[s.native * 262144u + y * 512u + x];
+    }
     if (s.dec != 0xFFFFFFFFu) {
         return decoded[s.dec + (y << s.tw) + x];
     }
