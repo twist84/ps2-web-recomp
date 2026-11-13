@@ -411,20 +411,21 @@ bool start_voice(std::uint32_t parity, std::uint32_t index,
     if (!bank || command->control >= bank->entries.size()) return false;
     const auto &sample = bank->entries[command->control];
     const std::uint32_t address = g_spu_banks[bank_id].base + sample.spu_offset;
+    static const bool trace_voices = std::getenv("SDBZ_TRACE_ARKD_VOICES") != nullptr;
+    if (trace_voices)
+        std::fprintf(stderr,
+            "[arkd-voice] start index=%u bank=%u sample=%u restart=%u effect=%u address=0x%05X\n",
+            index, bank_id, command->control, command->restart_control,
+            command->start_control, address);
     const auto base_pitch = static_cast<std::uint16_t>(
         (sample.parameter * g_control_value) >> 12);
     const std::uint32_t reg = index / 24u | ((index % 24u) << 1u);
     std::uint32_t result = 0;
     // IRX 0x4420-0x4508: start address, zero next address, then pitch.
     // 0x6CCC/0x6CFC supplies these envelope defaults at initialization.
-    // SPU2 decodes two ADPCM blocks ahead. Install the one-shot redirect
-    // before key-on so a short sample cannot queue data from address zero
-    // while waiting for the first vblank status pass.
-    const std::uint32_t loop_address = command->restart_control == 0
-        ? 0x5010u : 0u;
     if (!kernel::call_library_export("libsd", 9, reg | 0x2040u, address, 0, 0, result)
         || !kernel::call_library_export("libsd", 9, reg | 0x2140u,
-            loop_address, 0, 0, result)
+            0, 0, 0, result)
         || !kernel::call_library_export("libsd", 5, reg | 0x200u,
             calculate_voice_pitch(base_pitch, command->pitch_request), 0, 0, result))
         return false;
@@ -517,7 +518,14 @@ void process_voice_commands(const kernel::Job &job)
     if (job.b == 1) { poll_voice_status(); return; }
     // IRX 0x3020-0x49EC: stop requests take precedence over starts
     // and live updates. Repeat/end handling remains a separate task.
-    const std::uint32_t parity = job.a & 1u;
+    // IRX 0x3020-0x3060 consumes one pending submission, then selects the
+    // buffer from the current global generation. It intentionally does not
+    // retain the parity that was current when the worker was signalled: if
+    // both alternating slots arrive before it runs, stale commands are
+    // skipped in favour of the newest slot.
+    if (!g_sound.submitted_generation) return;
+    --g_sound.submitted_generation;
+    const std::uint32_t parity = g_sound.buffer_generation & 1u;
     if (!kernel::library_exists("libsd"))
     {
         std::fprintf(stderr,
@@ -616,6 +624,26 @@ void process_voice_commands(const kernel::Job &job)
                 key_on_masks[core], 0, 0, result))
             std::fprintf(stderr,
                 "[arkd-native] libsd voice key-on unavailable (core %u)\n", core);
+    }
+
+    // The SPU2 key-on operation clears its explicit-LSAX latch so ADPCM
+    // loop-start flags can establish the repeat point. Apply one-shot
+    // redirects after key-on: doing this before key-on lets the first decoded
+    // block replace 0x5010 and short victory voices repeat before vblank.
+    for (std::uint32_t core = 0; core < 2; ++core)
+    {
+        const std::uint32_t redirects = key_on_masks[core]
+            & g_voice_end_redirect[core];
+        for (std::uint32_t voice = 0; voice < 24; ++voice)
+        {
+            const std::uint32_t bit = 1u << voice;
+            if (!(redirects & bit)) continue;
+            std::uint32_t result = 0;
+            if (kernel::call_library_export("libsd", 9,
+                    core | (voice << 1u) | 0x2140u,
+                    0x5010u, 0, 0, result))
+                g_voice_end_redirect[core] &= ~bit;
+        }
     }
 
     // IRX 0x4730-0x4784 accumulates stopped voices per SPU2 core

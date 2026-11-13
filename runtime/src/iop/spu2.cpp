@@ -125,7 +125,18 @@ void decode_block(Voice &v, std::int16_t *out) {
     v.next = (at + 8) & kRamMask;
     // Decoding looks ahead. Retire ENDX/mute events only when this block
     // is consumed by render_voice(), not while filling the decode buffer.
-    if (flags & 1u) v.next = v.lsax;
+    if (flags & 1u) {
+        v.next = v.lsax;
+        static const bool trace_arkd_voices = std::getenv("SDBZ_TRACE_ARKD_VOICES") != nullptr;
+        if (trace_arkd_voices) {
+            const Core *core = &g_cores[0];
+            if (&v >= &g_cores[1].voices[0]) core = &g_cores[1];
+            std::fprintf(stderr,
+                "[spu2-voice] decode-end core=%td voice=%td block=0x%05X flags=%X lsax=0x%05X next=0x%05X\n",
+                core - &g_cores[0], &v - &core->voices[0], at, flags,
+                v.lsax, v.next);
+        }
+    }
 }
 
 void key_on(Voice &v) {
@@ -138,6 +149,15 @@ void key_on(Voice &v) {
     v.env = Envelope{};
     decode_block(v, v.buffer);
     decode_block(v, v.buffer + 28);
+    static const bool trace_arkd_voices = std::getenv("SDBZ_TRACE_ARKD_VOICES") != nullptr;
+    if (trace_arkd_voices) {
+        const Core *core = &g_cores[0];
+        if (&v >= &g_cores[1].voices[0]) core = &g_cores[1];
+        std::fprintf(stderr,
+            "[spu2-voice] keyon core=%td voice=%td ssa=0x%05X lsax=0x%05X blocks=0x%05X/%05X flags=%X/%X next=0x%05X\n",
+            core - &g_cores[0], &v - &core->voices[0], v.ssa, v.lsax,
+            v.block[0], v.block[1], block_flags(v)[0], block_flags(v)[1], v.next);
+    }
     check_irq(v.block[0], 8);
 }
 
@@ -187,6 +207,17 @@ void render_voice(Voice &v, std::int32_t (*sum)[2], std::int16_t *raw) {
             position -= 28u << 12;
             std::memmove(v.buffer, v.buffer + 28, 28 * sizeof(std::int16_t));
             const unsigned flags = block_flags(v)[0];
+            if (flags & 1u) {
+                static const bool trace_arkd_voices = std::getenv("SDBZ_TRACE_ARKD_VOICES") != nullptr;
+                if (trace_arkd_voices) {
+                    const Core *core = &g_cores[0];
+                    if (&v >= &g_cores[1].voices[0]) core = &g_cores[1];
+                    std::fprintf(stderr,
+                        "[spu2-voice] consume-end core=%td voice=%td block=0x%05X flags=%X queued=0x%05X/0x%05X next=0x%05X\n",
+                        core - &g_cores[0], &v - &core->voices[0],
+                        v.block[0], flags, v.block[1], v.lsax, v.next);
+                }
+            }
             v.end |= (flags & 1u) != 0;
             v.block[0] = v.block[1];
             block_flags(v)[0] = block_flags(v)[1];
@@ -277,16 +308,22 @@ void tick() {
     static std::uint64_t level_samples = 0;
     std::int32_t voices[2][kBatch][2] = {};
     for (int c = 0; c < 2; ++c) {
-        for (int i = 0; i < 24; ++i) {
+        const auto render_hardware_voice = [&](int i) {
             Voice &v = g_cores[c].voices[i];
-            if (!v.key_on && v.phase == kOff) continue;
+            if (!v.key_on && v.phase == kOff) return;
             if (count) {
                 ++active;
                 ++phases[v.phase];
             }
             render_voice(v, sum[c], i == 1 ? rings[c][2] : i == 3 ? rings[c][3] : nullptr);
-        }
+        };
+        // ARKD reserves core 1 voices 22/23 for its stereo AMS stream.
+        // Render them after the sample-bank snapshot so diagnostic muting
+        // and level reporting classify them as music rather than voices.
+        const int bank_voice_count = c ? 22 : 24;
+        for (int i = 0; i < bank_voice_count; ++i) render_hardware_voice(i);
         std::memcpy(voices[c], sum[c], sizeof voices[c]);
+        for (int i = bank_voice_count; i < 24; ++i) render_hardware_voice(i);
         // Reverb is not modelled, so the wet rings stay silent.
         for (unsigned n = 0; n < kBatch; ++n) {
             rings[c][4][n] = clamp16(sum[c][n][0]);

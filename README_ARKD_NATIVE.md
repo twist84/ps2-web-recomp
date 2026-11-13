@@ -158,9 +158,10 @@ blocks at SPU address `0x5010`. One-shot voices redirected there now stop at
 the flagged silence block. Without the upload, they ran into sound-bank data
 and caused repeated, overlapping effects. A fresh 6,200-frame game run
 confirmed those voices end at `0x5010` while music streaming continues.
-One-shot starts install that loop address before key-on. This matters because
-SPU2 decodes ahead: waiting for the next vblank could already queue data past
-the sample end, most noticeably during level-intro speech and win audio.
+The native worker applies that redirect immediately after key-on. Applying it
+before key-on is ineffective because SPU2 clears its explicit loop-address
+latch when starting the voice, allowing the sample's loop-start flag to
+replace the silent address before the first status poll.
 Bank and AMS uploads wait for that initial silence DMA to finish. Stream
 startup also tolerates a short interval before SPU2 reports a valid playback
 address. The desktop launcher now reports the selected SDL audio driver.

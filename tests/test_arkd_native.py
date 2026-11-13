@@ -899,8 +899,10 @@ int main(int argc, char **argv)
         || ps2::sif::g_ee_sregs.back().first != 12
         || ps2::sif::g_ee_sregs.back().second != 0x30009000u) return 155;
 
-    // A real queued start on core 1 resolves bank 1, sample 1; a
-    // second worker pass must not restart an already consumed command.
+    // The original worker reads the newest global buffer parity when it
+    // wakes, rather than the parity captured by an earlier signal. Submit a
+    // start and replace it with an empty alternating slot before executing
+    // the first job: the stale start must never reach SPU2.
     ps2::sif::g_handlers.at(0x500)(0x10, 0, 0, 0x180, 4);
     std::array<std::uint8_t, 46 * 16> starts{};
     for (unsigned voice = 0; voice < 46; ++voice)
@@ -912,14 +914,28 @@ int main(int argc, char **argv)
     std::memcpy(starts.data() + 24 * 16 + 4, &start_sample, 2);
     std::memcpy(starts.data() + 24 * 16 + 12, &enable_effect, 2);
     std::memcpy(ps2::g_ram + 0x800, starts.data(), starts.size());
+    ps2::sif::g_handlers.at(0x501)(1, 0x800, starts.size(), 0x180, 4);
+    const auto stale_voice_job = kernel::g_queued_voice;
+    for (unsigned voice = 0; voice < 46; ++voice)
+        std::memset(ps2::g_ram + 0x800 + voice * 16, 0xFF, 4);
     kernel::g_address_writes.clear();
     kernel::g_voice_writes.clear();
     kernel::g_switch_writes.clear();
     ps2::sif::g_handlers.at(0x501)(1, 0x800, starts.size(), 0x180, 4);
+    kernel::g_voice_job(stale_voice_job);
+    if (!kernel::g_address_writes.empty() || !kernel::g_switch_writes.empty())
+        return 196;
     kernel::g_voice_job(kernel::g_queued_voice);
-    if (kernel::g_address_writes.size() != 2
+
+    // A real queued start on core 1 resolves bank 1, sample 1; a
+    // second worker pass must not restart an already consumed command.
+    std::memcpy(ps2::g_ram + 0x800, starts.data(), starts.size());
+    ps2::sif::g_handlers.at(0x501)(1, 0x800, starts.size(), 0x180, 4);
+    kernel::g_voice_job(kernel::g_queued_voice);
+    if (kernel::g_address_writes.size() != 3
         || kernel::g_address_writes[0] != std::pair<std::uint32_t, std::uint32_t>{0x2041, 0x5150}
-        || kernel::g_address_writes[1] != std::pair<std::uint32_t, std::uint32_t>{0x2141, 0x5010}
+        || kernel::g_address_writes[1] != std::pair<std::uint32_t, std::uint32_t>{0x2141, 0}
+        || kernel::g_address_writes[2] != std::pair<std::uint32_t, std::uint32_t>{0x2141, 0x5010}
         || kernel::g_switch_writes.size() != 3
         || kernel::g_switch_writes[0] != std::pair<std::uint32_t, std::uint32_t>{0x1501, 1}
         || kernel::g_switch_writes[1] != std::pair<std::uint32_t, std::uint32_t>{0x1901, 0x800001}
@@ -933,7 +949,7 @@ int main(int argc, char **argv)
     kernel::g_voice_job(kernel::g_queued_voice);
     if (kernel::g_switch_writes.size() != started_switches) return 157;
 
-    // The once-only end redirect must survive a new savestate, while
+    // The post-key-on redirect must not be emitted again at vblank, while
     // active voices report in EE groups of 32, not hardware cores of 24.
     arkd::record_voice_volume_state(32, 0, 0);
     ps2::state::Writer legacy_end_writer;
@@ -966,7 +982,7 @@ int main(int argc, char **argv)
     const auto redirected_count = kernel::g_address_writes.size();
     arkd::on_vblank();
     kernel::g_voice_job(kernel::g_queued_voice);
-    if (kernel::g_address_writes.size() != redirected_count + 1) return 168;
+    if (kernel::g_address_writes.size() != redirected_count) return 168;
     ps2::state::Reader legacy_end_reader(legacy_end_writer.out.data(), legacy_end_writer.out.size());
     legacy_end_reader.set_version(13);
     arkd::state(legacy_end_reader);
