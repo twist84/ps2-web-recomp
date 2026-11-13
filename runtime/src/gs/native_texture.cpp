@@ -144,6 +144,21 @@ bool decode_png(const std::uint8_t *data, std::size_t size, s_image &output)
     return true;
 }
 
+bool load_fpix_chunk_png(const std::string &game_path,
+    std::uint32_t chunk_index, s_image &output)
+{
+    output = {};
+    if (chunk_index > 999) return false;
+    // The original FPIX directory index, not a GS TBP or a texture hash,
+    // selects the replacement. Those GPU addresses may be recycled.
+    char index[5] = {};
+    index[0] = '.';
+    index[1] = static_cast<char>('0' + chunk_index / 100);
+    index[2] = static_cast<char>('0' + chunk_index / 10 % 10);
+    index[3] = static_cast<char>('0' + chunk_index % 10);
+    return load_png(game_path + index, output);
+}
+
 bool load_png(const std::string &game_path, s_image &output)
 {
     output = {};
