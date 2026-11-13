@@ -553,6 +553,80 @@ void poll() {
         if (e.type == SDL_KEYDOWN && !e.key.repeat
             && !handle_pack_key(e.key.keysym.scancode))
             handle_hotkey(e.key);
+        if (g_pack_manager_open && e.type == SDL_CONTROLLERBUTTONDOWN
+            && g_pads[0] && e.cbutton.which
+                == SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pads[0])))
+        {
+            switch (e.cbutton.button)
+            {
+            case SDL_CONTROLLER_BUTTON_DPAD_UP:
+                handle_pack_key(SDL_SCANCODE_UP);
+                break;
+            case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+                handle_pack_key(SDL_SCANCODE_DOWN);
+                break;
+            case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+                handle_pack_key(SDL_SCANCODE_LEFT);
+                break;
+            case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+                handle_pack_key(SDL_SCANCODE_RIGHT);
+                break;
+            case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
+                handle_pack_key(SDL_SCANCODE_PAGEUP);
+                break;
+            case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
+                handle_pack_key(SDL_SCANCODE_PAGEDOWN);
+                break;
+            case SDL_CONTROLLER_BUTTON_A:
+            case SDL_CONTROLLER_BUTTON_START:
+                handle_pack_key(SDL_SCANCODE_RETURN);
+                break;
+            case SDL_CONTROLLER_BUTTON_B:
+                handle_pack_key(SDL_SCANCODE_ESCAPE);
+                break;
+            default:
+                break;
+            }
+        }
+        if (g_pack_manager_open && e.type == SDL_MOUSEWHEEL)
+        {
+            if (e.wheel.y)
+                handle_pack_key(e.wheel.y > 0
+                    ? SDL_SCANCODE_UP : SDL_SCANCODE_DOWN);
+        }
+        if (g_pack_manager_open && e.type == SDL_MOUSEBUTTONDOWN)
+        {
+            int window_w = 0, window_h = 0;
+            SDL_GetWindowSize(g_window, &window_w, &window_h);
+            if (window_w > 0 && window_h > 0)
+            {
+                const float scale = std::clamp(
+                    static_cast<float>(window_h) / 900.f, 0.55f, 1.5f);
+                const float step = 31.f * scale;
+                const float first_y = window_h * 0.10f;
+                const int line = static_cast<int>(
+                    (static_cast<float>(e.button.y) - first_y) / step);
+                const int enabled_start = 5;
+                const int available_start = 7
+                    + static_cast<int>(std::min<std::size_t>(9, g_pack_enabled.size()));
+                if (line >= enabled_start && line < enabled_start
+                    + static_cast<int>(std::min<std::size_t>(9, g_pack_enabled.size())))
+                {
+                    g_pack_column = 1;
+                    g_pack_row = line - enabled_start;
+                }
+                else if (line >= available_start && line < available_start
+                    + static_cast<int>(std::min<std::size_t>(9, g_pack_available.size())))
+                {
+                    g_pack_column = 0;
+                    g_pack_row = line - available_start;
+                }
+                if (e.button.button == SDL_BUTTON_RIGHT || e.button.clicks >= 2)
+                    handle_pack_key(g_pack_column == 1
+                        ? SDL_SCANCODE_LEFT : SDL_SCANCODE_RIGHT);
+                refresh_pack_overlay();
+            }
+        }
         if (e.type == SDL_KEYUP && e.key.keysym.scancode == SDL_SCANCODE_RETURN) g_fullscreen_enter = false;
         if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) g_fullscreen_enter = false;
         if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED &&
