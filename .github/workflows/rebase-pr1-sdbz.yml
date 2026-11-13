@@ -1,0 +1,43 @@
+name: Stage PR 1 rebase onto SDBZ
+
+on:
+  push:
+    branches:
+      - rebase-work/prs-20261113
+
+permissions:
+  contents: write
+
+jobs:
+  rebase-pr1:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Rebase only PR 1 commits and validate before staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin SDBZ fix/eu-beta-info-irx-lookup main
+          test "$(git rev-parse origin/SDBZ)" = "b12b5f268219b99b55b96e5fc9b6f88951116ee8"
+          test "$(git rev-parse origin/fix/eu-beta-info-irx-lookup)" = "0f7d78e0b845cc8b425da8c9e7f2f7cf56af0ebe"
+          git config user.name "SDBZ Rebase Bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --create pr1-scratch origin/fix/eu-beta-info-irx-lookup
+          if ! git -c commit.gpgsign=false rebase -X theirs --onto origin/SDBZ 1f8094f23447b3c91af5667e7c3ea06e58a15302; then
+            echo "Rebase conflicted; no result pushed"
+            git status --short
+            git diff --name-only --diff-filter=U
+            exit 2
+          fi
+          test "$(git rev-list --count origin/SDBZ..HEAD)" = 9
+          git merge-base --is-ancestor origin/SDBZ HEAD
+          echo "New PR 1 head: $(git rev-parse HEAD)"
+          python3 -m unittest discover -s tests -p 'test_game_dat_loose_assets.py' -v
+          python3 -m unittest discover -s tests -p 'test_disc_folder_expansion.py' -v
+          python3 -m unittest discover -s tests -p 'test_eu_beta_virtual_info.py' -v
+          cmake -S . -B build-pr1-rebased -DCMAKE_CXX_COMPILER=clang++ -DPS2_BUILD_TESTS=ON
+          cmake --build build-pr1-rebased --target ps2runtime --parallel 2
+          git push origin HEAD:refs/heads/rebase-result/pr1-20261113
