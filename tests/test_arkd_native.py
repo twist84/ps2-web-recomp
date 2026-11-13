@@ -854,6 +854,26 @@ int main(int argc, char **argv)
     kernel::g_voice_writes.clear();
     if (!ps2::sif::g_handlers.at(0x501)(0x12, 0x400, 2, 0x180, 4)
         || !kernel::g_voice_writes.empty()) return 142;
+
+    // The original 0x4A10, 0x4AC0 and 0x4BB8 handlers EACH advance
+    // the alternating command generation. Verify 0x501/2 chooses the
+    // next parity, including after a malformed packet.
+    if (!ps2::sif::g_handlers.at(0x500)(1, 0, 0, 0x180, 4)
+        || word(0x180) != 0) return 143;
+    std::memset(ps2::g_ram + 0x800, 0, 0x33C);
+    if (!ps2::sif::g_handlers.at(0x501)(2, 0x800, 4, 0x180, 4)
+        || word(0x180) != 0x80000064u) return 144;
+    if (!ps2::sif::g_handlers.at(0x501)(1, 0x800, 0x2E0, 0x180, 4)
+        || word(0x180) != 0) return 145;
+    if (!ps2::sif::g_handlers.at(0x501)(2, 0x800, 8, 0x180, 4)
+        || word(0x180) != 0
+        || kernel::g_queued_voice.a != 0) return 146;
+    if (!ps2::sif::g_handlers.at(0x501)(3, 0x800, 0x33C, 0x180, 4)
+        || word(0x180) != 0
+        || kernel::g_queued_voice.a != 1) return 147;
+    if (!ps2::sif::g_handlers.at(0x501)(2, 0x800, 8, 0x180, 4)
+        || word(0x180) != 0
+        || kernel::g_queued_voice.a != 0) return 148;
     return 0;
 }
 '''
