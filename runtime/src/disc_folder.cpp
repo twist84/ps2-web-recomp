@@ -921,7 +921,7 @@ void synthetic_layout(const fs::path &root, s_folder &folder, std::vector<s_layo
         std::wstring top = relative.begin()->wstring();
         for (auto &c : top)
             if (c >= L'a' && c <= L'z') c = static_cast<wchar_t>(c - (L'a' - L'A'));
-        if (top == L".PS2-DISC" || top == L"GAME" || it->is_symlink())
+        if (top == L".PS2-DISC" || top == L"GAME" || top == L"NATIVE"\n            || it->is_symlink())
         {
             if (it->is_directory()) it.disable_recursion_pending();
             continue;
