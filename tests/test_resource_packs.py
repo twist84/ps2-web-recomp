@@ -31,6 +31,23 @@ int main(int argc, char **argv)
             || std::string(bytes.begin(), bytes.end()) != "EXEC") return 12;
         return 0;
     }
+    if (argv[2] == std::string("disabled"))
+    {
+        if (found.size() != 1 || found[0].m_id != "lower") return 20;
+        std::vector<std::uint8_t> bytes;
+        if (!read_resource("textures/dis/main_menu.pix.001.png", bytes)
+            || std::string(bytes.begin(), bytes.end()) != "LOW-OLD") return 21;
+        return 0;
+    }
+    if (argv[2] == std::string("ordered"))
+    {
+        if (found.size() != 2 || found[0].m_id != "lower"
+            || found[1].m_id != "Higher Pack") return 22;
+        std::vector<std::uint8_t> bytes;
+        if (!read_resource("textures/dis/main_menu.pix.001.png", bytes)
+            || std::string(bytes.begin(), bytes.end()) != "LOW-OLD") return 23;
+        return 0;
+    }
     if (found.size() != 2 || found[0].m_id != "Higher Pack"
         || found[1].m_id != "lower"
         || found[0].m_priority != 50
@@ -129,6 +146,17 @@ class ResourcePackTests(unittest.TestCase):
             path.write_bytes(payload)
 
         subprocess.run([str(self.binary), str(root), "test"], check=True)
+
+        # Disable a higher-priority pack without touching its manifest.
+        order_file = packs / "load_order.txt"
+        order_file.write_text("-Higher Pack\n+lower\n", encoding="utf-8")
+        subprocess.run([str(self.binary), str(root), "disabled"], check=True)
+
+        # Explicit order overrides numeric manifest priorities.
+        order_file.write_text("# first wins\n+lower\n+Higher Pack\n",
+                              encoding="utf-8")
+        subprocess.run([str(self.binary), str(root), "ordered"], check=True)
+        order_file.unlink()
 
         # Pack discovery is relative to SDBZ.exe, not the process CWD.
         executable_directory = self.base / "standalone"
