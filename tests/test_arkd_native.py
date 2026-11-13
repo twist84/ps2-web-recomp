@@ -348,10 +348,11 @@ int main(int argc, char **argv)
         if (reg == 0x100 && value == 0) right_muted = true;
     }
     if (!left_muted || !right_muted) return 52;
-    if (kernel::g_switch_writes.empty()
-        || kernel::g_switch_writes.back()
-            != std::pair<std::uint32_t, std::uint32_t>(0x1600u, 1u))
-        return 125;
+    bool key_off_voice_zero = false;
+    for (const auto &[reg, mask] : kernel::g_switch_writes)
+        if (reg == 0x1600u && (mask & 1u))
+            key_off_voice_zero = true;
+    if (!key_off_voice_zero) return 125;
 
     // Reset the synthetic test's earlier voice-command bytes. Their
     // pseudo-random flags otherwise request unrelated sound writes.
