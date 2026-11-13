@@ -6,6 +6,8 @@ on:
     paths:
       - "CMakeLists.txt"
       - "runtime/src/gs/native_texture.cpp"
+      - "runtime/src/gs/gs.cpp"
+      - "runtime/src/gs/texture_upload_trace.hpp"
       - "runtime/src/gs/native_texture.hpp"
       - "runtime/src/iop/arika_dvd.cpp"
       - "runtime/src/iop/spu2.cpp"
