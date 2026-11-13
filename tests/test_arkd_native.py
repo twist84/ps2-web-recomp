@@ -63,6 +63,11 @@ struct s_capture
     std::vector<std::uint8_t> contents;
 };
 std::vector<s_capture> g_captures;
+std::vector<std::pair<std::uint32_t, std::uint32_t>> g_address_writes;
+std::map<std::uint32_t, std::uint32_t> g_loop_addresses;
+std::array<std::uint32_t, 2> g_end_bits{};
+unsigned g_sound_init_calls = 0;
+std::vector<std::pair<std::uint32_t, std::uint32_t>> g_core_attributes;
 std::vector<std::pair<std::uint32_t, std::uint32_t>> g_voice_writes;
 std::vector<std::pair<std::uint32_t, std::uint32_t>> g_switch_writes;
 std::vector<std::vector<std::uint8_t>> g_effect_calls;
@@ -75,6 +80,31 @@ bool call_library_export(const std::string &name, std::uint32_t ordinal,
     std::uint32_t a3, std::uint32_t &result, std::optional<std::uint32_t> a4)
 {
     if (name != "libsd") return false;
+    if (ordinal == 4 || ordinal == 11)
+    {
+        if (ordinal == 4) ++g_sound_init_calls;
+        else g_core_attributes.emplace_back(a0, a1);
+        result = 0;
+        return true;
+    }
+    if (ordinal == 9)
+    {
+        g_address_writes.emplace_back(a0, a1);
+        g_loop_addresses[a0] = a1;
+        result = 0;
+        return true;
+    }
+    if (ordinal == 8)
+    {
+        result = ((a0 & ~1u) == 0x1900u || (a0 & ~1u) == 0x1B00u)
+            ? 0x800000u : ((a0 & ~1u) == 0x1700u ? g_end_bits[a0 & 1u] : 0u);
+        return true;
+    }
+    if (ordinal == 10)
+    {
+        result = g_loop_addresses[a0];
+        return true;
+    }
     if (ordinal == 17)
     {
         if (!a4 || *a4 > 0x8000 || a2 != 0x1000
@@ -112,7 +142,7 @@ bool call_library_export(const std::string &name, std::uint32_t ordinal,
         return false;
     g_effect_cores.push_back(a0);
     const auto *bytes = ps2::iop::ram_ptr(a1);
-    g_effect_calls.emplace_back(bytes, bytes + 16);
+    g_effect_calls.emplace_back(bytes, bytes + 20);
     result = 0;
     return true;
 }
@@ -223,7 +253,7 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    if (catalog.entry_count() != 5) return 2;
+    if (catalog.entry_count() != 6) return 2;
     const auto entry = catalog.find("PLY/SMALL.BIN");
     if (!entry || entry->file_size != 5000) return 3;
     if (catalog.find("missing.bin")) return 4;
@@ -298,8 +328,10 @@ int main(int argc, char **argv)
         return 27;
     for (unsigned core = 0; core < 2; ++core)
         for (unsigned i = 0; i < 16; ++i)
-            if (kernel::g_effect_calls[core][i] != core * 16 + i + 1)
+            if (kernel::g_effect_calls[core][i + 4] != core * 16 + i + 1)
                 return 28;
+    if (kernel::g_effect_calls[0][0] != 0 || kernel::g_effect_calls[1][0] != 1)
+        return 170;
 
     // 0x501 command buffers and stream-state RPCs now have explicit
     // input length requirements and must not accept truncated packets.
@@ -379,6 +411,20 @@ int main(int argc, char **argv)
     // pseudo-random flags otherwise request unrelated sound writes.
     if (!ps2::sif::g_handlers.at(0x500)(1, 0, 0, 0x180, 4)
         || word(0x180) != 0) return 55;
+    bool core0_master = false, core1_master = false, last_envelope = false;
+    for (const auto &[reg, value] : kernel::g_voice_writes)
+    {
+        if (reg == 0x980 && value == 0x3FFF) core0_master = true;
+        if (reg == 0x981 && value == 0x3FFF) core1_master = true;
+        if (reg == 0x42F && value == 0x1FC0) last_envelope = true;
+    }
+    if (!kernel::g_sound_init_calls || !core0_master || !core1_master || !last_envelope
+        || kernel::g_core_attributes.back()
+            != std::pair<std::uint32_t, std::uint32_t>{3, 1}
+        || kernel::g_effect_calls.back().size() != 20
+        || kernel::g_effect_calls.back()[0] != 1
+        || kernel::g_effect_calls.back()[4] != 5
+        || kernel::g_effect_calls.back()[5] != 1) return 172;
 
     // The IRX splits command masks at 32 voices, but chooses SPU2
     // register IDs using 24 voices per core. Exercise both boundaries.
@@ -551,6 +597,8 @@ int main(int argc, char **argv)
         || word(0x180) != 0) return 72;
     if (!kernel::g_audio_job || kernel::g_queued_audio.kind != kernel::kJobArkdAudio
         || arkd::audio_worker_status() != 0x10000000u) return 73;
+    if (ps2::sif::g_ee_sregs.back()
+        != std::pair<std::uint32_t, std::uint32_t>{12, 0x10000000u}) return 163;
     if (!ps2::sif::g_handlers.at(0x501)(0x103, 0x400, 4, 0x180, 4)
         || word(0x180) != 0x80000065u) return 74;
     if (!ps2::sif::g_handlers.at(0x501)(0x101, 0x100, 0x24, 0x180, 4)
@@ -569,6 +617,8 @@ int main(int argc, char **argv)
     if (arkd::audio_worker_status() != 0x10000000u) return 76;
     kernel::g_audio_job(pending_audio_job);
     if (arkd::audio_worker_status() != 0x4000012Cu) return 77;
+    if (ps2::sif::g_ee_sregs.back()
+        != std::pair<std::uint32_t, std::uint32_t>{12, 0x4000012Cu}) return 164;
     if (!ps2::sif::g_handlers.at(0x501)(0x103, 0x400, 4, 0x180, 4)
         || word(0x180) != 0) return 78;
     kernel::g_audio_job(kernel::g_queued_audio);
@@ -580,6 +630,20 @@ int main(int argc, char **argv)
     legacy_audio.set_version(8);
     arkd::state(legacy_audio);
     if (arkd::audio_worker_status() != 0x30000000u) return 80;
+
+    // A valid header can still request space reserved for streaming.
+    // Reject it before any libsd transfer or live-bank relocation.
+    std::memset(ps2::g_ram + 0x100, 0, 0x24);
+    const std::uint32_t reserved_bank_id = 15;
+    std::memcpy(ps2::g_ram + 0x100, &reserved_bank_id, 4);
+    std::memcpy(ps2::g_ram + 0x104, "snd/reserved.bnk", 17);
+    const auto uploads_before_reserved = kernel::g_captures.size();
+    ps2::sif::g_handlers.at(0x501)(0x101, 0x100, 0x24, 0x180, 4);
+    kernel::g_bank_job(kernel::g_queued_bank);
+    if (arkd::sound_bank_spu_address(reserved_bank_id)
+        || kernel::g_captures.size() != uploads_before_reserved
+        || ps2::sif::g_ee_sregs.back()
+            != std::pair<std::uint32_t, std::uint32_t>{12, 0x40000064u}) return 173;
 
     // The bank's first sector is a metadata table, not raw sample
     // bytes. Verify sizes and reject malformed metadata before future
@@ -664,6 +728,122 @@ int main(int argc, char **argv)
         || ps2::sif::g_ee_sregs.back().first != 12
         || ps2::sif::g_ee_sregs.back().second != 0x30009000u) return 155;
 
+    // A real queued start on core 1 resolves bank 1, sample 1; a
+    // second worker pass must not restart an already consumed command.
+    ps2::sif::g_handlers.at(0x500)(0x10, 0, 0, 0x180, 4);
+    std::array<std::uint8_t, 46 * 16> starts{};
+    for (unsigned voice = 0; voice < 46; ++voice)
+        std::memset(starts.data() + voice * 16, 0xFF, 4);
+    const std::uint32_t start_bank = 1;
+    const std::uint16_t start_sample = 1;
+    const std::uint16_t enable_effect = 1;
+    std::memcpy(starts.data() + 24 * 16, &start_bank, 4);
+    std::memcpy(starts.data() + 24 * 16 + 4, &start_sample, 2);
+    std::memcpy(starts.data() + 24 * 16 + 12, &enable_effect, 2);
+    std::memcpy(ps2::g_ram + 0x800, starts.data(), starts.size());
+    kernel::g_address_writes.clear();
+    kernel::g_voice_writes.clear();
+    kernel::g_switch_writes.clear();
+    ps2::sif::g_handlers.at(0x501)(1, 0x800, starts.size(), 0x180, 4);
+    kernel::g_voice_job(kernel::g_queued_voice);
+    if (kernel::g_address_writes.size() != 2
+        || kernel::g_address_writes[0] != std::pair<std::uint32_t, std::uint32_t>{0x2041, 0x5150}
+        || kernel::g_address_writes[1] != std::pair<std::uint32_t, std::uint32_t>{0x2141, 0}
+        || kernel::g_switch_writes.size() != 3
+        || kernel::g_switch_writes[0] != std::pair<std::uint32_t, std::uint32_t>{0x1501, 1}
+        || kernel::g_switch_writes[1] != std::pair<std::uint32_t, std::uint32_t>{0x1901, 0x800001}
+        || kernel::g_switch_writes[2] != std::pair<std::uint32_t, std::uint32_t>{0x1B01, 0x800001})
+        return 156;
+    bool found_pitch = false;
+    for (const auto &[reg, value] : kernel::g_voice_writes)
+        if (reg == 0x201 && value == 0x2222) found_pitch = true;
+    if (!found_pitch) return 158;
+    const auto started_switches = kernel::g_switch_writes.size();
+    kernel::g_voice_job(kernel::g_queued_voice);
+    if (kernel::g_switch_writes.size() != started_switches) return 157;
+
+    // The once-only end redirect must survive a new savestate, while
+    // active voices report in EE groups of 32, not hardware cores of 24.
+    arkd::record_voice_volume_state(32, 0, 0);
+    ps2::state::Writer legacy_end_writer;
+    legacy_end_writer.set_version(13);
+    arkd::state(legacy_end_writer);
+    ps2::state::Writer end_writer;
+    end_writer.set_version(14);
+    arkd::state(end_writer);
+    arkd::on_vblank();
+    kernel::g_voice_job(kernel::g_queued_voice);
+    if (kernel::g_address_writes.back()
+        != std::pair<std::uint32_t, std::uint32_t>{0x2141, 0x5010}
+        || ps2::sif::g_ee_sregs[ps2::sif::g_ee_sregs.size() - 2]
+            != std::pair<std::uint32_t, std::uint32_t>{14, 1u << 24}
+        || ps2::sif::g_ee_sregs.back()
+            != std::pair<std::uint32_t, std::uint32_t>{15, 1}) return 166;
+    kernel::g_end_bits[1] = 1;
+    arkd::on_vblank();
+    kernel::g_voice_job(kernel::g_queued_voice);
+    if (ps2::sif::g_ee_sregs[ps2::sif::g_ee_sregs.size() - 2]
+        != std::pair<std::uint32_t, std::uint32_t>{14, 0}) return 167;
+    ps2::state::Reader end_reader(end_writer.out.data(), end_writer.out.size());
+    end_reader.set_version(14);
+    const auto effects_before_restore = kernel::g_effect_calls.size();
+    ps2::sif::g_handlers.clear(); // Simulate fresh-process SIF bindings.
+    arkd::state(end_reader);
+    if (ps2::sif::g_handlers.size() != 4
+        || kernel::g_effect_calls.size() != effects_before_restore) return 171;
+    kernel::g_end_bits[1] = 0;
+    const auto redirected_count = kernel::g_address_writes.size();
+    arkd::on_vblank();
+    kernel::g_voice_job(kernel::g_queued_voice);
+    if (kernel::g_address_writes.size() != redirected_count + 1) return 168;
+    ps2::state::Reader legacy_end_reader(legacy_end_writer.out.data(), legacy_end_writer.out.size());
+    legacy_end_reader.set_version(13);
+    arkd::state(legacy_end_reader);
+    const auto legacy_redirected_count = kernel::g_address_writes.size();
+    arkd::on_vblank();
+    kernel::g_voice_job(kernel::g_queued_voice);
+    if (kernel::g_address_writes.size() != legacy_redirected_count) return 169;
+    const auto address_count = kernel::g_address_writes.size();
+    const std::uint32_t invalid_bank = 16;
+    std::memcpy(starts.data() + 24 * 16, &invalid_bank, 4);
+    std::memcpy(ps2::g_ram + 0x800, starts.data(), starts.size());
+    ps2::sif::g_handlers.at(0x501)(1, 0x800, starts.size(), 0x180, 4);
+    kernel::g_voice_job(kernel::g_queued_voice);
+    if (kernel::g_address_writes.size() != address_count
+        || kernel::g_switch_writes.size() != started_switches) return 159;
+
+    // Update flags occupy a contiguous 92-byte prefix. Voice 24's
+    // record starts at +0x5C + 24*16, not +24*18.
+    std::array<std::uint8_t, 0x33C> updates{};
+    const std::uint16_t pitch_and_gain = 6;
+    const std::int16_t raised_pitch = 12;
+    const std::uint16_t gain0 = 0x1000, gain1 = 0x2000;
+    std::memcpy(updates.data() + 24 * 2, &pitch_and_gain, 2);
+    std::memcpy(updates.data() + 0x5C + 24 * 16, &start_bank, 4);
+    std::memcpy(updates.data() + 0x60 + 24 * 16, &start_sample, 2);
+    std::memcpy(updates.data() + 0x62 + 24 * 16, &raised_pitch, 2);
+    std::memcpy(updates.data() + 0x64 + 24 * 16, &gain0, 2);
+    std::memcpy(updates.data() + 0x66 + 24 * 16, &gain1, 2);
+    std::memcpy(ps2::g_ram + 0x800, updates.data(), updates.size());
+    kernel::g_voice_writes.clear();
+    ps2::sif::g_handlers.at(0x501)(3, 0x800, updates.size(), 0x180, 4);
+    kernel::g_voice_job(kernel::g_queued_voice);
+    if (kernel::g_voice_writes.size() != 3
+        || kernel::g_voice_writes[0] != std::pair<std::uint32_t, std::uint32_t>{0x201, 0x4444}
+        || kernel::g_voice_writes[1] != std::pair<std::uint32_t, std::uint32_t>{1, 8190}
+        || kernel::g_voice_writes[2] != std::pair<std::uint32_t, std::uint32_t>{0x101, 4094}
+        || kernel::g_switch_writes.size() != started_switches) return 160;
+    kernel::g_voice_job(kernel::g_queued_voice);
+    if (kernel::g_voice_writes.size() != 3) return 161;
+    updates.fill(0);
+    updates[32 * 2] = 8;
+    std::memcpy(ps2::g_ram + 0x800, updates.data(), updates.size());
+    ps2::sif::g_handlers.at(0x501)(3, 0x800, updates.size(), 0x180, 4);
+    kernel::g_voice_job(kernel::g_queued_voice);
+    if (kernel::g_switch_writes.back()
+        != std::pair<std::uint32_t, std::uint32_t>{0x1601, 1u << 8}) return 162;
+    ps2::sif::g_handlers.at(0x500)(1, 0, 0, 0x180, 4);
+
     const auto &first_upload = kernel::g_captures[0];
     const auto &second_upload = kernel::g_captures[1];
     if (first_upload.channel != 0 || second_upload.channel != 1
@@ -690,6 +870,8 @@ int main(int argc, char **argv)
     if (arkd::audio_worker_status() != 0x30000000u
         || arkd::sound_bank_spu_address(upload_bank_id))
         return 106;
+    if (ps2::sif::g_ee_sregs.back()
+        != std::pair<std::uint32_t, std::uint32_t>{12, 0x30000000u}) return 165;
 
     if (!ps2::sif::g_handlers.at(0x501)(0x101, 0x100, 0x24, 0x180, 4)
         || word(0x180) != 0) return 107;
@@ -1029,10 +1211,13 @@ class ArkdNativeHleTests(unittest.TestCase):
                          2, 0x11000, 0x1111, 0, 0x2222, 0x100)
         for index in range(0x10040):
             big_bank[0x800 + index] = index & 0xFF
+        reserved_bank = bytearray(bank)
+        struct.pack_into("<I", reserved_bank, 8, 0x190000)
         for name, content in {
             "dis/a_first.bin": b"A" * 13,
             "ply/small.bin": b"S" * 5000,
             "snd/test.bnk": bytes(bank),
+            "snd/reserved.bnk": bytes(reserved_bank),
             "snd/big.bnk": bytes(big_bank),
             "trc/z_last.bin": b"Z" * 17,
         }.items():

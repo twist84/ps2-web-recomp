@@ -385,13 +385,13 @@ make the incomplete native voice-start path functional.
   **`0x2E0 = 46 * 16`**, so this is a 46-voice command array with
   16 bytes per entry.
 - IRX `0x4BB8` copies `0x33C` bytes into another alternate buffer.
-  **`0x33C = 46 * 18`**, so this is a second 46-entry command array
-  with 18 bytes per entry.
+  **`0x33C = 46 * 2 + 46 * 16`**: 46 flag halfwords are
+  followed by 46 sixteen-byte records at `+0x5C` (not interleaved).
 - IRX `0x3020`â€“`0x4618` consumes those arrays. Its loop iterates 46
   voice slots, uses per-core voice bitmasks, and calls `libsd` ordinal
   **5** (`sceSdSetParam`) for individual SPU2 register updates. The
   16-byte voice record has two volume fields at offsets `+8` and
-  `+10`. The 18-byte command record has flags at offset `+0`.
+  `+10`. The update block has flag halfwords at `index * 2`.
 - IRX `0x3194-0x31E8` indexes its per-voice **command masks** by
   `index >> 5` and `index & 31` (32 slots per word). By contrast,
   `0x3110-0x316C` constructs each `libsd` voice register ID from
@@ -466,6 +466,29 @@ instructions are included in this repository.
 
 ## Game-backed startup correction
 
+### Queued new-sample voice starts
+
+The native worker now consumes the 16-byte new-sample records. The
+selector's low halfword selects a cached bank; `+4` selects its sample.
+The start address is the stable bank allocation plus that entry's offset.
+The base pitch is `u16(u32(entry.parameter * pitch_scale) >> 12)`.
+It calls libsd export **9** (`sceSdSetAddr`) for `0x2040 | voice_reg`
+and `0x2140 | voice_reg`, then export 5 for pitch, envelope defaults
+(`0x80FF`, `0x1FC0`, confirmed at `0x6CCC/0x6CFC`) and source gains.
+Export 7 receives accumulated per-core `0x1500` key-on masks. Consumed
+selectors become `0xFFFFFFFF`, avoiding repeated starts. Banks still
+uploading, invalid bank IDs, and out-of-range sample indices cannot start.
+
+This remains a partial worker: Repeat/end controls and playback status still need porting. The
+original opt-in remains until these and game-backed audio are verified.
+
+A local native run with a fresh test memory card and scripted input
+completed 6,000 frames and visibly reached a rendered fight scene with
+GAME OVER. This is progression evidence, not audio parity: only the
+verified new-sample branch is ported, and no listening comparison was
+performed. The test also exposed a legacy savestate reset that zeroed
+the pitch scale; missing-state restoration now uses the original `0x1000`.
+
 The subsequent black-screen loading stall was caused by a missing EE SIF
 status notification. Original worker `0x2C90` sends the audio-worker result
 to EE SREG 12 at `0x2CBC-0x2CCC` via SIF command `0x80000001`.
@@ -489,3 +512,94 @@ by `0x1DA4`, which DMAs decoded 48-byte index records to the EE destination.
 Native startup now exports index records from the merged catalog, without
 requiring INFO.DAT on loose mounts. A game run reaches 1,800 frames after
 these corrections; this alone does not establish menu/audio parity.
+
+### Corrected update-block layout and live parameters
+
+`0x3B2C/0x3B34` selects the sample from `base + index*16 + 0x60`,
+while `0x3BB8/0x3BC4` selects flags from `base + index*2`. Thus the
+`0x33C` block has 92 flag bytes followed by 736 record bytes. Earlier
+notes and the mute worker incorrectly treated this as interleaved
+18-byte records. Native now uses the actual separated arrays.
+
+Flag bit 0 restarts the selected sample; bit 1 updates signed pitch;
+bit 2 updates the two source gains; bit 3 mutes/stops and takes precedence.
+Restart also applies pitch/gain through the start branch. Consumed flags
+are cleared. The `+12` halfword controls both left/right effect masks
+(`0x1900`/`0x1B00`), preserving unrelated voices through exports 8 and 7.
+Regression cases cover voice 24 pitch/gain without key-on, one-time flag
+consumption, and mute flag 32 at its actual prefix offset.
+
+### End monitoring, initialization and restore validation
+
+Native now schedules voice-status monitoring on IOP vertical blank. It
+reads libsd export 8 at `0x1700 | core` (ENDX), redirects the loop address
+to `0x5010` once when command `+14` is zero, and reads it via export 10.
+As in `0x2E98-0x2F70`, a voice stops reporting active only when its loop
+address is below `0x5050` and its ENDX bit is set. SREGs 14 and 15 use
+32-bit EE voice groups, separately from the hardware 24-voice cores.
+Pending redirects are appended in savestate version 14; older states
+keep their layouts and initialize that new field to zero.
+
+Native lifecycle initialization now mirrors `0x6B0C` with default mode 1:
+libsd initialization, master/routing parameters, 48 voice defaults, effect
+end addresses and attributes, core attributes and direct/effect masks.
+Envelope defaults are initialized once rather than reset on every start.
+`0x4C84` expands each 16-byte RPC effect descriptor into a 20-byte libsd
+structure by prepending its core; libsd reads mode at `+4`, not `+0`.
+The former direct copy shifted the fields and left the final word unstaged.
+
+A 6,000-frame native capture before initialization contained only zeros.
+After initialization it contained 4,211,512 nonzero 16-bit samples over
+119.958 seconds and the game issued ongoing voice updates. This proves
+audio is produced, not that it matches the original mix or music.
+An isolated archive-backed run also reached combat with native audio; the
+original driver booted there but later showed a black screen under the
+same scripted inputs, preventing a full-fight audio comparison.
+
+Fresh-process loading initially failed with missing HLE RPC servers.
+ARKD state restore now rebinds callbacks before SIF deserialization, without
+reinitializing hardware. A real version-14 menu state at frame 1,200 loaded
+in a fresh runner and continued to frame 3,000. Unit coverage also checks
+active mask boundaries, one-time redirect restoration and v13 defaults.
+
+### Streaming layout confirmed for the remaining worker
+
+The `0x502/0x101` payload is a 20-byte prefix plus ten 36-byte
+playlist entries (`repeat_count u32`, `filename[32]`), totaling `0x17C`.
+The prefix contains fade-in frame count at +0, segment count at +4,
+loop-enable at +8, loop-from segment at +12, and gain at +16. Original
+`0x8BE0` copies it into a stream state at +0x48, explaining the
+state-relative +0x5C repeat-count/+0x60 filename accesses in `0x70B4`.
+These offsets are not an additional 92-byte prefix in the RPC packet.
+
+`0x70B4` reads a 2-KiB AMS header. +4 is the base pitch, +8 the valid
+ADPCM byte count per channel, and +12 the physical 128-KiB block count N.
+`0x72A0` reads 64 KiB at a time, split into two 32-KiB channel buffers.
+For logical block j, `0x7318-0x73EC` chooses byte offset:
+
+- j < N: `0x800 + j * 0x20000`.
+- j >= N: `(2*N - j) * 0x20000 - 0xF800`.
+
+Thus the second half of the file is traversed in reverse block order;
+a linear stereo-file reader would be wrong. The last channel block uses
+the remaining valid bytes rather than playing the whole padded allocation.
+
+Default mode 1 reserves SPU2 `0x180000` onward. `0x9FF0-0xA088`
+initializes left ring halves at `0x180000`/`0x188000` and right halves at
+`0x190000`/`0x198000`. `0x92BC/0x92D0` assigns the right ring to core-1
+voice 22 and left ring to core-1 voice 23. `0x7730` uploads each channel
+through guest libsd export 17, alternating destination halves, and adjusts
+ADPCM loop flags. `0x7EB0` reads the current address through export 10
+(`0x226F`), while the hardware IRQ schedules refills. This ring/refill and
+playlist worker is still unported; the mapping above is implementation
+research, not a claim of functioning streamed music.
+
+Native bank allocation now stops before `0x180000`; larger allocations
+fail without DMA or relocation. Native snapshots with allocations crossing
+that reserved region are rejected. The existing physical SPU2/header
+limit remains 2 MiB. A regression covers rejection of a structurally valid
+bank requesting reserved stream space.
+
+RPC `0x500/0x10` sets the original B4AC device-mode word, separately from
+B4A8 pitch scale. Native no longer ORs that device-mode bit into the pitch
+scale; a subsequent voice-pitch regression checks they remain independent.

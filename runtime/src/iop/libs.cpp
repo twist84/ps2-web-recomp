@@ -1,5 +1,6 @@
 #include <cstdlib>
 #include "kernel.hpp"
+#include "arika_dvd.hpp"
 
 #include "hw.hpp"
 
@@ -1389,6 +1390,7 @@ namespace ps2::iop {
 void vblank(bool start) {
     hw::raise_interrupt(start ? 0u : 11u);
     kernel::vblank_edge(start);
+    if (start) arkd::on_vblank();
 }
 
 }

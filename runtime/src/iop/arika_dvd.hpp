@@ -115,5 +115,6 @@ std::size_t copy_sound_bank(void *destination, std::size_t capacity);
 bool native_requested();
 bool intercept_module(const std::string &path);
 void install();
+void on_vblank();
 void state(ps2::state::Stream &stream);
 }

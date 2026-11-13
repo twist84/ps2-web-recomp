@@ -7,6 +7,10 @@ on:
       - "runtime/src/iop/arika_dvd.cpp"
       - "runtime/src/iop/arika_dvd.hpp"
       - "runtime/src/iop/kernel.cpp"
+      - "runtime/src/iop/libs.cpp"
+      - "runtime/src/system.cpp"
+      - "runtime/src/iop/sif.cpp"
+      - "runtime/src/iop/sif.hpp"
       - "runtime/src/iop/cdvd.cpp"
       - "runtime/src/disc.cpp"
       - "runtime/src/disc_folder.cpp"
@@ -41,6 +45,7 @@ jobs:
             -I runtime/include -I runtime/src \
             runtime/src/iop/arika_dvd.cpp \
             runtime/src/iop/kernel.cpp \
+            runtime/src/iop/libs.cpp \
             runtime/src/iop/cdvd.cpp
       - name: Build the complete ps2runtime static library (Clang-only VU intrinsics)
         if: matrix.cxx == 'clang++'

@@ -71,7 +71,8 @@ some exact error codes/timing are modeled approximately.
 - `0x502`: selected stream-state and command-buffer operations.
 
 Queued IOP events, bank transfers, multi-bank source caches, and
-per-voice source gains are saved in **version 13** savestates. Older
+per-voice source gains and pending silent-loop redirects are saved in
+**version 14** savestates. Older
 versions retain their original layouts; native-only fields introduced
 later are reset safely during restoration. A savestate captured with one backend cannot
 be loaded with the other backend selected.
@@ -82,7 +83,7 @@ The driver is **not complete** and full-game equivalence has **not**
 been demonstrated:
 
 1. Implement the complete 46-voice start/update, key-on/key-off,
-   pitch/volume and sample-address state machine, not just mutes.
+   pitch/volume and sample-address timing against the original worker.
 2. Complete `0x501` and `0x502` streaming/audio behaviour, hardware
    callbacks, interleaving and underrun/error handling. The current
    subset is not proof of correct gameplay audio.
@@ -116,8 +117,13 @@ for unverified behaviours, not a permanent design requirement.
   14-bit scaling and per-core register mapping. The `0x14` handler
   rejects truncated four-byte stereo control packets.
   Per-voice source gains are persisted in version 13 savestates.
-  **The voice-start worker remains incomplete**, so gain bookkeeping
-  is not yet driven by actual native key-on events.
+  The native new-sample path now records source gains before key-on.
+  End monitoring now reads libsd ENDX/loop addresses, performs the original
+  one-time silent-loop redirect and reports active voices through EE SREGs
+  14/15. Version 14 preserves pending redirects. Callback timing and full
+  playback equivalence still need verification.
+  Live pitch/gain updates now use the verified flag-prefix/record layout,
+  and starts update both effect masks while preserving other voices.
 - `SDBZ_TRACE_ARKD_RPC=1` enables diagnostics for the first 48
   request bytes of RPC servers `0x500`–`0x503` under either the
   original IRX or native implementation.
@@ -125,12 +131,25 @@ for unverified behaviours, not a permanent design requirement.
   and halfword wrapping. Synthetic boundary tests run without game data;
   setting `ARKD_REFERENCE_IRX` to the original EU beta module enables an
   exhaustive comparison against its MIPS routine (262,144 cases).
-  This helper does not yet start voices or resolve bank/sample commands.
+  The queued new-sample path now uses this helper after resolving the
+  selected cached bank and sample entry to its allocated SPU2 address.
+  It writes address, pitch, envelope defaults and gains before issuing
+  per-core key-on masks. Synthetic tests check core-1 selection, pitch,
+  address, invalid-bank rejection and one-time command consumption.
+  This subset does not establish complete playback or gameplay parity.
 
-**Native mode is still opt-in.** Full voice start, stream interrupts,
+**Native mode is still opt-in.** Stream interrupts,
 original DMA/callback timing, and EU beta gameplay/audio parity have
 not been established. Passing synthetic C++ CI does not prove those
 guest-visible behaviours match the original IRX.
+
+The native lifecycle now invokes guest `sceSdInit` and reproduces the
+original default master volumes, routing, voice envelopes and effect setup.
+Effect RPC descriptors are expanded from 16 bytes to the 20-byte libsd
+structure with the core word prepended. A game-backed 6,000-frame capture
+now contains mixed audio and reaches combat; it is not a listening-based
+fidelity comparison. Fresh-process loading of a native version-14 menu
+savestate also resumes, with RPC callbacks rebound without resetting SPU2.
 
 ## Tests
 

@@ -32,7 +32,7 @@ c_catalog g_catalog;
 // requests asynchronously. These phases are observable through 0x503/2.
 std::uint32_t g_transfer_state = 0x30000000u;
 std::uint32_t g_transfer_serial = 0;
-std::uint32_t g_control_value = 0;
+std::uint32_t g_control_value = 0x1000;
 std::uint32_t g_transfer_block_bytes = 0;
 
 struct s_pending_transfer
@@ -81,6 +81,8 @@ s_audio_worker g_audio_worker;
 
 constexpr std::size_t k_max_bank_size = 64u * 1024u * 1024u;
 constexpr std::uint32_t k_spu_limit = 2u * 1024u * 1024u;
+// Default ARKD mode 1 reserves 0x180000 onward for streaming/effects.
+constexpr std::uint32_t k_spu_bank_limit = 0x180000;
 constexpr std::uint32_t k_sound_bank_slots = 16;
 constexpr std::uint32_t k_iop_stage_bytes = 0x8000;
 constexpr std::uint32_t k_spu_base_start = 0x5050;
@@ -137,8 +139,8 @@ bool allocate_spu_bank(std::uint32_t id, std::uint32_t bytes)
     for (std::uint32_t iteration = 0; iteration <= k_sound_bank_slots;
          ++iteration)
     {
-        std::uint32_t next_base = k_spu_limit;
-        std::uint32_t next_end = k_spu_limit;
+        std::uint32_t next_base = k_spu_bank_limit;
+        std::uint32_t next_end = k_spu_bank_limit;
         for (std::uint32_t index = 0; index < k_sound_bank_slots; ++index)
         {
             if (index == id) continue;
@@ -156,8 +158,8 @@ bool allocate_spu_bank(std::uint32_t id, std::uint32_t bytes)
             g_spu_next = std::max(g_spu_next, cursor + bytes);
             return true;
         }
-        if (next_base == k_spu_limit || next_end <= cursor
-            || next_end > k_spu_limit)
+        if (next_base == k_spu_bank_limit || next_end <= cursor
+            || next_end > k_spu_bank_limit)
             return false;
         cursor = next_end;
     }
@@ -208,11 +210,18 @@ s_sound_rpc_state g_sound;
 // IRX globals 0x13258/0x1325A hold one pair of source gain words
 // per physical voice, independent of the alternating command buffers.
 std::array<std::array<std::uint16_t, 2>, 46> g_voice_source_volumes{};
+// IRX 0x39C0: +14 == 0 requests a one-time silent loop address.
+// Per-hardware-core masks differ from the 32-bit EE reporting masks.
+std::array<std::uint32_t, 2> g_voice_end_redirect{};
 
 void reset_sound_state()
 {
     g_sound = {};
+    for (auto &buffer : g_sound.voice_commands)
+        for (std::size_t index = 0; index < 46; ++index)
+            std::fill_n(buffer.data() + index * 16, 4, 0xFF);
     g_voice_source_volumes = {};
+    g_voice_end_redirect = {};
     // Original IRX 0x6920-0x6970 initializes these three 14-bit
     // coefficients to 0x3FFF. Zero-initializing them would mute all
     // subsequent sceSdSetParam voice-volume updates.
@@ -336,12 +345,122 @@ void refresh_live_voice_gains()
     }
 }
 
-void process_voice_mutes(const kernel::Job &job)
+bool start_voice(std::uint32_t parity, std::uint32_t index,
+    const s_voice_command *update = nullptr)
 {
-    // IRX 0x3020-0x3274: the 46-voice worker checks either a queued
-    // per-core command bit or bit 3 of a 18-byte voice record, then
-    // clears both voice volume registers through libsd ordinal 5
-    // (sceSdSetParam). Other voice operations are not reproduced here.
+    auto &buffer = g_sound.voice_commands[parity];
+    const auto command = update ? std::optional<s_voice_command>(*update)
+        : inspect_voice_command(buffer.data(), buffer.size(), index);
+    if (!command || command->sample_selector == UINT32_MAX) return false;
+    const std::uint32_t bank_id = command->sample_selector & 0xFFFFu;
+    if (bank_id >= k_sound_bank_slots || !g_spu_banks[bank_id].base
+        || (g_spu_upload.pending && g_spu_upload.bank_id == bank_id))
+        return false;
+    const auto &source = g_cached_banks[bank_id];
+    const auto bank = inspect_sound_bank(source.data(), source.size());
+    if (!bank || command->control >= bank->entries.size()) return false;
+    const auto &sample = bank->entries[command->control];
+    const std::uint32_t address = g_spu_banks[bank_id].base + sample.spu_offset;
+    const auto base_pitch = static_cast<std::uint16_t>(
+        (sample.parameter * g_control_value) >> 12);
+    const std::uint32_t reg = index / 24u | ((index % 24u) << 1u);
+    std::uint32_t result = 0;
+    // IRX 0x4420-0x4508: start address, zero next address, then pitch.
+    // 0x6CCC/0x6CFC supplies these envelope defaults at initialization.
+    if (!kernel::call_library_export("libsd", 9, reg | 0x2040u, address, 0, 0, result)
+        || !kernel::call_library_export("libsd", 9, reg | 0x2140u, 0, 0, 0, result)
+        || !kernel::call_library_export("libsd", 5, reg | 0x200u,
+            calculate_voice_pitch(base_pitch, command->pitch_request), 0, 0, result))
+        return false;
+    record_voice_volume_state(index, command->volume_0, command->volume_1);
+    // IRX 0x3AE4 consumes the sample selector exactly once.
+    if (!update) std::fill_n(buffer.data() + index * 16, 4, 0xFF);
+    return true;
+}
+
+void update_voice(std::uint32_t index, const s_voice_command &command,
+    std::uint16_t flags)
+{
+    const std::uint32_t reg = index / 24u | ((index % 24u) << 1u);
+    std::uint32_t result = 0;
+    // IRX 0x3BCC: bit 0 (restart) or bit 1 requests pitch.
+    if (flags & 2u)
+    {
+        const auto bank_id = command.sample_selector & 0xFFFFu;
+        if (bank_id < k_sound_bank_slots)
+        {
+            const auto &bytes = g_cached_banks[bank_id];
+            const auto bank = inspect_sound_bank(bytes.data(), bytes.size());
+            if (bank && command.control < bank->entries.size())
+            {
+                const auto pitch = static_cast<std::uint16_t>(
+                    (bank->entries[command.control].parameter * g_control_value) >> 12);
+                kernel::call_library_export("libsd", 5, reg | 0x200u,
+                    calculate_voice_pitch(pitch, command.pitch_request), 0, 0, result);
+            }
+        }
+    }
+    // IRX 0x4094: bit 0 or bit 2 requests source volume updates.
+    if (flags & 4u)
+    {
+        g_voice_source_volumes[index] = {command.volume_0, command.volume_1};
+        const bool mono = (g_sound.streaming_flags & 0x10000u) != 0;
+        const auto first = mono ? static_cast<std::uint16_t>(command.volume_0 | command.volume_1)
+            : command.volume_1;
+        const auto second = mono ? 0u : command.volume_0;
+        kernel::call_library_export("libsd", 5, reg,
+            scale_voice_gain(first, g_sound.master_volume, g_sound.channel_volume_left),
+            0, 0, result);
+        kernel::call_library_export("libsd", 5, reg | 0x100u,
+            scale_voice_gain(static_cast<std::uint16_t>(second), g_sound.master_volume,
+                g_sound.channel_volume_right), 0, 0, result);
+    }
+}
+
+void poll_voice_status()
+{
+    // IRX 0x2CD8-0x2FA4: consult ENDX and loop addresses, then
+    // publish 46 active bits as two 32-bit EE SREG words.
+    auto reported = g_sound.active_voice_masks;
+    for (std::uint32_t core = 0; core < 2; ++core)
+    {
+        std::uint32_t ended = 0;
+        if (!kernel::call_library_export("libsd", 8, 0x1700u | core, 0, 0, 0, ended))
+            continue;
+        for (std::uint32_t voice = 0; voice < 24; ++voice)
+        {
+            const auto index = core * 24 + voice;
+            if (index >= 46) break;
+            const auto bit = 1u << voice;
+            const auto mask_bit = 1u << (index & 31u);
+            if (!(g_sound.active_voice_masks[index >> 5] & mask_bit)) continue;
+            const auto reg = core | (voice << 1);
+            std::uint32_t result = 0;
+            if (g_voice_end_redirect[core] & bit)
+            {
+                if (!kernel::call_library_export("libsd", 9, reg | 0x2140u,
+                        0x5010, 0, 0, result)) continue;
+                g_voice_end_redirect[core] &= ~bit;
+            }
+            std::uint32_t loop_address = 0;
+            if (!kernel::call_library_export("libsd", 10, reg | 0x2140u,
+                    0, 0, 0, loop_address)) continue;
+            if (loop_address < 0x5050u && (ended & bit))
+            {
+                g_sound.active_voice_masks[index >> 5] &= ~mask_bit;
+                reported[index >> 5] &= ~mask_bit;
+            }
+        }
+    }
+    sif::publish_ee_sreg(14, reported[0]);
+    sif::publish_ee_sreg(15, reported[1]);
+}
+
+void process_voice_commands(const kernel::Job &job)
+{
+    if (job.b == 1) { poll_voice_status(); return; }
+    // IRX 0x3020-0x49EC: stop requests take precedence over starts
+    // and live updates. Repeat/end handling remains a separate task.
     const std::uint32_t parity = job.a & 1u;
     if (!kernel::library_exists("libsd"))
     {
@@ -350,6 +469,26 @@ void process_voice_mutes(const kernel::Job &job)
         return;
     }
     std::array<std::uint32_t, 2> key_off_masks{};
+    std::array<std::uint32_t, 2> key_on_masks{};
+    std::array<std::uint32_t, 2> effect_set{}, effect_clear{};
+    const auto remember_effect = [&](std::uint32_t index, const s_voice_command &command)
+    {
+        const auto core = index / 24u, bit = 1u << (index % 24u);
+        if (command.restart_control == 0) g_voice_end_redirect[core] |= bit;
+        else g_voice_end_redirect[core] &= ~bit;
+        // The later update of a voice supersedes an earlier start in
+        // the same worker pass, matching the original per-core masks.
+        if (command.start_control)
+        {
+            effect_set[core] |= bit;
+            effect_clear[core] &= ~bit;
+        }
+        else
+        {
+            effect_clear[core] |= bit;
+            effect_set[core] &= ~bit;
+        }
+    };
     for (std::uint32_t index = 0; index < 46; ++index)
     {
         // IRX 0x3194-0x31E8 indexes request masks by index / 32 and
@@ -360,13 +499,37 @@ void process_voice_mutes(const kernel::Job &job)
         const std::uint32_t mask_bit = 1u << (index & 31u);
         const std::uint32_t core = index / 24;
         const std::uint32_t voice = index % 24;
-        const auto *record = g_sound.sound_commands[parity].data()
-            + static_cast<std::size_t>(index) * 18;
+        // IRX 0x3B2C/0x3B34: flags[46] precede records[46].
+        auto &updates = g_sound.sound_commands[parity];
+        auto *record = updates.data() + static_cast<std::size_t>(index) * 2;
         const std::uint16_t flags = static_cast<std::uint16_t>(
             record[0] | (static_cast<std::uint16_t>(record[1]) << 8));
         if (!(g_sound.command_flags[parity][mask_word] & mask_bit)
             && !(flags & 0x8u))
+        {
+            if (start_voice(parity, index))
+            {
+                key_on_masks[core] |= 1u << voice;
+                remember_effect(index, *inspect_voice_command(
+                    g_sound.voice_commands[parity].data(), 0x2E0, index));
+            }
+            if (flags)
+            {
+                const auto update = inspect_voice_command(updates.data() + 0x5C,
+                    updates.size() - 0x5C, index);
+                if (update)
+                {
+                    if ((flags & 1u) && start_voice(parity, index, &*update))
+                    {
+                        key_on_masks[core] |= 1u << voice;
+                        remember_effect(index, *update);
+                    }
+                    update_voice(index, *update, flags);
+                }
+                record[0] = record[1] = 0;
+            }
             continue;
+        }
 
         const std::uint32_t register_id = core | (voice << 1);
         std::uint32_t result = 0;
@@ -382,7 +545,21 @@ void process_voice_mutes(const kernel::Job &job)
         }
         key_off_masks[core] |= 1u << voice;
         g_sound.active_voice_masks[mask_word] &= ~mask_bit;
+        g_voice_end_redirect[core] &= ~(1u << voice);
         g_sound.command_flags[parity][mask_word] &= ~mask_bit;
+        record[0] &= static_cast<std::uint8_t>(~0x8u);
+    }
+
+    if (key_on_masks[0] || key_on_masks[1]) refresh_live_voice_gains();
+    // IRX 0x46D4-0x4708 sends key-on before the accumulated key-offs.
+    for (std::uint32_t core = 0; core < 2; ++core)
+    {
+        if (!key_on_masks[core]) continue;
+        std::uint32_t result = 0;
+        if (!kernel::call_library_export("libsd", 7, 0x1500u | core,
+                key_on_masks[core], 0, 0, result))
+            std::fprintf(stderr,
+                "[arkd-native] libsd voice key-on unavailable (core %u)\n", core);
     }
 
     // IRX 0x4730-0x4784 accumulates stopped voices per SPU2 core
@@ -397,6 +574,18 @@ void process_voice_mutes(const kernel::Job &job)
             std::fprintf(stderr,
                 "[arkd-native] libsd voice key-off unavailable (core %u)\n",
                 core);
+    }
+    // IRX 0x4860-0x4994 preserves unrelated left/right effect bits.
+    for (std::uint32_t core = 0; core < 2; ++core)
+    {
+        if (!(effect_set[core] | effect_clear[core])) continue;
+        for (const std::uint32_t selector : {0x1900u, 0x1B00u})
+        {
+            std::uint32_t previous = 0, result = 0;
+            if (kernel::call_library_export("libsd", 8, selector | core, 0, 0, 0, previous))
+                kernel::call_library_export("libsd", 7, selector | core,
+                    (previous & ~effect_clear[core]) | effect_set[core], 0, 0, result);
+        }
     }
 }
 
@@ -533,9 +722,8 @@ bool native_full_file_read(std::uint32_t args, std::uint32_t args_size,
 bool sound_effect_rpc(std::uint32_t args, std::uint32_t args_size,
     std::uint32_t ret, std::uint32_t ret_size)
 {
-    // IRX 0x4C84 (0x501/0x11): two 16-byte sceSdEffectAttr records,
-    // one per SPU2 core. It calls the libsd export #23
-    // (sceSdSetEffectAttr) with (core, address_of_attribute).
+    // IRX 0x4C84: two 16-byte RPC descriptors become 20-byte
+    // sceSdEffectAttr structures with a core word prepended.
     if (args_size < 32 || !ee_range(args, 32))
     {
         reply_u32(ret, ret_size, 0x80000064u);
@@ -548,8 +736,8 @@ bool sound_effect_rpc(std::uint32_t args, std::uint32_t args_size,
         reply_u32(ret, ret_size, 0x80000064u);
         return true;
     }
-    const std::uint32_t staging = kernel::alloc(16);
-    if (!staging || (iop::phys(staging) & (iop::kRamSize - 1)) > iop::kRamSize - 16)
+    const std::uint32_t staging = kernel::alloc(20);
+    if (!staging || (iop::phys(staging) & (iop::kRamSize - 1)) > iop::kRamSize - 20)
     {
         reply_u32(ret, ret_size, 0x80000064u);
         return true;
@@ -558,7 +746,8 @@ bool sound_effect_rpc(std::uint32_t args, std::uint32_t args_size,
     const auto *input = ps2::g_ram + (args & (ps2::kRamSize - 1));
     for (std::uint32_t core = 0; core < 2; ++core)
     {
-        std::memcpy(iop::ram_ptr(staging), input + core * 16, 16);
+        std::memcpy(iop::ram_ptr(staging), &core, 4);
+        std::memcpy(iop::ram_ptr(staging) + 4, input + core * 16, 16);
         std::uint32_t result = 0;
         if (!kernel::call_library_export("libsd", 23, core, staging, 0, 0, result))
         {
@@ -573,6 +762,59 @@ bool sound_effect_rpc(std::uint32_t args, std::uint32_t args_size,
 
 void begin_spu_upload();
 
+bool initialize_sound_hardware()
+{
+    // Original 0x6B0C setup, using its default mode 1. The guest libsd
+    // owns hardware layout, DMA hooks and effect initialization.
+    std::uint32_t result = 0;
+    if (!kernel::call_library_export("libsd", 4, 0, 0, 0, 0, result)
+        || static_cast<std::int32_t>(result) < 0) return false;
+    bool success = true;
+    const auto call = [&](std::uint32_t ordinal, std::uint32_t reg, std::uint32_t value)
+    {
+        success &= kernel::call_library_export("libsd", ordinal, reg, value, 0, 0, result);
+    };
+    const auto staging = kernel::alloc(20);
+    if (!staging) return false;
+    if ((iop::phys(staging) & (iop::kRamSize - 1)) > iop::kRamSize - 20)
+    {
+        kernel::free(staging);
+        return false;
+    }
+    for (std::uint32_t core = 0; core < 2; ++core)
+    {
+        call(5, 0x980u | core, 0x3FFF);
+        call(5, 0xA80u | core, 0x3FFF);
+        call(5, 0x800u | core, core ? 0xFCC : 0xFC0);
+        call(7, 0x1700u | core, 0);
+        for (std::uint32_t voice = 0; voice < 24; ++voice)
+        {
+            const auto reg = core | (voice << 1);
+            call(5, reg, 0);
+            call(5, reg | 0x100u, 0);
+            call(5, reg | 0x200u, 0x1000);
+            call(9, reg | 0x2040u, 0x5010);
+            call(5, reg | 0x300u, 0x80FF);
+            call(5, reg | 0x400u, 0x1FC0);
+        }
+        call(11, 2u | core, 0);
+        call(9, 0x1D00u | core, core ? 0x1DFFFF : 0x1FFFFF);
+        const std::array<std::uint32_t, 5> effect{core, 0x105, 0xFFF00010, 10, 20};
+        std::memcpy(iop::ram_ptr(staging), effect.data(), sizeof(effect));
+        success &= kernel::call_library_export("libsd", 23, core, staging, 0, 0, result);
+        call(11, 4u | core, 1);
+        call(11, 2u | core, 1);
+        call(5, 0xB80u | core, 0x3FFF);
+        call(5, 0xC80u | core, 0x3FFF);
+        call(7, 0x1800u | core, 0xFFFFFF);
+        call(7, 0x1A00u | core, 0xFFFFFF);
+        call(7, 0x1900u | core, 0);
+        call(7, 0x1B00u | core, 0);
+    }
+    kernel::free(staging);
+    return success;
+}
+
 void complete_audio_command(const kernel::Job &job)
 {
     if (!g_audio_worker.pending || job.a != g_audio_worker.serial)
@@ -586,6 +828,7 @@ void complete_audio_command(const kernel::Job &job)
     {
         g_audio_worker.state = release_spu_bank(g_audio_worker.selector)
             ? 0x30000000u : 0x4000012Cu;
+        sif::publish_ee_sreg(12, g_audio_worker.state);
         return;
     }
     // Original opcode 2 (0x5F08) uses the cached IOP sound bank,
@@ -602,9 +845,11 @@ void complete_audio_command(const kernel::Job &job)
         release_spu_bank(selected);
         begin_spu_upload();
         g_audio_worker.state = g_spu_upload.state;
+        if (!g_spu_upload.pending) sif::publish_ee_sreg(12, g_audio_worker.state);
         return;
     }
     g_audio_worker.state = 0x40000064u;
+    sif::publish_ee_sreg(12, g_audio_worker.state);
     std::fprintf(stderr,
         "[arkd-native] audio command 0x501/0x%X selector %u "
         "has no cached sample bank\n",
@@ -637,6 +882,7 @@ bool queue_audio_command(std::uint32_t method,
     ++g_audio_worker.serial;
     g_audio_worker.pending = true;
     g_audio_worker.state = 0x10000000u;
+    sif::publish_ee_sreg(12, g_audio_worker.state);
     kernel::schedule(kernel::now() + kernel::usec_to_cycles(400),
         kernel::Job{kernel::kJobArkdAudio, g_audio_worker.serial});
     reply_u32(ret, ret_size, 0);
@@ -803,13 +1049,17 @@ void complete_sound_bank(const kernel::Job &job)
     g_sound_bank_data.clear();
 
     if (asset.file_size > k_max_bank_size)
+    {
+        sif::publish_ee_sreg(12, 0x40000064u);
         return;
+    }
 
     g_sound_bank_data.resize(asset.file_size);
     const std::size_t loaded = g_catalog.read(
         asset, 0, g_sound_bank_data.data(), g_sound_bank_data.size());
     if (loaded != asset.file_size)
     {
+        sif::publish_ee_sreg(12, 0x40000064u);
         g_sound_bank_data.clear();
         std::fprintf(stderr,
             "[arkd-native] audio bank read failed (%zu / %u bytes)\n",
@@ -847,6 +1097,7 @@ void complete_sound_bank(const kernel::Job &job)
                     "older bank reloads may be unavailable\n");
         }
     }
+    if (!g_spu_upload.pending) sif::publish_ee_sreg(12, 0x40000064u);
 }
 
 bool queue_sound_bank(std::uint32_t args, std::uint32_t args_size,
@@ -877,6 +1128,7 @@ bool queue_sound_bank(std::uint32_t args, std::uint32_t args_size,
         reinterpret_cast<const char *>(name), name_size));
     if (!asset || asset->file_size > k_max_bank_size)
     {
+        sif::publish_ee_sreg(12, 0x40000064u);
         reply_u32(ret, ret_size, 0x80000064u);
         return true;
     }
@@ -885,6 +1137,9 @@ bool queue_sound_bank(std::uint32_t args, std::uint32_t args_size,
     // 0x3334 and uses it to index per-bank allocation tables.
     const std::uint32_t bank_id = read_u32(packet);
     g_pending_bank = {*asset, bank_id, ++g_bank_serial, true};
+    // IRX 0x6588-0x65A0 publishes busy at admission, so the EE
+    // cannot mistake the previous bank's completion for this one.
+    sif::publish_ee_sreg(12, 0x10000000u);
     g_bank_ready = false;
     g_sound_bank_data.clear();
 
@@ -924,6 +1179,8 @@ bool sound_command_rpc(std::uint32_t method, std::uint32_t args,
         if (!copy_input(g_sound.voice_commands[next].data(), 0x2E0)) break;
         ++g_sound.buffer_generation;
         ++g_sound.submitted_generation;
+        kernel::schedule(kernel::now() + kernel::usec_to_cycles(100),
+            kernel::Job{kernel::kJobArkdVoice, next});
         reply_u32(ret, ret_size, 0);
         return true;
     }
@@ -1214,15 +1471,16 @@ bool rpc(std::uint32_t server, std::uint32_t method, std::uint32_t args,
             g_transfer_state = 0x30000000u;
             reset_sound_state();
             g_pending.valid = false;
-            reply_u32(ret, ret_size, 0);
+            reply_u32(ret, ret_size, initialize_sound_hardware() ? 0 : 0x80000064u);
             return true;
         case 3: // IRX 0x00D8, reinitialisation.
             g_pending.valid = false;
             g_transfer_state = 0x30000000u;
             reply_u32(ret, ret_size, 0);
             return true;
-        case 0x10: // IRX 0x0110, enable control flag.
-            g_control_value |= 1u;
+        case 0x10: // IRX 0x0110 sets the separate B4AC device-mode word.
+            // Native file reads have no corresponding mechanical mode.
+            // B4A8 is the pitch scale and must remain independent.
             reply_u32(ret, ret_size, 0);
             return true;
         case 0x11: // IRX 0x0138, store the requested control value.
@@ -1252,12 +1510,8 @@ bool rpc(std::uint32_t server, std::uint32_t method, std::uint32_t args,
     return true;
 }
 
-void start_module()
+void register_rpc_servers()
 {
-    if (!g_catalog.open())
-    {
-        std::fprintf(stderr, "[arkd-native] INFO/GAME catalog unavailable\n");
-    }
     for (std::uint32_t server = 0x500; server <= 0x503; ++server)
     {
         sif::register_hle_server(server,
@@ -1268,6 +1522,15 @@ void start_module()
                 return rpc(server, method, args, args_size, ret, ret_size);
             });
     }
+}
+
+void start_module()
+{
+    if (!g_catalog.open())
+    {
+        std::fprintf(stderr, "[arkd-native] INFO/GAME catalog unavailable\n");
+    }
+    register_rpc_servers();
     std::fprintf(stderr,
         "[arkd-native] HLE servers registered (0x500-0x503, %zu indexed files)\n",
         g_catalog.entry_count());
@@ -1623,6 +1886,14 @@ bool native_requested()
         || std::strcmp(value, "true") == 0);
 }
 
+void on_vblank()
+{
+    if (native_requested() && g_catalog.entry_count()
+        && kernel::library_exists("libsd"))
+        kernel::schedule(kernel::now(),
+            kernel::Job{kernel::kJobArkdVoice, 0, 1});
+}
+
 bool intercept_module(const std::string &path)
 {
     if (!native_requested()) return false;
@@ -1650,11 +1921,12 @@ void install()
     g_spu_next = k_spu_base_start;
     g_transfer_state = 0x30000000u;
     g_transfer_serial = 0;
-    g_control_value = g_transfer_block_bytes = 0;
+    g_control_value = 0x1000;
+    g_transfer_block_bytes = 0;
     reset_sound_state();
     if (!native_requested()) return;
     kernel::register_job(kernel::kJobArkdRead, complete_native_read);
-    kernel::register_job(kernel::kJobArkdVoice, process_voice_mutes);
+    kernel::register_job(kernel::kJobArkdVoice, process_voice_commands);
     kernel::register_job(kernel::kJobArkdBank, complete_sound_bank);
     kernel::register_job(kernel::kJobArkdAudio, complete_audio_command);
     kernel::register_job(kernel::kJobArkdSpuUpload, complete_spu_upload);
@@ -1686,7 +1958,8 @@ void state(ps2::state::Stream &stream)
             g_spu_next = k_spu_base_start;
             g_transfer_state = 0x30000000u;
             g_transfer_serial = 0;
-            g_control_value = g_transfer_block_bytes = 0;
+            g_control_value = 0x1000;
+            g_transfer_block_bytes = 0;
             reset_sound_state();
             if (native_requested() && !g_catalog.open())
                 throw std::runtime_error("cannot restore native ARKD asset catalog");
@@ -1766,6 +2039,12 @@ void state(ps2::state::Stream &stream)
         stream.pod(g_spu_next);
         stream.pod(g_spu_banks);
         stream.pod(g_spu_upload);
+        if (stream.loading() && native)
+            for (const auto &bank : g_spu_banks)
+                if (bank.base && (bank.base < k_spu_base_start
+                    || bank.base >= k_spu_bank_limit
+                    || bank.size > k_spu_bank_limit - bank.base))
+                    throw std::runtime_error("native ARKD bank overlaps streaming/effect memory");
     }
     else if (stream.loading())
     {
@@ -1812,8 +2091,20 @@ void state(ps2::state::Stream &stream)
         g_sound.active_voice_masks = {};
     }
 
-    if (stream.loading() && native && !g_catalog.open())
-        throw std::runtime_error("cannot restore native ARKD asset catalog");
+    if (stream.version() >= 14)
+        stream.pod(g_voice_end_redirect);
+    else if (stream.loading())
+        g_voice_end_redirect = {};
+
+    if (stream.loading() && native)
+    {
+        if (!g_catalog.open())
+            throw std::runtime_error("cannot restore native ARKD asset catalog");
+        // A fresh process has not loaded the intercepted IRX yet. The
+        // following SIF state section needs these callback bindings,
+        // but hardware initialization would destroy the restored SPU2.
+        register_rpc_servers();
+    }
 }
 
 }
