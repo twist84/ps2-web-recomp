@@ -59,6 +59,32 @@ yet been connected. Adding PNG/WAV files will not change visible textures or
 audible sounds until their respective consumers are implemented. Sending
 PNG/WAV bytes to a PS2 `.pix`/`.ams` decoder is not supported.
 
+## GS texture provenance diagnostics
+
+Set `PS2_TRACE_TEXTURE_UPLOADS=1` to log host-to-local GS IMAGE uploads
+alongside GS `TEX0` texture bindings. This is enabled only when explicitly
+requested. It has no effect on guest VRAM, texture data, or renderer output.
+
+Each `[gs-texture] upload` record contains an upload serial, destination
+`BITBLTBUF` base pointer and format, transfer position, dimensions,
+byte count, and a 64-bit FNV-1a fingerprint of the uploaded payload.
+Transfers split across multiple GIF IMAGE packets are fingerprinted as one
+upload. Padded packet bytes past the declared transfer extent are ignored.
+Interrupted uploads are labelled `partial`. `[gs-texture] bind` records
+show the `TEX0` value, buffer pointer, format and dimensions chosen for
+texture sampling.
+
+**The fingerprint is diagnostic, not an asset identity.** GS addresses are
+reused and an Arika FPIX/TIM2 source may have been transformed or swizzled
+before reaching GS memory. Matching FPIX directory entries to actual
+uploads still requires an observed association. Never globally replace
+all draws using a particular `TEX0` or base pointer.
+
+```sh
+PS2_TRACE_TEXTURE_UPLOADS=1 ./SDBZ 2>gs-textures.log
+python3 -m unittest discover -s tests -p 'test_gs_texture_upload_trace.py' -v
+```
+
 ## Validation
 
 ```sh
