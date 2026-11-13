@@ -14,6 +14,7 @@
 
 #include "ps2/state.hpp"
 #include "ps2/system.hpp"
+#include "ps2/resource_pack.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -33,6 +34,7 @@ State g_state;
 std::uint32_t g_setup_generation = 0;
 
 void serve_state(const void *payload);
+void apply_live_resource_packs();
 
 namespace {
 
@@ -1219,6 +1221,7 @@ DisplayRegs display_regs() { return DisplayRegs{g_pmode, g_smode2, {g_dispfb[0],
 bool present() { return present(display_regs()); }
 
 bool present(const DisplayRegs &r) {
+    if (!queue::active()) apply_live_resource_packs();
 #ifdef PS2_GPU
     if (!gpu::has_surface()) return false;
     const int circuit = (r.pmode & 2u) ? 1 : (r.pmode & 1u) ? 0 : -1;
@@ -1337,8 +1340,45 @@ void post_present() {
     for (std::uint32_t done = g_presented.load(); g_posted_presents - done > 2; done = g_presented.load()) queue::wait(g_presented, done);
 }
 
+void apply_live_resource_packs()
+{
+    // A resource-pack save only stages new file priorities on the SDL thread.
+    // The GS render thread owns all native texture caches and WebGPU state.
+    // Complete old batched GPU draws before changing any atlas contents.
+    if (!resource_pack::selection_pending()) return;
+#ifdef PS2_GPU
+    if (gpu_on()) gpu::flush();
+#endif
+    if (!resource_pack::apply_pending_selection()) return;
+#ifdef PS2_NATIVE_PNG
+    native_texture::reload_replacements();
+    std::memset(g_native_gpu_uploaded, 0, sizeof g_native_gpu_uploaded);
+    std::memset(g_native_match_logged, 0, sizeof g_native_match_logged);
+#ifdef PS2_GPU
+    if (gpu_on())
+    {
+        for (const int chunk : native_texture::resident_chunks())
+        {
+            if (chunk < 0 || chunk >= 13) continue;
+            if (const auto *image = native_texture::chunk_image(chunk))
+            {
+                gpu::upload_native_atlas(static_cast<std::uint32_t>(chunk),
+                    image->width, image->height, image->rgba.data());
+                g_native_gpu_uploaded[chunk] = true;
+            }
+        }
+    }
+#endif
+    // WebGPU caches its setup, including the native atlas selector, by
+    // generation. Bump it even when the game's TEX0 registers are unchanged.
+    ++g_setup_generation;
+#endif
+    std::fprintf(stderr, "[gs-native] resource packs reloaded in place\n");
+}
+
 Rendered render_pending(const std::function<void(const DisplayRegs &)> &on_present, double budget_ms) {
     queue::role() = queue::Role::Render;
+    apply_live_resource_packs();
     queue::Header h;
     const std::uint8_t *payload = nullptr;
     const auto start = std::chrono::steady_clock::now();
