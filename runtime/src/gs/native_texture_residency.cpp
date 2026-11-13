@@ -73,7 +73,7 @@ bool replacements_available()
     // do not cache a negative result from early GS initialization.
     for (const auto &asset : disc::native_assets())
     {
-        const std::string &path = asset.original_path;
+        const std::string &path = asset.name;
         if (path.find("dis/main_menu.pix.") != std::string::npos
             && asset.format == "PNG")
         {
