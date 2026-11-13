@@ -34,6 +34,14 @@ jobs:
             exit 2
           fi
           git merge-base --is-ancestor origin/SDBZ HEAD
+          # main added an IOP CD seek scheduler job after PR 2 branched.
+          # Resolve the non-conflicting enum overlap while keeping the
+          # ordinal of existing main jobs stable.
+          if ! grep -q 'kJobCdSeek' runtime/src/iop/kernel.hpp; then
+            sed -i '/    kJobSifReply,/a\    kJobCdSeek,' runtime/src/iop/kernel.hpp
+            git add runtime/src/iop/kernel.hpp
+            git commit -m "Preserve main IOP CD seek job alongside ARKD jobs"
+          fi
           echo "Replayed commits: $(git rev-list --count origin/SDBZ..HEAD)"
           python3 -m unittest discover -s tests -p 'test_game_dat_loose_assets.py' -v
           python3 -m unittest discover -s tests -p 'test_disc_folder_expansion.py' -v
