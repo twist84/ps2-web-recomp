@@ -154,7 +154,8 @@ std::vector<int> resident_chunks()
 
 void invalidate_destination(std::uint64_t bitbltbuf, std::uint64_t trxreg)
 {
-    if (!g_available) return;
+    // Upload identities remain valid independently of selected packs.
+    // Writes must invalidate them even while all replacements are disabled.
     const std::uint32_t start = static_cast<std::uint32_t>(bitbltbuf >> 32) & 0x3fffu;
     const std::uint32_t blocks = transfer_blocks(bitbltbuf, trxreg);
     if (!blocks) return;
