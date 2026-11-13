@@ -1536,6 +1536,15 @@ std::vector<s_direct_game_asset> enumerate_direct_game(const fs::path &root)
     }
     if (error)
         throw std::runtime_error("cannot enumerate native GAME assets: " + error.message());
+    // Native savestates refer to these assets by ID. Filesystem directory
+    // iteration order is not stable, especially across Windows/Linux.
+    // Give each name a deterministic ID before exposing it to the IOP.
+    std::sort(assets.begin(), assets.end(),
+        [](const s_direct_game_asset &left,
+            const s_direct_game_asset &right)
+        {
+            return archive_name_key(left.name) < archive_name_key(right.name);
+        });
     std::fprintf(stderr,
         "[disc] native GAME direct index: %zu assets, no INFO record cap\n",
         assets.size());
