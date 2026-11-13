@@ -35,6 +35,17 @@ class ResourcePackMenuInputTests(unittest.TestCase):
         self.assertIn("case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:", self.host)
         self.assertIn("case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:", self.host)
 
+    def test_reorder_requires_two_enabled_packs_and_reports_limits(self):
+        self.assertIn("case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:", self.host)
+        self.assertIn("handle_pack_action(_pack_action_move_up);", self.host)
+        self.assertIn("case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:", self.host)
+        self.assertIn("handle_pack_action(_pack_action_move_down);", self.host)
+        self.assertIn("g_pack_enabled.size() < 2", self.host)
+        self.assertIn("Enable at least two packs to reorder", self.host)
+        self.assertIn("Already highest priority", self.host)
+        self.assertIn("Already lowest priority", self.host)
+        self.assertIn("std::swap(current[g_pack_row], current[target]);", self.host)
+
     def test_no_mouse_or_keyboard_in_pack_menu(self):
         self.assertNotIn("handle_pack_key", self.host)
         self.assertIn("e.key.keysym.scancode == SDL_SCANCODE_F6", self.host)
