@@ -1,0 +1,45 @@
+name: Stage PR 2 native ARKD rebase
+
+on:
+  push:
+    branches:
+      - rebase-work/pr2-20261113
+
+permissions:
+  contents: write
+
+jobs:
+  rebase-pr2:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Replay native ARKD commits onto merged PR 1 and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin SDBZ feat/arkd-dvd-native-hle
+          test "$(git rev-parse origin/SDBZ)" = "bb279402f7670aff61a1d1555f51b039514e5a51"
+          test "$(git rev-parse origin/feat/arkd-dvd-native-hle)" = "a6f24e985449425eef7cf55a893af46ca5c5ef72"
+          git config user.name "SDBZ Rebase Bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config rerere.enabled true
+          git switch --create pr2-scratch origin/feat/arkd-dvd-native-hle
+          if ! git -c commit.gpgsign=false rebase -X theirs --onto origin/SDBZ 1f8094f23447b3c91af5667e7c3ea06e58a15302; then
+            echo 'PR 2 requires conflict resolution; staged result not pushed'
+            git status --short
+            git diff --name-only --diff-filter=U
+            exit 2
+          fi
+          git merge-base --is-ancestor origin/SDBZ HEAD
+          echo "Replayed commits: $(git rev-list --count origin/SDBZ..HEAD)"
+          python3 -m unittest discover -s tests -p 'test_game_dat_loose_assets.py' -v
+          python3 -m unittest discover -s tests -p 'test_disc_folder_expansion.py' -v
+          python3 -m unittest discover -s tests -p 'test_eu_beta_virtual_info.py' -v
+          python3 -m unittest discover -s tests -p 'test_arkd_native.py' -v
+          cmake -S . -B build-pr2-rebased -DCMAKE_CXX_COMPILER=clang++ -DPS2_BUILD_TESTS=ON
+          cmake --build build-pr2-rebased --target ps2runtime --parallel 2
+          ctest --test-dir build-pr2-rebased --output-on-failure
+          git push origin HEAD:refs/heads/rebase-result/pr2-20261113
