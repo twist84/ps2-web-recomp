@@ -1,5 +1,6 @@
 #include "disc_folder.hpp"
 #include "ps2/disc.hpp"
+#include "ps2/resource_pack.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -1703,6 +1704,8 @@ bool open_folder(const fs::path &root)
             const fs::path loose = find_directory(root, "GAME");
             if (!loose.empty()) g_direct_game_root = fs::canonical(loose);
         }
+        if (mounted)
+            resource_pack::mount(root);
         return mounted;
     }
     catch (const std::exception &error)
@@ -1815,6 +1818,7 @@ std::size_t read_native_asset(std::uint32_t id,
 
 void clear_loose_game_assets()
 {
+    resource_pack::clear();
     g_native_assets.clear();
     g_native_asset_root.clear();
     g_direct_game_assets.clear();
