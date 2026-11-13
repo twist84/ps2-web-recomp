@@ -36,7 +36,7 @@ def read_text(path):
 def records(text):
     # PowerShell wraps some native-error lines between the byte count and
     # fnv64 field; permit arbitrary whitespace there.
-    for kind, match in sorted(
+    for _, kind, match in sorted(
         ([(m.start(), "upload", m) for m in UPLOAD.finditer(text)]
          + [(m.start(), "bind", m) for m in BIND.finditer(text)]),
         key=lambda item: item[0],
