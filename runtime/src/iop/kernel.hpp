@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -89,7 +90,9 @@ void block(Cpu &c, WaitKind kind, int id);
 void wake(Thread &t, std::uint32_t result);
 void reschedule();
 bool in_interrupt();
-std::uint32_t call_guest(std::uint32_t address, std::uint32_t a0 = 0, std::uint32_t a1 = 0, std::uint32_t a2 = 0, std::uint32_t a3 = 0);
+std::uint32_t call_guest(std::uint32_t address, std::uint32_t a0 = 0,
+    std::uint32_t a1 = 0, std::uint32_t a2 = 0,
+    std::uint32_t a3 = 0, std::optional<std::uint32_t> a4 = std::nullopt);
 
 std::uint32_t alloc(std::uint32_t size, int mode = 0, std::uint32_t at = 0);
 void free(std::uint32_t address);
@@ -105,7 +108,8 @@ bool library_exists(const std::string &name);
 // by native HLE drivers which must still call the game's actual LIBSD.IRX.
 bool call_library_export(const std::string &name, std::uint32_t ordinal,
     std::uint32_t a0, std::uint32_t a1, std::uint32_t a2,
-    std::uint32_t a3, std::uint32_t &result);
+    std::uint32_t a3, std::uint32_t &result,
+    std::optional<std::uint32_t> a4 = std::nullopt);
 
 struct Module {
     int id;
