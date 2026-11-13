@@ -53,6 +53,7 @@ struct s_sound_rpc_state
     std::array<std::array<std::uint8_t, 0x2E0>, 2> voice_commands{};
     std::array<std::array<std::uint8_t, 0x33C>, 2> sound_commands{};
     std::array<std::array<std::uint32_t, 2>, 2> command_flags{};
+    std::array<std::uint32_t, 2> active_voice_masks{};
     std::array<std::uint8_t, 0x17C> stream_commands{};
 
     std::uint32_t buffer_generation = 0;
@@ -132,6 +133,49 @@ void reply_pair(std::uint32_t ret, std::uint32_t length,
 {
     if (length >= 4) reply_u32(ret, length, first);
     if (length >= 8) reply_u32(ret + 4, length - 4, second);
+}
+
+void process_voice_mutes(const kernel::Job &job)
+{
+    // IRX 0x3020-0x3274: the 46-voice worker checks either a queued
+    // per-core command bit or bit 3 of a 18-byte voice record, then
+    // clears both voice volume registers through libsd ordinal 5
+    // (sceSdSetParam). Other voice operations are not reproduced here.
+    const std::uint32_t parity = job.a & 1u;
+    if (!kernel::library_exists("libsd"))
+    {
+        std::fprintf(stderr,
+            "[arkd-native] voice worker needs libsd for sound register writes\n");
+        return;
+    }
+    for (std::uint32_t index = 0; index < 46; ++index)
+    {
+        const std::uint32_t core = index / 24;
+        const std::uint32_t voice = index % 24;
+        const std::uint32_t bit = 1u << voice;
+        const auto *record = g_sound.sound_commands[parity].data()
+            + static_cast<std::size_t>(index) * 18;
+        const std::uint16_t flags = static_cast<std::uint16_t>(
+            record[0] | (static_cast<std::uint16_t>(record[1]) << 8));
+        if (!(g_sound.command_flags[parity][core] & bit)
+            && !(flags & 0x8u))
+            continue;
+
+        const std::uint32_t register_id = core | (voice << 1);
+        std::uint32_t result = 0;
+        if (!kernel::call_library_export("libsd", 5,
+                register_id, 0, 0, 0, result)
+            || !kernel::call_library_export("libsd", 5,
+                register_id | 0x100u, 0, 0, 0, result))
+        {
+            std::fprintf(stderr,
+                "[arkd-native] libsd voice mute unavailable (voice %u)\n",
+                index);
+            continue;
+        }
+        g_sound.active_voice_masks[core] &= ~bit;
+        g_sound.command_flags[parity][core] &= ~bit;
+    }
 }
 
 bool file_size_rpc(std::uint32_t args, std::uint32_t args_size,
@@ -328,6 +372,9 @@ bool sound_command_rpc(std::uint32_t method, std::uint32_t args,
                 |= read_u32(source);
         }
         ++g_sound.submitted_generation;
+        kernel::schedule(kernel::now() + kernel::usec_to_cycles(100),
+            kernel::Job{kernel::kJobArkdVoice,
+                (g_sound.buffer_generation + 1) & 1u});
         reply_u32(ret, ret_size, 0);
         return true;
     case 3: // IRX 0x4BB8, copy 0x33C stream command bytes.
@@ -336,6 +383,9 @@ bool sound_command_rpc(std::uint32_t method, std::uint32_t args,
         if (!copy_input(g_sound.sound_commands[next].data(), 0x33C)) break;
         ++g_sound.buffer_generation;
         ++g_sound.submitted_generation;
+        kernel::schedule(kernel::now() + kernel::usec_to_cycles(100),
+            kernel::Job{kernel::kJobArkdVoice,
+                g_sound.buffer_generation & 1u});
         reply_u32(ret, ret_size, 0);
         return true;
     }
@@ -736,6 +786,7 @@ void install()
     reset_sound_state();
     if (!native_requested()) return;
     kernel::register_job(kernel::kJobArkdRead, complete_native_read);
+    kernel::register_job(kernel::kJobArkdVoice, process_voice_mutes);
     kernel::register_hle_module("ARKD_DVD", start_module);
     std::fprintf(stderr,
         "[arkd-native] experimental native module selected; "
