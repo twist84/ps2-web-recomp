@@ -759,6 +759,121 @@ int main(int argc, char **argv)
         || kernel::g_captures.size() != 3
         || kernel::g_captures[0].size != 0x8000)
         return 122;
+
+    // IRX 0x4DBC: changing master gain, per-channel gain, or mono mode
+    // immediately re-applies 14-bit fixed-point gain to active voices.
+    // Source +10 maps to the first libsd register; source +8 to +0x100.
+    if (!arkd::record_voice_volume_state(0, 0x2000, 0x1000)
+        || !arkd::record_voice_volume_state(24, 0x3000, 0x1000)
+        || arkd::record_voice_volume_state(46, 0x4000, 0x4000))
+        return 130;
+    const auto check_voice_writes =
+        [&](const std::vector<std::pair<std::uint32_t, std::uint32_t>> &expected)
+    {
+        return kernel::g_voice_writes == expected;
+    };
+
+    const std::uint16_t master_gain = 0x2000;
+    std::memcpy(ps2::g_ram + 0x400, &master_gain, 2);
+    kernel::g_voice_writes.clear();
+    if (!ps2::sif::g_handlers.at(0x501)(0x12, 0x400, 2, 0x180, 4)
+        || word(0x180) != 0) return 131;
+    if (!check_voice_writes({
+        {0, 0x7FF}, {0x100, 0xFFF},
+        {1, 0x7FF}, {0x101, 0x17FF}
+    })) return 132;
+
+    const std::uint16_t channel_gains[2] = {0x1000, 0x3000};
+    std::memcpy(ps2::g_ram + 0x400, channel_gains, 4);
+    kernel::g_voice_writes.clear();
+    if (!ps2::sif::g_handlers.at(0x501)(0x14, 0x400, 4, 0x180, 4)
+        || word(0x180) != 0) return 133;
+    if (!check_voice_writes({
+        {0, 0x200}, {0x100, 0xC00},
+        {1, 0x200}, {0x101, 0x1200}
+    })) return 134;
+
+    kernel::g_voice_writes.clear();
+    if (!ps2::sif::g_handlers.at(0x501)(0x14, 0x400, 2, 0x180, 4)
+        || word(0x180) != 0x80000064u
+        || !kernel::g_voice_writes.empty()) return 135;
+
+    // 0x501/0x13: mono/mix-disabled bit ORs both sources into the
+    // first register, and silences the second one.
+    const std::uint32_t mono = 0;
+    std::memcpy(ps2::g_ram + 0x400, &mono, 4);
+    kernel::g_voice_writes.clear();
+    if (!ps2::sif::g_handlers.at(0x501)(0x13, 0x400, 4, 0x180, 4)
+        || word(0x180) != 0) return 136;
+    if (!check_voice_writes({
+        {0, 0x600}, {0x100, 0},
+        {1, 0x600}, {0x101, 0}
+    })) return 137;
+
+    const std::uint32_t stereo = 1;
+    std::memcpy(ps2::g_ram + 0x400, &stereo, 4);
+    kernel::g_voice_writes.clear();
+    if (!ps2::sif::g_handlers.at(0x501)(0x13, 0x400, 4, 0x180, 4)
+        || word(0x180) != 0) return 138;
+    if (!check_voice_writes({
+        {0, 0x200}, {0x100, 0xC00},
+        {1, 0x200}, {0x101, 0x1200}
+    })) return 139;
+
+    // V13 stores base source gain separately from the original sound
+    // command buffers. Replacing the live gain and restoring the
+    // snapshot must restore the original register values.
+    ps2::state::Writer gain_writer;
+    gain_writer.set_version(13);
+    arkd::state(gain_writer);
+    if (!arkd::record_voice_volume_state(0, 0x100, 0x200)) return 140;
+    ps2::state::Reader gain_reader(
+        gain_writer.out.data(), gain_writer.out.size());
+    gain_reader.set_version(13);
+    arkd::state(gain_reader);
+    // The preceding 0x13 RPC left the stereo-mode value at +0x400.
+    // Restore the intended master gain before exercising 0x12 again.
+    std::memcpy(ps2::g_ram + 0x400, &master_gain, 2);
+    kernel::g_voice_writes.clear();
+    if (!ps2::sif::g_handlers.at(0x501)(0x12, 0x400, 2, 0x180, 4)
+        || !check_voice_writes({
+            {0, 0x200}, {0x100, 0xC00},
+            {1, 0x200}, {0x101, 0x1200}
+        })) return 141;
+
+    // A legacy v12 state may contain an active-voice mask but has no
+    // original source-gain words. Clear those stale masks on load,
+    // rather than emitting register writes from invented zero gains.
+    ps2::state::Writer legacy_writer;
+    legacy_writer.set_version(12);
+    arkd::state(legacy_writer);
+    ps2::state::Reader legacy_reader(
+        legacy_writer.out.data(), legacy_writer.out.size());
+    legacy_reader.set_version(12);
+    arkd::state(legacy_reader);
+    kernel::g_voice_writes.clear();
+    if (!ps2::sif::g_handlers.at(0x501)(0x12, 0x400, 2, 0x180, 4)
+        || !kernel::g_voice_writes.empty()) return 142;
+
+    // The original 0x4A10, 0x4AC0 and 0x4BB8 handlers EACH advance
+    // the alternating command generation. Verify 0x501/2 chooses the
+    // next parity, including after a malformed packet.
+    if (!ps2::sif::g_handlers.at(0x500)(1, 0, 0, 0x180, 4)
+        || word(0x180) != 0) return 143;
+    std::memset(ps2::g_ram + 0x800, 0, 0x33C);
+    if (!ps2::sif::g_handlers.at(0x501)(2, 0x800, 4, 0x180, 4)
+        || word(0x180) != 0x80000064u) return 144;
+    if (!ps2::sif::g_handlers.at(0x501)(1, 0x800, 0x2E0, 0x180, 4)
+        || word(0x180) != 0) return 145;
+    if (!ps2::sif::g_handlers.at(0x501)(2, 0x800, 8, 0x180, 4)
+        || word(0x180) != 0
+        || kernel::g_queued_voice.a != 0) return 146;
+    if (!ps2::sif::g_handlers.at(0x501)(3, 0x800, 0x33C, 0x180, 4)
+        || word(0x180) != 0
+        || kernel::g_queued_voice.a != 1) return 147;
+    if (!ps2::sif::g_handlers.at(0x501)(2, 0x800, 8, 0x180, 4)
+        || word(0x180) != 0
+        || kernel::g_queued_voice.a != 0) return 148;
     return 0;
 }
 '''

@@ -60,6 +60,10 @@ private:
 // Status of the separate 0x501/0x102-0x103 audio command worker.
 // 0x10000000 = queued, 0x40000064 = unimplemented SPU2 operation.
 std::uint32_t audio_worker_status();
+// Bookkeeping entry point for the forthcoming 46-voice start worker.
+// This records original command +8/+10 volumes; it does not key on a voice.
+bool record_voice_volume_state(std::uint32_t index,
+    std::uint16_t source_volume_0, std::uint16_t source_volume_1);
 bool sound_bank_ready();
 std::uint32_t sound_bank_id();
 std::uint32_t sound_upload_status();

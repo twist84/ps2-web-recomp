@@ -179,6 +179,21 @@ Pending bank IDs, direct host-file IDs, cache contents and SPU2
 uploads are serialized in **version 11 savestates**; cache sizes
 are checked before allocation on restore.
 
+## Alternating voice-command buffer generation (0x4A10–0x4BB8)
+
+Original `0x501` methods `1` (`0x4A10`), `2` (`0x4AC0`),
+and `3` (`0x4BB8`) **each** increment the same generation word
+at IRX global `0xB370`; the new low bit selects the destination
+command buffer. Native HLE previously failed to increment generation
+for method `2`, allowing later flags and sound command records to be
+paired with the wrong buffer.
+
+Method `3` increments the pending-work word at `0xB36C` only if
+it was zero; methods `1` and `2` increment it unconditionally.
+The native queue now models those admission rules, while voice
+processing itself remains a partial reconstruction. The harness
+checks method order, parity, and rejected packets.
+
 ## Server 0x502 dispatch (0x9D38)
 
 | Method | Called routine | Static result |
@@ -232,6 +247,43 @@ cache in persistent IOP RAM, invokes ordinal 17 in chunks and polls
 ordinal 19 before changing or freeing the buffer. This sequence is
 covered by synthetic DMA tests, **not** by differential validation of
 the original IRQ, completion callback ordering, or gameplay playback.
+
+## Live voice gain recalculation (0x501/0x12, 0x13, 0x14)
+
+Original `ARKD_DVD.IRX` routines `0x505C`, `0x5108`, and
+`0x50A8` all call `0x4DBC` after changing master volume, mono-mode,
+or channel volume. Previously native HLE only remembered these values;
+existing SPU2 voices would retain their old gain.
+
+The original `0x4DBC` walks **46 voice slots** and checks active
+masks indexed as `voice_index / 32`. Active slots have two retained
+source volume words (IRX globals `0x13258` and `0x1325A`) with 4
+bytes per voice. `sceSdSetParam` (libsd export 5) receives:
+
+- `reg = (voice_index / 24) | ((voice_index % 24) << 1)`:
+  source `+10` scaled by the master and *first* channel coefficient.
+- `reg | 0x100`: source `+8` scaled by the master and *second*
+  channel coefficient.
+- If the IRX mixing-control flag `0x10000` is set, the source pair
+  is bitwise ORed for the first register and the second source is zero.
+
+Each gain stage is a 32-bit multiplication followed by a **logical
+right shift of 14** (`(source * master >> 14) * channel >> 14`).
+Native HLE now performs these writes immediately for active voices
+upon all three RPC control calls and checks the entire four-byte
+channel request before reading either `u16` (the previous handler
+could read past a truncated request).
+
+Native HLE now retains the source gain pair independently of the two
+alternating command buffers. That per-voice bookkeeping is serialized
+in savestate **version 13**, with older native savestates preserving
+their previous sections. `record_voice_volume_state()` provides a
+bookkeeping entry point for the unported 46-voice startup worker.
+
+**Remaining dependency:** full voice startup must call that
+bookkeeping entry after a real libsd start. This change closes the
+gain-control path for *tracked active voices*; it does not by itself
+make the incomplete native voice-start path functional.
 
 ## Sound worker details confirmed from original MIPS instructions
 
