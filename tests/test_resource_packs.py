@@ -19,7 +19,7 @@ HARNESS = r'''
 int main(int argc, char **argv)
 {
     using namespace ps2::resource_pack;
-    if (argc != 3) return 1;
+    if (argc != 3 && argc != 4) return 1;
     mount(argv[1], argv[2] == std::string("exe")
         ? std::filesystem::path(argv[3]) : std::filesystem::path{});
     const auto &found = packs();
