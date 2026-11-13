@@ -13,6 +13,9 @@ on:
       - "tests/test_eu_beta_virtual_info.py"
       - "tests/test_native_assets.py"
       - "tests/test_native_png.py"
+      - "tests/test_gs_texture_upload_trace.py"
+      - "runtime/src/gs/gs.cpp"
+      - "runtime/src/gs/texture_upload_trace.hpp"
       - "runtime/src/gs/native_texture.cpp"
       - "runtime/src/gs/native_texture.hpp"
       - ".github/workflows/sdbz-disc-tests.yml"
@@ -28,6 +31,9 @@ on:
       - "tests/test_eu_beta_virtual_info.py"
       - "tests/test_native_assets.py"
       - "tests/test_native_png.py"
+      - "tests/test_gs_texture_upload_trace.py"
+      - "runtime/src/gs/gs.cpp"
+      - "runtime/src/gs/texture_upload_trace.hpp"
       - "runtime/src/gs/native_texture.cpp"
       - "runtime/src/gs/native_texture.hpp"
       - ".github/workflows/sdbz-disc-tests.yml"
@@ -56,3 +62,4 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_eu_beta_virtual_info.py' -v
           python3 -m unittest discover -s tests -p 'test_native_assets.py' -v
           python3 -m unittest discover -s tests -p 'test_native_png.py' -v
+          python3 -m unittest discover -s tests -p 'test_gs_texture_upload_trace.py' -v
