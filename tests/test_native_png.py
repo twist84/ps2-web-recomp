@@ -128,7 +128,7 @@ class PngDecodeTests(unittest.TestCase):
         # First row red/green; second row blue/white; Paeth uses the row above.
         self.run_png(png(2, 2, 2, [
             b"\x00" + bytes([255, 0, 0, 0, 255, 0]),
-            b"\x04" + bytes([1, 0, 255, 255, 0, 255]),
+            b"\x04" + bytes([1, 0, 255, 255, 0, 0]),
         ]), "rgb")
 
     def test_invalid_crc(self):
