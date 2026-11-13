@@ -143,7 +143,7 @@ void decode_block(Voice &v, std::int16_t *out) {
         if (trace_arkd_voices) {
             const unsigned slot = voice_slot(v);
             std::fprintf(stderr,
-                "[spu2-voice] decode-end core=%td voice=%td block=0x%05X flags=%X lsax=0x%05X next=0x%05X\n",
+                "[spu2-voice] decode-end core=%zu voice=%zu block=0x%05X flags=%X lsax=0x%05X next=0x%05X\n",
                 static_cast<std::size_t>(slot / 24u), static_cast<std::size_t>(slot % 24u), at, flags,
                 v.lsax, v.next);
         }
@@ -164,7 +164,7 @@ void key_on(Voice &v) {
     if (trace_arkd_voices) {
         const unsigned slot = voice_slot(v);
         std::fprintf(stderr,
-            "[spu2-voice] keyon core=%td voice=%td ssa=0x%05X lsax=0x%05X blocks=0x%05X/%05X flags=%X/%X next=0x%05X\n",
+            "[spu2-voice] keyon core=%zu voice=%zu ssa=0x%05X lsax=0x%05X blocks=0x%05X/%05X flags=%X/%X next=0x%05X\n",
             static_cast<std::size_t>(slot / 24u), static_cast<std::size_t>(slot % 24u), v.ssa, v.lsax,
             v.block[0], v.block[1], block_flags(v)[0], block_flags(v)[1], v.next);
     }
@@ -222,7 +222,7 @@ void render_voice(Voice &v, std::int32_t (*sum)[2], std::int16_t *raw) {
                 if (trace_arkd_voices) {
                     const unsigned slot = voice_slot(v);
                     std::fprintf(stderr,
-                        "[spu2-voice] consume-end core=%td voice=%td block=0x%05X flags=%X queued=0x%05X/0x%05X next=0x%05X\n",
+                        "[spu2-voice] consume-end core=%zu voice=%zu block=0x%05X flags=%X queued=0x%05X/0x%05X next=0x%05X\n",
                         static_cast<std::size_t>(slot / 24u), static_cast<std::size_t>(slot % 24u),
                         v.block[0], flags, v.block[1], v.lsax, v.next);
                 }
