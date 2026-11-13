@@ -1,200 +1,113 @@
-# Experimental native ARKD_DVD replacement (EU beta)
+# Native ARKD_DVD HLE — EU beta (work in progress)
 
-The `SDBZ` branch targets **SLES_541.61**, the European beta build of
-Super Dragon Ball Z. The stock module `ARKD_DVD.IRX` is a PS2 IOP driver
-which implements custom Arika file services above INFO.DAT and GAME.DAT.
+This branch targets **SLES_541.61**, the European beta of Super Dragon
+Ball Z. The game's original IOP module, `ARKD_DVD.IRX`, implements
+custom file and sound services through SIF RPC servers `0x500–0x503`.
 
-The runtime has a new **opt-in** C++ high-level-emulation (HLE) backend.
-It is **incomplete**. Do not enable it for regular gameplay yet.
+**Status: draft, opt-in, not ready to replace the original IRX.**
+Passing synthetic unit tests and compiling the runtime do not establish
+successful boot or gameplay parity with the EU beta game.
 
-## Enable / disable
+## Selection
 
-On Windows (PowerShell):
+By default, the original `ARKD_DVD.IRX` is still loaded. To exercise
+the experimental native IOP module, run from PowerShell:
 
 ```powershell
 $env:SDBZ_ARKD_NATIVE = "1"
-# Start SDBZ / ps2run using your usual command.
-# To restore the original driver:
-Remove-Item Env:SDBZ_ARKD_NATIVE
+# Launch the game as usual.
+Remove-Item Env:SDBZ_ARKD_NATIVE  # restore original IRX
 ```
 
-On Linux:
+On Linux: `SDBZ_ARKD_NATIVE=1 ./ps2run ...`
 
-```bash
-SDBZ_ARKD_NATIVE=1 ./ps2run ...    # experimental
-./ps2run ...                       # normal original IRX
-```
+The IOP loader substitutes the HLE before reading the original IRX file.
+It registers the original four server IDs. Unsupported methods are logged
+and return explicit failures rather than fabricated successful results.
 
-With `SDBZ_ARKD_NATIVE=1`, the IOP module loader substitutes native code
-for `cdrom0:\\ARKD_DVD.IRX;1` *before reading the IRX bytes*. With the
-variable unset, existing loading and emulation are unchanged.
+## File service and disc backend
 
-## Implemented
+The native HLE reads directly from extracted `GAME/` on folder-backed
+discs, **without requiring synthetic INFO.DAT or GAME.DAT**. Direct
+assets are canonicalized, case-normalized with CP932-aware separator
+handling, sorted into stable host-file IDs, and accessed through bounded
+host-file reads. Synthetic regression coverage includes **2,100 assets**
+without an INFO index, beyond the original IRX's entry limit.
 
-- Native `ARKD_DVD` module substitution and SIF RPC registrations
-  `0x500`, `0x501`, `0x502`, `0x503`.
-- Uses the runtime's *virtual disc*, so a complete loose `GAME/` extraction
-  works without the original physical INFO.DAT or GAME.DAT. The synthetic
-  INFO.DAT is still used **internally to index assets**. Thus this is an
-  IRX bypass, *not* yet a direct filesystem bypass of the archive index.
-- Parses EU INFO header (`0x7F`), 48-byte records, and sector offsets;
-  normalizes slash separators and ASCII case while preserving CP932
-  multibyte trail bytes.
-- Native bounded asset reads, including partial reads spanning DVD sectors.
-- File-size RPC `0x503 / method 3`: name at request + 4, returns actual
-  size and 16-byte-aligned size; returns `0x80000064` for missing files.
-- Preliminary `0x500 / method 1` initialization acknowledgement.
+For ISO-backed discs without a loose `GAME/` directory, the native file
+catalog can still parse the encoded `INFO.DAT` index and read GAME.DAT
+sectors through the existing virtual disc layer. The original IRX path
+remains available for differential comparison.
 
-## Not implemented — native mode can fail to boot
+Native `0x503` handlers include file sizes, queued full-file reads
+to EE memory, polling and cancellation, virtual CDVD initialization
+and control, and diagnostic handling. CDVD mechanical operations and
+some exact error codes/timing are modeled approximately.
 
-The original IRX also implements many service methods dealing with
-asynchronous reads, buffer state, streaming and audio. Those are **not yet
-emulated**. For unimplemented methods the HLE logs the server/method and
-returns error `0x80000064` rather than faking a successful operation.
-The installed replacement is therefore **not a complete driver** and is
-not intended to run a full game session yet.
+## Sound service — implemented portions
 
-The original IRX and its RPC handler addresses (module-relative) are:
+- `0x501/0x101`: request bank by ID and filename, asynchronously
+  preload its bytes from `GAME/` or indexed GAME.DAT.
+- Read and validate the first 2,048-byte bank header: entry count at
+  `+0x04`, declared SPU memory span at `+0x08`, and 8-byte entry
+  records starting at `+0x0C`.
+- Bounded native bank cache (64 MiB maximum), with saved pending and
+  completed state.
+- Allocate SPU2 space beginning at `0x5050`, using 64-byte alignment
+  and reusable gaps. An individual bank never extends past 2 MiB.
+- Copy payload into persistent 32 KiB IOP staging memory and invoke
+  the *guest game's* `libsd` export #17 (`sceSdVoiceTrans`) with
+  the fifth MIPS o32 stack argument. Alternate DMA channels by chunk,
+  poll `libsd` #19 for completion, and retain source memory until
+  it finishes.
+- `0x501/0x102`: selected bank release. Native implementation leaves
+  other banks at stable SPU2 addresses rather than replicating the
+  original driver's compaction.
+- `0x501/0x103`: re-upload the cached selected bank through the same
+  SPU2 DMA path.
+- `0x501` command buffers and the verified subset of the 46-voice
+  worker, including mute writes through `libsd` #5.
+- `0x501/0x11`: effect-attribute forwarding through `libsd` #23.
+- `0x502`: selected stream-state and command-buffer operations.
 
-| RPC server | Handler | Purpose / current state |
-| --- | --- | --- |
-| `0x500` | `0x01D4` | Startup/control; only method 1 acknowledged |
-| `0x501` | `0x6708` | File read / streaming commands: TODO |
-| `0x502` | `0x9D38` | Auxiliary/audio streaming: TODO |
-| `0x503` | `0x2700` | File size method 3 implemented; others TODO |
+Queued IOP events and native bank/transfer state are saved in the
+**version 11** savestate format. Loading older states clears newer
+native-only fields. A savestate captured with one backend cannot
+be loaded with the other backend selected.
 
-The EU beta IRX is byte-identical to the US IRX. The EE game passes
-`file=2047`, but the native catalog does not use this artificial table
-capacity bound.
+## What still blocks making native mode the default
 
-## Protocol implementation progress
+The driver is **not complete** and full-game equivalence has **not**
+been demonstrated:
 
-The latest draft includes the following **statically recovered** handlers:
+1. Implement the complete 46-voice start/update, key-on/key-off,
+   pitch/volume and sample-address state machine, not just mutes.
+2. Complete `0x501` and `0x502` streaming/audio behaviour, hardware
+   callbacks, interleaving and underrun/error handling. The current
+   subset is not proof of correct gameplay audio.
+3. Compare SIF RPC return packets, DMA timing and completion ordering
+   against the original IOP driver using the **real EU beta game**.
+4. Run and inspect boot, title/menu, character select, stage load,
+   fight, streaming audio, and repeated sound-bank load/unload cycles.
+5. Resolve any differences and ensure save/load and missing-file
+   behaviour preserve the game's expectations.
 
-| Server | Native methods | Important limitation |
-| --- | --- | --- |
-| `0x500` | `1`, `3`, `0x10`, `0x11`, `0x12` | Some initialization side effects remain unmapped |
-| `0x501` | `1`, `2`, `3`, `0x11`, `0x12`, `0x13`, `0x14`, `0x81`, `0x82` | Added queued voice-stop `libsd #5` volume writes; voice start, bank upload and streaming still incomplete |
-| `0x502` | `1`–`5`, `0x101`–`0x103` | Stream control flags and packet storage, not full SPU2 playback |
-| `0x503` | `1`–`4`, `0x81`, `0x101`, `0x102`, `0x103` | File copy, CDVD initialization and virtual-disc control use approximate native timing; physical-drive errors aren't emulated |
+Do not remove the original driver or change the default until these
+tests pass. The optional environment toggle is intentional protection
+for unverified behaviours, not a permanent design requirement.
 
-The `0x501/0x101` handler now resolves and asynchronously loads the
-named archive asset into a bounded native sound-bank cache. Its first
-request word is retained as the bank ID. A successfully loaded bank is
-accessible to the next native SPU2 upload stage, but **it is not yet
-uploaded or played**. This bank data and the pending request are included
-in **savestate version 8**. The cache has a 64 MiB per-bank maximum.
+## Tests
 
-The `0x501/0x11` handler forwards both real 16-byte `sceSdEffectAttr`
-structures to **the game's own `LIBSD.IRX` export ordinal 23** via the
-existing IOP guest-library call bridge. There is no need to duplicate
-the SPU2 device implementation.
-
-The `0x503/0x102` request queues a bounded file read into EE RAM and
-exposes the 0x10000000/0x20000000/0x30000000 transfer phases. The
-`0x503/0x101` request prepares the CDVD worker and completes a separate
-queued job. The actual original-IRX timing and interrupts still require
-comparison before declaring equivalence.
-
-**Still unimplemented:** the SPU2 upload/completion portion of
-`0x501/0x101`, the `0x501/0x102`–`0x103` sound/stream bank workers,
-voice-start and complete parameter updates, exact SIF DMA/interrupt
-callbacks, and physical-disc error parity. The `0x503/0x103` native
-worker now handles the command queue and virtual-media completion for
-opcodes 1–8, but does not reproduce mechanical CD/DVD operations.
-Native pending state is serialized with version 7 savestates. The driver replacement is not yet
-ready for end-to-end gameplay validation. The native module is deliberately
-opt-in and PR #2 remains a draft.
-
-The original EU executable's client bindings are:
-
-```text
-SLES_541.61 EE address 0x1BCD90:
-server 0x500 -> client 0x005A55B0
-server 0x501 -> client 0x005A5600
-server 0x502 -> client 0x005A5628
-server 0x503 -> client 0x005A55D8
-
-EE SifCallRpc wrapper: 0x1789E8
-0x503/0x101 call site: 0x1C0778 (input 0x30, reply 0x10)
-0x503/0x102 call site: 0x1C0BA8 (input 0x30, reply 0x10)
-```
-
-## Additional worker progress
-
-The original 46-voice worker checks stop requests through two **32-bit**
-command masks but addresses SPU2 voices using **24 voices per core**.
-Native HLE now queues the verified `libsd` ordinal 5 volume-clearing
-operations and tests the distinct mask/register boundaries at voice
-indices 24 and 32. Voice startup and sample data transfer are still missing.
-
-The original `0x503/0x103` accepts a single u32 CDVD control opcode in
-the range 1–8 when the transfer state is complete or errored. Native HLE
-now returns a busy status when appropriate, schedules an emulated drive
-operation, and exposes its completion through `0x503/2`. These are
-**virtual-disc** semantics, not mechanical command parity.
-
-## Audio command admission (0x501/0x102–0x103)
-
-The remaining audio RPCs now have a native *request-queue adapter*:
-they decode their 32-bit bank/stream selector, map to original worker
-opcodes 1 and 2, and serialize the pending worker command in savestate
-version 9. All three audio commands (`0x101` preload, `0x102`,
-`0x103`) share the same busy state, consistent with the original IRX
-worker thread.
-
-**The underlying SPU2 worker is not implemented.** For `0x102` and
-`0x103`, the native queue accepts a valid request and deliberately
-finishes with an explicit unsupported-operation status
-(`0x40000064`) rather than claiming playback occurred. This status
-is available to regression tests through
-`arkd::audio_worker_status()`. Implementing request admission is not
-equivalent to implementing successful sound streaming or playback.
-The original IRX remains the default.
-
-## IOP sound-transfer ABI groundwork
-
-The original `ARKD_DVD.IRX` calls `libsd` export **#17**
-(`sceSdVoiceTrans`) during bank streaming. This function takes five
-MIPS o32 parameters: channel, mode, IOP buffer address, SPU2 destination,
-and transfer byte count. The last parameter is on the guest stack at
-`sp+0x10`.
-
-The native IOP guest-library bridge now supports this optional fifth
-argument and restores the previous stack contents after the call.
-Existing four-argument calls do not modify the stack argument area.
-This is a prerequisite for the eventual sample-transfer implementation;
-the real `libsd #17` upload and its asynchronous completion are not
-yet wired into native ARKD.
-
-## Validation
-
-Run the synthetic native catalog and RPC test:
-
-```bash
+```sh
 python3 -m unittest discover -s tests -p 'test_arkd_native.py' -v
-```
-
-Existing folder-disc regressions:
-
-```bash
 python3 -m unittest discover -s tests -p 'test_game_dat_loose_assets.py' -v
 python3 -m unittest discover -s tests -p 'test_disc_folder_expansion.py' -v
 ```
 
-The `arkd-native.yml` GitHub Actions workflow runs those test suites under
-GCC and Clang, as well as compilation of the integrated IOP units. This is
-**not a substitute** for an EU beta boot/differential run.
+GitHub Actions workflow `.github/workflows/arkd-native.yml` runs
+native regression tests with GCC and Clang, and builds the full
+`ps2runtime` library with Clang (the existing VU implementation uses
+Clang-only intrinsics).
 
-## Next compatibility milestone
-
-1. Run **original** IRX with the existing `trace_iop_modules` option
-   enabled and record RPC server IDs, methods, request sizes/words,
-   corresponding replies and SIF DMA completions.
-2. Map those commands against the four dispatchers above, with
-   accurate structures, error codes, and completion timing.
-3. Implement native methods incrementally; compare the same menu, character,
-   stage and audio paths against the original driver before enabling by
-   default.
-
-Do not remove the original IRX path before these comparisons pass.
+See [docs/arkd-dvd-rpc-protocol.md](docs/arkd-dvd-rpc-protocol.md)
+for original module offsets and ongoing differential research.
