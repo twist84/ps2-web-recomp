@@ -631,6 +631,24 @@ int main(int argc, char **argv)
          arkd::sound_upload_status() != 0x30000000u; ++step)
         kernel::g_upload_job(kernel::g_queued_upload);
     if (arkd::sound_upload_status() != 0x30000000u) return 109;
+
+    // The original 0x501/0x103 worker reuses the last cached IOP
+    // bank payload, releases the current SPU allocation and transfers
+    // it again. Confirm it issues libsd DMA rather than a false no-op.
+    kernel::g_captures.clear();
+    if (!ps2::sif::g_handlers.at(0x501)(0x103, 0x400, 4, 0x180, 4)
+        || word(0x180) != 0) return 110;
+    kernel::g_audio_job(kernel::g_queued_audio);
+    if (arkd::audio_worker_status() != 0x10000000u
+        || arkd::sound_upload_status() != 0x10000000u)
+        return 111;
+    for (unsigned step = 0; step < 8 &&
+        arkd::sound_upload_status() != 0x30000000u; ++step)
+        kernel::g_upload_job(kernel::g_queued_upload);
+    if (arkd::audio_worker_status() != 0x30000000u
+        || arkd::sound_upload_status() != 0x30000000u
+        || kernel::g_captures.size() != 2)
+        return 112;
     return 0;
 }
 '''
