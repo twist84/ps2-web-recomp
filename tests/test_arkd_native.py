@@ -24,6 +24,7 @@ HARNESS = r'''#include "iop/arika_dvd.hpp"
 #include <cstring>
 #include <functional>
 #include <map>
+#include <optional>
 #include <utility>
 #include <string>
 #include <vector>
@@ -55,7 +56,7 @@ std::uint32_t alloc(std::uint32_t, int, std::uint32_t) { return 0x1000; }
 void free(std::uint32_t) {}
 bool call_library_export(const std::string &name, std::uint32_t ordinal,
     std::uint32_t a0, std::uint32_t a1, std::uint32_t,
-    std::uint32_t, std::uint32_t &result)
+    std::uint32_t, std::uint32_t &result, std::optional<std::uint32_t>)
 {
     if (name != "libsd") return false;
     if (ordinal == 5)
