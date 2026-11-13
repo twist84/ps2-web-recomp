@@ -111,6 +111,7 @@ int g_pack_column = 1;
 int g_pack_row = 0;
 std::vector<std::string> g_pack_enabled;
 std::vector<std::string> g_pack_available;
+std::string g_pack_feedback;
 
 void refresh_pack_overlay()
 {
@@ -148,12 +149,14 @@ void refresh_pack_overlay()
             + g_pack_available[i]);
     }
     lines.push_back("");
+    if (!g_pack_feedback.empty()) lines.push_back(g_pack_feedback);
     lines.push_back("Restart SDBZ to apply saved changes");
     ps2::resource_pack_overlay::set_lines(std::move(lines));
 }
 
 void open_pack_manager()
 {
+    g_pack_feedback.clear();
     g_pack_enabled.clear();
     g_pack_available.clear();
     for (const auto &pack : ps2::resource_pack::packs())
@@ -224,6 +227,7 @@ void handle_pack_action(e_pack_action action)
             : action == _pack_action_right ? 1 : 0;
         if (destination != g_pack_column && !current.empty())
         {
+            g_pack_feedback.clear();
             const std::string id = current[g_pack_row];
             current.erase(current.begin() + g_pack_row);
             auto &other = destination ? g_pack_enabled : g_pack_available;
@@ -237,15 +241,31 @@ void handle_pack_action(e_pack_action action)
             g_pack_row = 0;
         }
     }
-    else if ((action == _pack_action_move_up || action == _pack_action_move_down)
-        && g_pack_column == 1 && !current.empty())
+    else if (action == _pack_action_move_up || action == _pack_action_move_down)
     {
-        const int target = g_pack_row
-            + (action == _pack_action_move_up ? -1 : 1);
-        if (target >= 0 && target < static_cast<int>(current.size()))
+        if (g_pack_column != 1)
         {
-            std::swap(current[g_pack_row], current[target]);
-            g_pack_row = target;
+            g_pack_feedback = "Enable a pack before changing its priority";
+        }
+        else if (g_pack_enabled.size() < 2)
+        {
+            g_pack_feedback = "Enable at least two packs to reorder";
+        }
+        else
+        {
+            const int target = g_pack_row
+                + (action == _pack_action_move_up ? -1 : 1);
+            if (target >= 0 && target < static_cast<int>(current.size()))
+            {
+                std::swap(current[g_pack_row], current[target]);
+                g_pack_row = target;
+                g_pack_feedback = "Pack priority changed - press START to save";
+            }
+            else
+            {
+                g_pack_feedback = action == _pack_action_move_up
+                    ? "Already highest priority" : "Already lowest priority";
+            }
         }
     }
     refresh_pack_overlay();
