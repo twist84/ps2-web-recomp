@@ -19,6 +19,9 @@ on:
       - "tests/test_sdbz_fpix_gs_match.py"
       - "tests/test_native_texture_residency.py"
       - "tests/test_gs_shader_setup_stride.py"
+      - "scripts/generate_native_menu_manifest.py"
+      - "runtime/src/gs/native_menu_manifest.hpp"
+      - "docs/sdbz-main-menu-verified-fingerprints.csv"
       - "runtime/src/gs/native_texture_residency.cpp"
       - "runtime/src/gs/native_texture_residency.hpp"
       - "runtime/src/gs/raster.cpp"
@@ -51,6 +54,9 @@ on:
       - "tests/test_sdbz_fpix_gs_match.py"
       - "tests/test_native_texture_residency.py"
       - "tests/test_gs_shader_setup_stride.py"
+      - "scripts/generate_native_menu_manifest.py"
+      - "runtime/src/gs/native_menu_manifest.hpp"
+      - "docs/sdbz-main-menu-verified-fingerprints.csv"
       - "runtime/src/gs/native_texture_residency.cpp"
       - "runtime/src/gs/native_texture_residency.hpp"
       - "runtime/src/gs/raster.cpp"
@@ -96,3 +102,4 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_sdbz_fpix_gs_match.py' -v
           python3 -m unittest discover -s tests -p 'test_native_texture_residency.py' -v
           python3 -m unittest discover -s tests -p 'test_gs_shader_setup_stride.py' -v
+          python3 scripts/generate_native_menu_manifest.py --check
