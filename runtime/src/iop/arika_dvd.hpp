@@ -35,6 +35,7 @@ private:
 // Asset data staged by the 0x501/0x101 sound-bank worker. These accessors
 // are for subsequent SPU2 upload work, not an EE-facing game API.
 bool sound_bank_ready();
+std::uint32_t sound_bank_id();
 std::size_t copy_sound_bank(void *destination, std::size_t capacity);
 
 bool native_requested();
