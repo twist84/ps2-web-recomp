@@ -534,6 +534,58 @@ int main(int argc, char **argv)
     const std::uint32_t invalid_offset = spu_span;
     std::memcpy(header.data() + 0x18, &invalid_offset, 4);
     if (arkd::inspect_sound_bank(header.data(), header.size())) return 89;
+
+    // A well-formed audio bank now performs real libsd #17 uploads from
+    // persistent IOP staging RAM, with #19 completion between chunks.
+    std::memset(ps2::g_ram + 0x100, 0, 0x24);
+    const std::uint32_t upload_bank_id = 1;
+    std::memcpy(ps2::g_ram + 0x100, &upload_bank_id, 4);
+    std::memcpy(ps2::g_ram + 0x104, "snd\\test.bnk", 13);
+    if (!ps2::sif::g_handlers.at(0x501)(0x101, 0x100, 0x24, 0x180, 4)
+        || word(0x180) != 0) return 90;
+    kernel::g_bank_job(kernel::g_queued_bank);
+    if (!arkd::sound_bank_ready()
+        || arkd::sound_upload_status() != 0x10000000u
+        || !kernel::g_upload_job
+        || kernel::g_queued_upload.kind != kernel::kJobArkdSpuUpload)
+        return 91;
+    if (!ps2::sif::g_handlers.at(0x501)(0x102, 0x400, 4, 0x180, 4)
+        || word(0x180) != 0x80000065u) return 92;
+
+    // Execute first upload, then serialize during in-flight DMA.
+    kernel::g_upload_job(kernel::g_queued_upload);
+    if (arkd::sound_upload_status() != 0x20000000u
+        || kernel::g_captures.size() != 1) return 93;
+
+    ps2::state::Writer upload_writer;
+    upload_writer.set_version(10);
+    arkd::state(upload_writer);
+    ps2::state::Reader upload_reader(
+        upload_writer.out.data(), upload_writer.out.size());
+    upload_reader.set_version(10);
+    arkd::state(upload_reader);
+    if (arkd::sound_upload_status() != 0x20000000u) return 94;
+    for (unsigned step = 0; step < 8 &&
+         arkd::sound_upload_status() != 0x30000000u; ++step)
+    {
+        kernel::g_upload_job(kernel::g_queued_upload);
+    }
+    if (arkd::sound_upload_status() != 0x30000000u
+        || kernel::g_captures.size() != 2) return 95;
+
+    const auto &first_upload = kernel::g_captures[0];
+    const auto &second_upload = kernel::g_captures[1];
+    if (first_upload.channel != 1 || second_upload.channel != 1
+        || first_upload.mode != 0 || second_upload.mode != 0
+        || first_upload.destination != 0x5050
+        || second_upload.destination != 0xD050
+        || first_upload.size != 0x8000
+        || second_upload.size != 0x40) return 96;
+
+    for (std::uint32_t index = 0; index < 0x8000; ++index)
+        if (first_upload.contents[index] != (index & 0xFFu)) return 97;
+    for (std::uint32_t index = 0; index < 0x40; ++index)
+        if (second_upload.contents[index] != (index & 0xFFu)) return 98;
     return 0;
 }
 '''
