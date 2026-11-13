@@ -437,12 +437,25 @@ void complete_native_read(const kernel::Job &job)
     const s_pending_transfer transfer = g_pending;
     g_pending.valid = false;
 
-    // 0x503/0x101 and 0x503/0x103 are drive commands rather than
+    // 0x503/0x102 and 0x503/0x103 are drive commands rather than
     // file reads. In the virtual-disc backend the eight motor/status
     // operations share the same always-mounted media and completion
     // semantics. Exact mechanical error conditions remain unmodelled.
     if (transfer.command)
     {
+        if (transfer.command == 1)
+        {
+            const auto index = g_catalog.ee_index();
+            if (!ee_range(transfer.destination, static_cast<std::uint32_t>(index.size())))
+            {
+                g_transfer_state = 0x40000064u;
+                return;
+            }
+            std::memcpy(ps2::g_ram + (transfer.destination & (ps2::kRamSize - 1)),
+                index.data(), index.size());
+            ps2::watch_span(transfer.destination, static_cast<std::uint32_t>(index.size()),
+                "arkd:index_dma");
+        }
         g_transfer_state = disc::is_open() ? 0x30000000u : 0x40000190u;
         return;
     }
@@ -469,7 +482,7 @@ void complete_native_read(const kernel::Job &job)
 bool native_full_file_read(std::uint32_t args, std::uint32_t args_size,
     std::uint32_t ret, std::uint32_t ret_size)
 {
-    // 0x503/0x102 -> IRX 0x2410 -> worker 0x21B0 -> 0x1A58.
+    // 0x503/0x101 -> IRX 0x2410 -> worker 0x21B0 -> 0x1A58.
     // At 0x2410 the IRX copies 0x24 bytes: EE destination (u32) and
     // the 32-byte INFO filename. At 0x1A58 it opens that filename,
     // reads it in chunks and DMAs the result to the EE destination.
@@ -1080,7 +1093,8 @@ bool native_initialize_disc(std::uint32_t args, std::uint32_t args_size,
         reply_u32(ret, ret_size, 0x80000065u);
         return true;
     }
-    g_pending = {{}, 0, ++g_transfer_serial, true, 1};
+    const auto destination = read_u32(ps2::g_ram + (args & (ps2::kRamSize - 1)));
+    g_pending = {{}, destination, ++g_transfer_serial, true, 1};
     g_transfer_state = 0x10000000u;
     kernel::schedule(kernel::now() + kernel::usec_to_cycles(400),
         kernel::Job{kernel::kJobArkdRead, g_pending.serial});
@@ -1175,9 +1189,9 @@ bool rpc(std::uint32_t server, std::uint32_t method, std::uint32_t args,
             reply_u32(ret, ret_size, 0);
             return true;
         case 0x101:
-            return native_initialize_disc(args, args_size, ret, ret_size);
-        case 0x102:
             return native_full_file_read(args, args_size, ret, ret_size);
+        case 0x102:
+            return native_initialize_disc(args, args_size, ret, ret_size);
         case 0x103:
             return native_cdvd_control(args, args_size, ret, ret_size);
         default:
@@ -1401,6 +1415,34 @@ std::size_t c_catalog::entry_count() const
     return m_assets.size();
 }
 
+std::vector<std::uint8_t> c_catalog::ee_index() const
+{
+    // 0x1DA4 transfers the decoded 48-byte index records to the EE,
+    // excluding the on-disc header. Loose assets need the same shape.
+    std::vector<std::uint8_t> result(m_assets.size() * k_record_bytes);
+    std::size_t offset = 0;
+    for (const auto &[name, asset] : m_assets)
+    {
+        auto *record = result.data() + offset;
+        std::memcpy(record, name.data(), std::min<std::size_t>(name.size(), 32));
+        for (std::size_t byte = 0; byte < std::min<std::size_t>(name.size(), 32); ++byte)
+        {
+            if (cp932_lead(record[byte])) { ++byte; continue; }
+            if (record[byte] == '\\') record[byte] = '/';
+        }
+        const auto put = [&](std::size_t field, std::uint32_t value)
+        {
+            for (unsigned byte = 0; byte < 4; ++byte)
+                record[field + byte] = static_cast<std::uint8_t>(value >> (byte * 8));
+        };
+        put(0x24, asset.relative_sector);
+        put(0x28, (asset.file_size + k_sector_bytes - 1) / k_sector_bytes);
+        put(0x2C, asset.file_size);
+        offset += k_record_bytes;
+    }
+    return result;
+}
+
 std::uint32_t audio_worker_status()
 {
     return g_audio_worker.state;
@@ -1422,6 +1464,31 @@ s_pitch_interval decode_pitch_interval(std::int16_t pitch_request)
         magnitude % 12u,
         non_positive
     };
+}
+
+std::uint16_t calculate_voice_pitch(std::uint16_t base_pitch,
+    std::int16_t pitch_request)
+{
+    const auto interval = decode_pitch_interval(pitch_request);
+    const std::uint32_t count = interval.octave_count; // Always >= 1.
+    const std::uint32_t remainder = interval.semitone_remainder;
+    if (!interval.non_positive)
+    {
+        // IRX 0x34B4-0x35D0 stores the difference between adjacent
+        // multiples in a halfword, then reloads the low halfword of
+        // base * count before adding the interpolated difference.
+        const std::uint16_t lower = static_cast<std::uint16_t>(
+            static_cast<std::uint32_t>(base_pitch) * count);
+        return static_cast<std::uint16_t>(lower
+            + (static_cast<std::uint32_t>(base_pitch) * remainder) / 12u);
+    }
+
+    // IRX 0x36C8-0x37F8 interpolates between truncated quotients,
+    // rather than dividing a rational interpolation of the base.
+    const std::uint32_t upper = base_pitch / count;
+    const std::uint32_t lower = base_pitch / (count + 1u);
+    return static_cast<std::uint16_t>(
+        upper - ((upper - lower) * remainder) / 12u);
 }
 
 std::optional<s_voice_command> inspect_voice_command(

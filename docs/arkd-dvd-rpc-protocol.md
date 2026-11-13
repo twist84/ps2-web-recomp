@@ -1,4 +1,4 @@
-# ARKD_DVD.IRX RPC protocol — SLES_541.61 EU beta
+# ARKD_DVD.IRX RPC protocol â€” SLES_541.61 EU beta
 
 Reverse-engineering notes from the original 71,133-byte `ARKD_DVD.IRX`
 (SHA-256 `b61c35c41f71c489b7f07d871e6b5293f0f872dbf3ab66672c487835e3bb460a`).
@@ -27,7 +27,7 @@ The driver registers four SIF RPC servers:
 | 0x11 | 0x0138 | Stores first request u32 in global control value |
 | 0x12 | 0x017C | Rounds first request u32 to a 128-byte boundary |
 
-The remaining values within 1–18 jump to the default case.
+The remaining values within 1â€“18 jump to the default case.
 
 ## Server 0x503 dispatch (0x2700)
 
@@ -38,11 +38,11 @@ The remaining values within 1–18 jump to the default case.
 | 3 | 0x1760 | Filename at request +4; returns actual and aligned length (two u32s) |
 | 4 | 0x1A10 | Debug logging of a request-provided string |
 | 0x81 | 0x183C | Sets a cancel/stop flag |
-| 0x101 | 0x250C | Copies 36-byte request and schedules worker command 1 |
-| 0x102 | 0x2410 | Copies 36-byte request and schedules worker command 2 |
-| 0x103 | 0x2608 | Reads request u32 (CDVD operation 1–8) and schedules worker command 3 |
+| 0x101 | 0x250C | Copies 36-byte request and schedules full-file worker command 2 |
+| 0x102 | 0x2410 | Copies 36-byte request and schedules decoded-index DMA command 1 |
+| 0x103 | 0x2608 | Reads request u32 (CDVD operation 1â€“8) and schedules worker command 3 |
 
-Request for method 0x102 (disassembled at 0x2410, worker at
+Request for method 0x101 (disassembled at 0x2410, worker at
 0x21B0/0x1A58):
 
 ```cpp
@@ -65,17 +65,17 @@ condition, interrupt or transfer timing.
 
 ## Native virtual-CDVD worker 0x503/0x103
 
-The original routine at `0x2608–0x26EC` accepts a 32-bit drive-control
+The original routine at `0x2608â€“0x26EC` accepts a 32-bit drive-control
 opcode from the request only if its transfer status has the
 `0x30000000` (complete) or `0x40000000` (error) high nibble. Otherwise
 it returns `-1` without queueing. Accepted calls store the opcode,
 set status `0x10000000` and wake the CDVD worker.
 
-Worker routine `0x1EB0–0x219C` dispatches opcodes **1 through 8**.
+Worker routine `0x1EB0â€“0x219C` dispatches opcodes **1 through 8**.
 Each original opcode performs a different physical `cdvdman` sequence;
-some have error codes `0x80000190`–`0x80000195`. Native HLE
+some have error codes `0x80000190`â€“`0x80000195`. Native HLE
 now reproduces the request format, busy return, queue, and status
-transitions. With a mounted **virtual** disc, operations 1–8 complete
+transitions. With a mounted **virtual** disc, operations 1â€“8 complete
 successfully as emulated media-control operations; an absent disc gives
 `0x40000190`. It does **not** recreate real DVD tray, spindle, seek,
 or all the original error-code distinctions. This is intentionally a
@@ -124,7 +124,7 @@ proven**: original compaction, playback state and callbacks still
 require differential validation. Audio request state is serialized
 by the latest v11 savestate format.
 
-## Verified bank-header layout (original 0x5894–0x5C04)
+## Verified bank-header layout (original 0x5894â€“0x5C04)
 
 The original loader first reads one 0x800-byte sector from the audio bank.
 It then reads `u32` at `+0x04` as an entry count and `u32` at
@@ -139,9 +139,9 @@ struct s_arkd_bank_entry
 };
 ```
 
-The per-entry base calculation at `0x5B20–0x5B68` reads the second
+The per-entry base calculation at `0x5B20â€“0x5B68` reads the second
 field and adds the bank's SPU2 memory base. The parameter calculation
-at `0x5BAC–0x5BEC` reads the first field and scales it by a global
+at `0x5BACâ€“0x5BEC` reads the first field and scales it by a global
 coefficient. The native `inspect_sound_bank` function now parses
 these fields without assuming they are PCM samples. It limits the table
 to the first 2048 bytes, checks the declared SPU2 span against 2 MiB,
@@ -179,7 +179,7 @@ Pending bank IDs, direct host-file IDs, cache contents and SPU2
 uploads are serialized in **version 11 savestates**; cache sizes
 are checked before allocation on restore.
 
-## Alternating voice-command buffer generation (0x4A10–0x4BB8)
+## Alternating voice-command buffer generation (0x4A10â€“0x4BB8)
 
 Original `0x501` methods `1` (`0x4A10`), `2` (`0x4AC0`),
 and `3` (`0x4BB8`) **each** increment the same generation word
@@ -231,7 +231,7 @@ at offset `0xAC00`; exported ordinals referenced are:
 The original bank transfer worker invokes **ordinal 17**
 (`sceSdVoiceTrans`) at `0x5420`, `0x54F4`, `0x5DF4`, and `0x6250`.
 Its argument setup is **five arguments**, matching the MIPS o32 ABI:
-`a0`–`a3` in registers and the fifth at `sp+0x10`.
+`a0`â€“`a3` in registers and the fifth at `sp+0x10`.
 At `0x5420`, the IRX sends the low bit of a local core selector
 as argument 0, constant `1` as argument 1, an IOP data buffer as
 argument 2, a transfer destination as argument 3, and the transfer
@@ -250,7 +250,7 @@ the original IRQ, completion callback ordering, or gameplay playback.
 
 ## Original 46-voice start command, 16-byte records
 
-The IRX's voice thread at `0x3020–0x4618` reads one of two
+The IRX's voice thread at `0x3020â€“0x4618` reads one of two
 alternating `0x2E0` command arrays (`46 * 16`). At `0x3330` it
 loads the first u32 from each record and compares it with
 `0xFFFFFFFF`, its no-sample sentinel. For a non-sentinel entry,
@@ -274,9 +274,7 @@ struct s_voice_command
 };
 ```
 
-The name `pitch_request` is provisional: signed `+6` influences
-the IRX's pitch calculation but further reverse engineering is
-needed to reproduce that calculation with exact SPU2 register values.
+Signed `+6` controls the IRX's integer pitch interpolation, described below.
 This decoder **does not key on a voice**. The 46-voice startup branch
 requires bank-index resolution, sample address, pitch, ADSR and
 key-on validation against the original binary before the IRX can
@@ -298,8 +296,41 @@ These intermediate values feed the pitch-table accesses at `0x34B4`
 and `0x36C8`, followed by interpolation. Native
 `decode_pitch_interval()` reproduces only this verified integer
 decomposition, with tests for values around 0, 12 and both signed
-16-bit extremes. The complete sample pitch-to-SPU2 conversion is
-still **unimplemented**.
+16-bit extremes. `calculate_voice_pitch()` now reproduces the subsequent
+interpolation through `0x37F8`, given the bank's base-pitch halfword.
+
+The lookups at `0x34B4` and `0x36C8` address the same per-sample
+halfword at `0x106C0 + bank * 500 + sample * 2`. This is not a
+semitone lookup table. Bank loading at `0x5BBC-0x5BEC` initializes it
+as `u16(u32(entry.parameter * pitch_scale) >> 12)`, including low-word
+multiplication wrap. `pitch_scale` is the global at `0xB4A8`, initially
+`0x1000`, which server `0x500/0x11` can change.
+
+For base halfword `B`, interval `N = magnitude / 12 + 1` and
+remainder `R = magnitude % 12`, the final pitch halfword is:
+
+- Positive request: `u16(u16(B * N) + (B * R) / 12)`.
+- Zero/negative request: `U - ((U - L) * R) / 12`, where
+  `U = B / N` and `L = B / (N + 1)` are truncated integer quotients.
+
+The positive branch's intermediate difference is stored and reloaded as
+a halfword; it is exactly `B` modulo 65536. The result wraps to a
+halfword rather than saturating to the SPU2 pitch range. The negative
+branch interpolates already truncated quotients. Replacing either path
+with floating-point frequency conversion changes guest-visible values.
+`0x44E0-0x4508` sends this halfword to `libsd` export 5 with
+`SD_VP_PITCH` (`0x200 | core | (voice << 1)`).
+
+An optional differential regression executes the original routine from a
+locally supplied, SHA-256-verified IRX using a bounded MIPS test interpreter.
+It compares all 65,536 signed requests for each of four base pitches
+(`0`, `4096`, `32769`, `65535`), including overflow and quotient boundaries.
+No original instructions or tables are embedded in the test sources.
+Set `ARKD_REFERENCE_IRX` to the module path before running
+`test_arkd_native.py` to enable it. Ordinary synthetic tests need no IRX.
+
+The calculation is ready for the voice worker; bank resolution, register
+sequencing, and actual key-on remain unimplemented.
 
 The original `0x39C0` and `0x3A2C` instructions separately read
 two halfwords at offsets `+0x0E` and `+0x0C` of each 16-byte
@@ -356,7 +387,7 @@ make the incomplete native voice-start path functional.
 - IRX `0x4BB8` copies `0x33C` bytes into another alternate buffer.
   **`0x33C = 46 * 18`**, so this is a second 46-entry command array
   with 18 bytes per entry.
-- IRX `0x3020`–`0x4618` consumes those arrays. Its loop iterates 46
+- IRX `0x3020`â€“`0x4618` consumes those arrays. Its loop iterates 46
   voice slots, uses per-core voice bitmasks, and calls `libsd` ordinal
   **5** (`sceSdSetParam`) for individual SPU2 register updates. The
   16-byte voice record has two volume fields at offsets `+8` and
@@ -396,7 +427,7 @@ queued command buffers and perform the equivalent SPU2 effects.
 Native state is serialized in a new `arkd` section, currently
 **savestate version 11**, including pending file request IDs, direct
 GAME asset IDs, sound buffers, loaded bank data, and in-flight SPU2
-transfer state. Versions 2–10 remain readable with missing newer
+transfer state. Versions 2â€“10 remain readable with missing newer
 fields initialized. Loading a native state with the original driver
 selected, or vice versa, is explicitly rejected.
 
@@ -432,3 +463,15 @@ unrelated `vu_ops.hpp` Clang-specific vector intrinsics.
 
 No original IRX executable, game assets, or lifted copyrighted
 instructions are included in this repository.
+
+## Game-backed startup correction
+
+Native testing with the local EU beta initially stopped at frame 11 with a
+null EE call (return address `0x001ABB24`), while the original IRX reached
+the video-mode menu. The dispatch above corrects an earlier reversal of
+`0x101` and `0x102`: `0x2410` writes command 1, consumed at `0x2234`
+by `0x1DA4`, which DMAs decoded 48-byte index records to the EE destination.
+`0x250C` writes command 2, consumed at `0x228C` by the full-file reader.
+Native startup now exports index records from the merged catalog, without
+requiring INFO.DAT on loose mounts. A game run reaches 1,800 frames after
+these corrections; this alone does not establish menu/audio parity.

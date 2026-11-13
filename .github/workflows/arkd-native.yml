@@ -11,6 +11,7 @@ on:
       - "runtime/src/disc.cpp"
       - "runtime/src/disc_folder.cpp"
       - "tests/test_arkd_native.py"
+      - "tests/arkd_pitch_reference.py"
       - ".github/workflows/arkd-native.yml"
   push:
     branches: [SDBZ]

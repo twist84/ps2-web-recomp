@@ -55,6 +55,12 @@ struct s_pitch_interval
 // deliberately not performed by this helper.
 s_pitch_interval decode_pitch_interval(std::int16_t pitch_request);
 
+// IRX 0x33C4-0x37F8: interpolate the bank's u16 base pitch into
+// the u16 value passed to sceSdSetParam(SD_VP_PITCH). This preserves
+// the original halfword wrapping; it does not clamp to SPU2's range.
+std::uint16_t calculate_voice_pitch(std::uint16_t base_pitch,
+    std::int16_t pitch_request);
+
 std::optional<s_voice_command> inspect_voice_command(
     const std::uint8_t *data, std::size_t size,
     std::uint32_t voice_index);
@@ -84,6 +90,7 @@ public:
     std::size_t read(const s_asset &asset, std::uint32_t offset,
         void *destination, std::size_t capacity) const;
     std::size_t entry_count() const;
+    std::vector<std::uint8_t> ee_index() const;
 
 private:
     std::map<std::string, s_asset> m_assets;

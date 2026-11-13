@@ -158,6 +158,15 @@ std::uint32_t word(std::uint32_t at)
 int main(int argc, char **argv)
 {
     using namespace ps2::iop;
+    if (argc == 3 && std::strcmp(argv[1], "--pitch-vectors") == 0)
+    {
+        const auto base = static_cast<std::uint16_t>(
+            std::strtoul(argv[2], nullptr, 10));
+        for (std::int32_t request = -32768; request <= 32767; ++request)
+            std::printf("%u\n", static_cast<unsigned>(arkd::calculate_voice_pitch(
+                base, static_cast<std::int16_t>(request))));
+        return 0;
+    }
     if ((argc != 2 && argc != 3) || !ps2::disc::open(argv[1]))
         return 1;
 
@@ -255,13 +264,13 @@ int main(int argc, char **argv)
     if (!ps2::sif::g_handlers.at(0x502)(0x99, 0x100, 0, 0x180, 4)) return 19;
     if (word(0x180) != 0x80000064u) return 20;
 
-    // 0x503/0x102 enqueues a real file read to EE RAM. Method 2 exposes
+    // 0x503/0x101 enqueues a real file read to EE RAM. Method 2 exposes
     // the guest-observable pending/completed phase.
     std::memset(ps2::g_ram + 0x100, 0, 0x24);
     const std::uint32_t target = 0x200;
     std::memcpy(ps2::g_ram + 0x100, &target, 4);
     std::memcpy(ps2::g_ram + 0x104, "ply\\small.bin", 14);
-    if (!ps2::sif::g_handlers.at(0x503)(0x102, 0x100, 0x24, 0x180, 4))
+    if (!ps2::sif::g_handlers.at(0x503)(0x101, 0x100, 0x24, 0x180, 4))
         return 21;
     if (!kernel::g_read_job || kernel::g_queued_read.kind != kernel::kJobArkdRead)
         return 22;
@@ -321,16 +330,23 @@ int main(int argc, char **argv)
 
     if (!ps2::sif::g_handlers.at(0x503)(1, 0, 0, 0x180, 4)
         || word(0x180) != 1) return 39;
-    // After an ordinary file transfer finishes, the CDVD 0x101 worker
+    // After an ordinary file transfer finishes, the CDVD 0x102 worker
     // may be primed without supplying an asset name.
     std::memset(ps2::g_ram + 0x400, 0, 0x24);
-    if (!ps2::sif::g_handlers.at(0x503)(0x101, 0x400, 0x24, 0x180, 4)
+    const std::uint32_t index_destination = 0x9000;
+    std::memcpy(ps2::g_ram + 0x400, &index_destination, 4);
+    if (!ps2::sif::g_handlers.at(0x503)(0x102, 0x400, 0x24, 0x180, 4)
         || word(0x180) != 0) return 40;
     ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
     if (word(0x180) != 0x10000000u) return 41;
     kernel::g_read_job(kernel::g_queued_read);
     ps2::sif::g_handlers.at(0x503)(2, 0, 0, 0x180, 4);
     if (word(0x180) != 0x30000000u) return 42;
+    const auto ee_index = catalog.ee_index();
+    if (ee_index.size() != catalog.entry_count() * 48
+        || std::memcmp(ee_index.data(), "dis/a_first.bin", 15) != 0
+        || std::memcmp(ps2::g_ram + index_destination,
+            ee_index.data(), ee_index.size()) != 0) return 154;
 
     // IRX's voice worker mutes both registers for flagged slots.
     // On voice 0, libsd #5 parameters 0x000 and 0x100 must be zero.
@@ -385,7 +401,7 @@ int main(int argc, char **argv)
     std::memset(ps2::g_ram + 0x100, 0, 0x24);
     std::memcpy(ps2::g_ram + 0x100, &target, 4);
     std::memcpy(ps2::g_ram + 0x104, "ply\\small.bin", 14);
-    if (!ps2::sif::g_handlers.at(0x503)(0x102, 0x100, 0x24, 0x180, 4)
+    if (!ps2::sif::g_handlers.at(0x503)(0x101, 0x100, 0x24, 0x180, 4)
         || word(0x180) != 0) return 43;
     const auto saved_job = kernel::g_queued_read;
     ps2::state::Writer writer;
@@ -952,6 +968,28 @@ int main(int argc, char **argv)
             || pitch.non_positive != test.non_positive)
             return 152;
     }
+    struct s_voice_pitch_case
+    {
+        std::uint16_t base;
+        std::int16_t request;
+        std::uint16_t expected;
+    };
+    const s_voice_pitch_case voice_pitch_cases[]
+    {
+        {4096, 0, 4096}, {4096, 1, 4437}, {4096, 11, 7850},
+        {4096, 12, 8192}, {4096, 13, 8533}, {4096, 24, 12288},
+        {4096, -1, 3926}, {4096, -11, 2219}, {4096, -12, 2048},
+        {4096, -13, 1992}, {4096, -24, 1365},
+        // Adjacent truncated quotients differ from one rational division.
+        {17, -13, 8},
+        // Intermediate halfword stores wrap, rather than saturating.
+        {65535, 1, 5460}, {65535, 12, 65534}, {65535, 13, 5459},
+        {65535, 32767, 35497}, {65535, -32768, 23},
+        {0, -32768, 0}, {0, 32767, 0},
+    };
+    for (const auto &test : voice_pitch_cases)
+        if (arkd::calculate_voice_pitch(test.base, test.request) != test.expected)
+            return 153;
     return 0;
 }
 '''
@@ -1015,6 +1053,25 @@ class ArkdNativeHleTests(unittest.TestCase):
         self.assertFalse((self.root / "disc" / "INFO.DAT").exists())
         self.assertFalse((self.root / "disc" / "GAME.DAT").exists())
         self.assertFalse((self.root / "disc" / "ARKD_DVD.IRX").exists())
+
+    def test_pitch_against_original_mips(self):
+        reference = os.environ.get("ARKD_REFERENCE_IRX")
+        if not reference:
+            self.skipTest("set ARKD_REFERENCE_IRX to the original EU beta IRX")
+        from arkd_pitch_reference import PitchReference
+
+        original = PitchReference(pathlib.Path(reference).read_bytes())
+        for base in (0, 4096, 32769, 65535):
+            result = subprocess.run(
+                [str(self.executable), "--pitch-vectors", str(base)],
+                check=True, capture_output=True, text=True)
+            values = [int(line) for line in result.stdout.splitlines()]
+            self.assertEqual(len(values), 65536)
+            for request, native in zip(range(-32768, 32768), values):
+                expected = original.run(base, request)
+                if native != expected:
+                    self.fail(f"base={base} request={request}: "
+                              f"native={native} original={expected}")
 
     def test_original_archive_and_partial_loose_overrides(self):
         # The native index must not lose untouched GAME.DAT entries just

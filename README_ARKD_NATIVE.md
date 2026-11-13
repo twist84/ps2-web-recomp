@@ -121,6 +121,11 @@ for unverified behaviours, not a permanent design requirement.
 - `SDBZ_TRACE_ARKD_RPC=1` enables diagnostics for the first 48
   request bytes of RPC servers `0x500`–`0x503` under either the
   original IRX or native implementation.
+- Native pitch interpolation now preserves the original integer divisions
+  and halfword wrapping. Synthetic boundary tests run without game data;
+  setting `ARKD_REFERENCE_IRX` to the original EU beta module enables an
+  exhaustive comparison against its MIPS routine (262,144 cases).
+  This helper does not yet start voices or resolve bank/sample commands.
 
 **Native mode is still opt-in.** Full voice start, stream interrupts,
 original DMA/callback timing, and EU beta gameplay/audio parity have
