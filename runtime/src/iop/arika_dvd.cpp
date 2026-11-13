@@ -2246,8 +2246,8 @@ std::size_t copy_sound_bank(void *destination, std::size_t capacity)
 bool native_requested()
 {
     const char *value = std::getenv("SDBZ_ARKD_NATIVE");
-    return value && (std::strcmp(value, "1") == 0
-        || std::strcmp(value, "true") == 0);
+    return !value || (std::strcmp(value, "0") != 0
+        && std::strcmp(value, "false") != 0);
 }
 
 void on_vblank()
@@ -2303,8 +2303,8 @@ void install()
     kernel::register_job(kernel::kJobArkdStream, process_stream);
     kernel::register_hle_module("ARKD_DVD", start_module);
     std::fprintf(stderr,
-        "[arkd-native] experimental native module selected; "
-        "unset SDBZ_ARKD_NATIVE to restore original IRX\n");
+        "[arkd-native] native module selected; "
+        "set SDBZ_ARKD_NATIVE=0 to use the original IRX\n");
 }
 
 void state(ps2::state::Stream &stream)

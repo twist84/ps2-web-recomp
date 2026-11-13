@@ -4,22 +4,22 @@ This branch targets **SLES_541.61**, the European beta of Super Dragon
 Ball Z. The game's original IOP module, `ARKD_DVD.IRX`, implements
 custom file and sound services through SIF RPC servers `0x500–0x503`.
 
-**Status: draft, opt-in, not ready to replace the original IRX.**
-Passing synthetic unit tests and compiling the runtime do not establish
-successful boot or gameplay parity with the EU beta game.
+**Status: native by default for this game, with an original-driver fallback.**
+Real-game runs have reached gameplay and played streaming music, but exact
+audio and timing parity remains under investigation.
 
 ## Selection
 
-By default, the original `ARKD_DVD.IRX` is still loaded. To exercise
-the experimental native IOP module, run from PowerShell:
+The native IOP module is selected by default. To run the original driver
+for comparison, use PowerShell:
 
 ```powershell
-$env:SDBZ_ARKD_NATIVE = "1"
+$env:SDBZ_ARKD_NATIVE = "0"
 # Launch the game as usual.
-Remove-Item Env:SDBZ_ARKD_NATIVE  # restore original IRX
+Remove-Item Env:SDBZ_ARKD_NATIVE  # restore native mode
 ```
 
-On Linux: `SDBZ_ARKD_NATIVE=1 ./ps2run ...`
+On Linux: `SDBZ_ARKD_NATIVE=0 ./ps2run ...` selects the original IRX.
 
 The IOP loader substitutes the HLE before reading the original IRX file.
 It registers the original four server IDs. Unsupported methods are logged
@@ -72,12 +72,12 @@ some exact error codes/timing are modeled approximately.
 
 Queued IOP events, bank transfers, multi-bank source caches, and
 per-voice source gains and pending silent-loop redirects are saved in
-**version 14** savestates. Older
+**version 15** savestates. Older
 versions retain their original layouts; native-only fields introduced
 later are reset safely during restoration. A savestate captured with one backend cannot
 be loaded with the other backend selected.
 
-## What still blocks making native mode the default
+## Remaining native-mode validation
 
 The driver is **not complete** and full-game equivalence has **not**
 been demonstrated:
@@ -94,9 +94,8 @@ been demonstrated:
 5. Resolve any differences and ensure save/load and missing-file
    behaviour preserve the game's expectations.
 
-Do not remove the original driver or change the default until these
-tests pass. The optional environment toggle is intentional protection
-for unverified behaviours, not a permanent design requirement.
+The original driver remains selectable for differential comparison while
+these checks are completed.
 
 ## Latest compatibility fixes
 
@@ -138,10 +137,10 @@ for unverified behaviours, not a permanent design requirement.
   address, invalid-bank rejection and one-time command consumption.
   This subset does not establish complete playback or gameplay parity.
 
-**Native mode is still opt-in.** Stream interrupts,
-original DMA/callback timing, and EU beta gameplay/audio parity have
-not been established. Passing synthetic C++ CI does not prove those
-guest-visible behaviours match the original IRX.
+Native mode is now the default. Stream interrupts, original DMA/callback
+timing, and EU beta gameplay/audio parity still need comparison with the
+original IRX. Passing synthetic C++ CI does not prove those guest-visible
+behaviours match.
 
 The native lifecycle now invokes guest `sceSdInit` and reproduces the
 original default master volumes, routing, voice envelopes and effect setup.
@@ -150,6 +149,9 @@ structure with the core word prepended. A game-backed 6,000-frame capture
 now contains mixed audio and reaches combat; it is not a listening-based
 fidelity comparison. Fresh-process loading of a native version-14 menu
 savestate also resumes, with RPC callbacks rebound without resetting SPU2.
+A version-15 real-game stream savestate resumed for 1,200 frames in a fresh
+process, loading more banks and starting subsequent streams. A separate
+300-frame run resumed that snapshot with no selection variable set.
 
 ## Tests
 

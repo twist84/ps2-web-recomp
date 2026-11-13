@@ -36,8 +36,8 @@ namespace fs = std::filesystem;
 bool native_arkd_selected()
 {
     const char *value = std::getenv("SDBZ_ARKD_NATIVE");
-    return value && (std::strcmp(value, "1") == 0
-        || std::strcmp(value, "true") == 0);
+    return !value || (std::strcmp(value, "0") != 0
+        && std::strcmp(value, "false") != 0);
 }
 
 struct s_direct_game_asset

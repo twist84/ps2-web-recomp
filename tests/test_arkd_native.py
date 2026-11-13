@@ -405,7 +405,7 @@ int main(int argc, char **argv)
 #else
     unsetenv("SDBZ_ARKD_NATIVE");
 #endif
-    if (arkd::native_requested() || arkd::intercept_module("cdrom0:\\ARKD_DVD.IRX;1"))
+    if (!arkd::native_requested() || !arkd::intercept_module("cdrom0:\\ARKD_DVD.IRX;1"))
         return 11;
 
 #ifdef _WIN32
@@ -610,9 +610,9 @@ int main(int argc, char **argv)
     // Reject restoring a native savestate with the original driver
     // selected; mixing backends would discard the queued native work.
 #ifdef _WIN32
-    _putenv_s("SDBZ_ARKD_NATIVE", "");
+    _putenv_s("SDBZ_ARKD_NATIVE", "0");
 #else
-    unsetenv("SDBZ_ARKD_NATIVE");
+    setenv("SDBZ_ARKD_NATIVE", "0", 1);
 #endif
     bool rejected = false;
     try
@@ -689,10 +689,10 @@ int main(int argc, char **argv)
     if (!ps2::sif::g_handlers.at(0x501)(0x103, 0x400, 4, 0x180, 4)
         || word(0x180) != 0x80000065u) return 82;
 
-    // Native v8 state retains pending bank request and job serial.
+    // Current state retains the direct asset ID for a pending bank.
     const auto pending_bank_job = kernel::g_queued_bank;
     ps2::state::Writer bank_writer;
-    bank_writer.set_version(8);
+    bank_writer.set_version(15);
     arkd::state(bank_writer);
     kernel::g_bank_job(pending_bank_job);
     if (!arkd::sound_bank_ready()) return 66;
@@ -700,7 +700,7 @@ int main(int argc, char **argv)
     // Reload the pending state; completion must remain deterministic.
     ps2::state::Reader bank_reader(
         bank_writer.out.data(), bank_writer.out.size());
-    bank_reader.set_version(8);
+    bank_reader.set_version(15);
     arkd::state(bank_reader);
     if (arkd::sound_bank_ready()) return 67;
     kernel::g_bank_job(pending_bank_job);
@@ -709,8 +709,12 @@ int main(int argc, char **argv)
     std::vector<std::uint8_t> bank(5000);
     if (arkd::copy_sound_bank(bank.data(), bank.size()) != 5000)
         return 69;
-    for (const std::uint8_t value : bank)
-        if (value != 'S') return 70;
+    for (std::size_t i = 0; i < bank.size(); ++i)
+        if (bank[i] != 'S')
+        {
+            std::fprintf(stderr, "bank mismatch at %zu: %02x\n", i, bank[i]);
+            return 70;
+        }
 
     // Test a completed-bank round trip as well.
     ps2::state::Writer loaded_writer;

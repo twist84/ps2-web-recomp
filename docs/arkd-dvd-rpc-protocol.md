@@ -438,7 +438,8 @@ unrelated `vu_ops.hpp` Clang-specific vector intrinsics.
 
 ## Implementation notes
 
-- `SDBZ_ARKD_NATIVE=1` substitutes native HLE for the ARKD_DVD module.
+- Native HLE substitutes for the ARKD_DVD module by default;
+  `SDBZ_ARKD_NATIVE=0` selects the original IRX for comparison.
   Without it, the original IRX runs unchanged.
 - Native `0x503/3` and `0x503/0x102` are implemented. `0x503/2`
   exposes native transfer state; `0x503/0x81` cancels queued reads.
