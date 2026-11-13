@@ -27,6 +27,33 @@ The first implementation (Issue #9) provides the **host catalog and its API**:
 (default for SDBZ) on folder-backed discs. IDs are stable within a mount and
 cleared when opening another disc.
 
+A host-side PNG decoder is also available when zlib is found at build time:
+`ps2::gs::native_texture::load_png(original_game_path, image)`. It supports
+8-bit RGB/RGBA PNGs, PNG's standard row filters, CRC checking, and dimensions
+up to 4096 x 4096. It returns RGBA8 pixels; malformed files and missing
+replacements return false. Indexed-color and interlaced PNGs are not yet
+supported. This is a **decoder API only**, not a working GS texture override.
+
+### Multi-texture FPIX containers
+
+Arika `.pix` assets can contain multiple XPIX/TIM2 chunks. In particular,
+`dis/main_menu.pix` contains 13 atlases (indices 0–12). Native replacements
+therefore use the FPIX **directory index**, not the changing GS texture
+base-pointer address:
+
+```text
+GAME/dis/main_menu.pix
+NATIVE/dis/main_menu.pix.000.png
+NATIVE/dis/main_menu.pix.001.png
+...
+NATIVE/dis/main_menu.pix.012.png
+```
+
+`load_fpix_chunk_png("dis/main_menu.pix", index, image)` resolves these names.
+This mapping is not yet wired into the guest FPIX loader. Atlas dimensions
+and ordering must match the original resource being replaced; the PNG decoder
+does not infer or alter the game's texture-coordinate mappings.
+
 **Important:** the native renderer and native audio playback path have not
 yet been connected. Adding PNG/WAV files will not change visible textures or
 audible sounds until their respective consumers are implemented. Sending
@@ -36,6 +63,7 @@ PNG/WAV bytes to a PS2 `.pix`/`.ams` decoder is not supported.
 
 ```sh
 python3 -m unittest discover -s tests -p 'test_native_assets.py' -v
+python3 -m unittest discover -s tests -p 'test_native_png.py' -v
 ```
 
 The tests cover lookup, case normalization, bounded reads, guest isolation,

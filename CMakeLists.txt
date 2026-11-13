@@ -86,6 +86,14 @@ if(PS2_USE_SDBZ_RECONSTRUCTED)
 endif()
 target_compile_options(ps2runtime PRIVATE -Wall -Wextra)
 
+# PNG replacement decoding is optional so builds without zlib retain the
+# original GS texture path. The host catalog is available independently.
+find_package(ZLIB QUIET)
+if(ZLIB_FOUND)
+    target_sources(ps2runtime PRIVATE runtime/src/gs/native_texture.cpp)
+    target_link_libraries(ps2runtime PRIVATE ZLIB::ZLIB)
+endif()
+
 set(PS2_WGPU_DIR "${CMAKE_SOURCE_DIR}/third_party/wgpu-native" CACHE PATH "wgpu-native release folder")
 if(EMSCRIPTEN OR EXISTS "${PS2_WGPU_DIR}/lib/libwgpu_native.a" OR EXISTS "${PS2_WGPU_DIR}/lib/libwgpu_native.dll.a")
     set(PS2_GS_WGSL "${CMAKE_BINARY_DIR}/gs_wgsl.cpp")

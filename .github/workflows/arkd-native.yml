@@ -4,6 +4,9 @@ on:
   pull_request:
     branches: [SDBZ]
     paths:
+      - "CMakeLists.txt"
+      - "runtime/src/gs/native_texture.cpp"
+      - "runtime/src/gs/native_texture.hpp"
       - "runtime/src/iop/arika_dvd.cpp"
       - "runtime/src/iop/spu2.cpp"
       - "runtime/src/iop/arika_dvd.hpp"
