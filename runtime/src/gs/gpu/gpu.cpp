@@ -1039,23 +1039,18 @@ void submit(WGPUTextureView present_view = nullptr) {
                 static_cast<float>(g_surface_height) * 0.89f,
                 0.035f, 0.045f, 0.06f, 0.89f);
             const float scale = std::clamp(
-                static_cast<float>(g_surface_height) / 900.0f, 0.55f, 1.5f);
+                static_cast<float>(g_surface_height) / 900.0f, 0.55f, 1.25f);
             const float x = static_cast<float>(g_surface_width) * 0.08f;
-            float y = static_cast<float>(g_surface_height) * 0.10f;
-            for (std::size_t i = 0; i < overlay_lines.size(); ++i)
+            const float y = static_cast<float>(g_surface_height) * 0.095f;
+            std::string text;
+            for (const auto &line : overlay_lines)
             {
-                const auto &line = overlay_lines[i];
-                const bool selected = line.size() >= 2 && line[0] == '>';
-                const bool heading = i == 0 || line.find("ENABLED -") == 0
-                    || line.find("AVAILABLE -") == 0;
-                font_draw_text_in_pass(rp, present_view,
-                    g_surface_width, g_surface_height,
-                    line.c_str(), x, y, scale,
-                    selected ? 255 : heading ? 255 : 235,
-                    selected ? 210 : heading ? 255 : 235,
-                    selected ? 65 : heading ? 255 : 235);
-                y += 31.f * scale;
+                if (!text.empty()) text.push_back('\n');
+                text += line;
             }
+            font_draw_overlay_text_in_pass(rp, present_view,
+                g_surface_width, g_surface_height,
+                text.c_str(), x, y, scale, 255, 245, 218);
         }
         wgpuRenderPassEncoderEnd(rp);
         wgpuRenderPassEncoderRelease(rp);
