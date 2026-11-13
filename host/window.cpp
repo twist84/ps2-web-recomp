@@ -106,6 +106,7 @@ void notify(const char *message)
 
 
 bool g_pack_manager_open = false;
+bool g_pack_shortcut_down = false;
 int g_pack_column = 1;
 int g_pack_row = 0;
 std::vector<std::string> g_pack_enabled;
@@ -120,9 +121,9 @@ void refresh_pack_overlay()
     }
     std::vector<std::string> lines{
         "RESOURCE PACKS",
-        "F6 / ESC: cancel   ENTER / START: save",
-        "CLICK / SPACE / A: toggle   LEFT / RIGHT: move",
-        "UP / DOWN: select   PAGE UP / DOWN: reorder",
+        "F6 / SELECT + START: open / cancel   START: save",
+        "A: toggle   D-PAD LEFT / RIGHT: move",
+        "D-PAD UP / DOWN: select   LB / RB: reorder   B: cancel",
         "",
         "ENABLED - highest priority first"
     };
@@ -181,39 +182,46 @@ void close_pack_manager(bool save)
     if (save) notify("Resource packs saved - restart SDBZ");
 }
 
-bool handle_pack_key(SDL_Scancode key)
+enum e_pack_action
 {
-    if (key == SDL_SCANCODE_F6)
-    {
-        if (g_pack_manager_open) close_pack_manager(false);
-        else open_pack_manager();
-        return true;
-    }
-    if (!g_pack_manager_open) return false;
-    if (key == SDL_SCANCODE_ESCAPE)
+    _pack_action_up,
+    _pack_action_down,
+    _pack_action_left,
+    _pack_action_right,
+    _pack_action_toggle,
+    _pack_action_move_up,
+    _pack_action_move_down,
+    _pack_action_save,
+    _pack_action_cancel
+};
+
+void handle_pack_action(e_pack_action action)
+{
+    if (!g_pack_manager_open) return;
+    if (action == _pack_action_cancel)
     {
         close_pack_manager(false);
-        return true;
+        return;
     }
-    if (key == SDL_SCANCODE_RETURN || key == SDL_SCANCODE_KP_ENTER)
+    if (action == _pack_action_save)
     {
         close_pack_manager(true);
-        return true;
+        return;
     }
     auto &current = g_pack_column ? g_pack_enabled : g_pack_available;
-    if (key == SDL_SCANCODE_UP || key == SDL_SCANCODE_DOWN)
+    if (action == _pack_action_up || action == _pack_action_down)
     {
         if (!current.empty())
             g_pack_row = std::clamp(g_pack_row
-                + (key == SDL_SCANCODE_UP ? -1 : 1), 0,
+                + (action == _pack_action_up ? -1 : 1), 0,
                 static_cast<int>(current.size()) - 1);
     }
-    else if (key == SDL_SCANCODE_LEFT || key == SDL_SCANCODE_RIGHT
-        || key == SDL_SCANCODE_SPACE)
+    else if (action == _pack_action_left || action == _pack_action_right
+        || action == _pack_action_toggle)
     {
-        const int destination = key == SDL_SCANCODE_SPACE
+        const int destination = action == _pack_action_toggle
             ? 1 - g_pack_column
-            : key == SDL_SCANCODE_RIGHT ? 1 : 0;
+            : action == _pack_action_right ? 1 : 0;
         if (destination != g_pack_column && !current.empty())
         {
             const std::string id = current[g_pack_row];
@@ -229,11 +237,11 @@ bool handle_pack_key(SDL_Scancode key)
             g_pack_row = 0;
         }
     }
-    else if ((key == SDL_SCANCODE_PAGEUP || key == SDL_SCANCODE_PAGEDOWN)
+    else if ((action == _pack_action_move_up || action == _pack_action_move_down)
         && g_pack_column == 1 && !current.empty())
     {
         const int target = g_pack_row
-            + (key == SDL_SCANCODE_PAGEUP ? -1 : 1);
+            + (action == _pack_action_move_up ? -1 : 1);
         if (target >= 0 && target < static_cast<int>(current.size()))
         {
             std::swap(current[g_pack_row], current[target]);
@@ -241,7 +249,6 @@ bool handle_pack_key(SDL_Scancode key)
         }
     }
     refresh_pack_overlay();
-    return true;
 }
 
 void apply_preferences()
@@ -535,7 +542,7 @@ void poll_port(int port) {
         rx = axis(pad, SDL_CONTROLLER_AXIS_RIGHTX);
         ry = axis(pad, SDL_CONTROLLER_AXIS_RIGHTY);
     }
-    if (g_pack_manager_open)
+    if (g_pack_manager_open || g_pack_shortcut_down)
     {
         pressed = 0;
         lx = ly = rx = ry = 0x80;
@@ -560,104 +567,71 @@ void poll() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) { save_preferences(); ps2::halt("window closed"); }
-        if (e.type == SDL_KEYDOWN && !e.key.repeat
-            && !handle_pack_key(e.key.keysym.scancode))
-            handle_hotkey(e.key);
-        if (g_pack_manager_open && e.type == SDL_CONTROLLERBUTTONDOWN
-            && g_pads[0] && e.cbutton.which
-                == SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pads[0])))
+        if (e.type == SDL_KEYDOWN && !e.key.repeat)
         {
-            switch (e.cbutton.button)
+            if (e.key.keysym.scancode == SDL_SCANCODE_F6)
             {
-            case SDL_CONTROLLER_BUTTON_DPAD_UP:
-                handle_pack_key(SDL_SCANCODE_UP);
-                break;
-            case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
-                handle_pack_key(SDL_SCANCODE_DOWN);
-                break;
-            case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
-                handle_pack_key(SDL_SCANCODE_LEFT);
-                break;
-            case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
-                handle_pack_key(SDL_SCANCODE_RIGHT);
-                break;
-            case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
-                handle_pack_key(SDL_SCANCODE_PAGEUP);
-                break;
-            case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
-                handle_pack_key(SDL_SCANCODE_PAGEDOWN);
-                break;
-            case SDL_CONTROLLER_BUTTON_A:
-                handle_pack_key(SDL_SCANCODE_SPACE);
-                break;
-            case SDL_CONTROLLER_BUTTON_START:
-                handle_pack_key(SDL_SCANCODE_RETURN);
-                break;
-            case SDL_CONTROLLER_BUTTON_B:
-                handle_pack_key(SDL_SCANCODE_ESCAPE);
-                break;
-            default:
-                break;
+                if (g_pack_manager_open) close_pack_manager(false);
+                else open_pack_manager();
+            }
+            else if (!g_pack_manager_open)
+            {
+                handle_hotkey(e.key);
             }
         }
-        if (g_pack_manager_open && e.type == SDL_MOUSEWHEEL)
+        if (e.type == SDL_CONTROLLERBUTTONDOWN
+            && g_pads[0]
+            && e.cbutton.which
+                == SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pads[0])))
         {
-            if (e.wheel.y)
-                handle_pack_key(e.wheel.y > 0
-                    ? SDL_SCANCODE_UP : SDL_SCANCODE_DOWN);
-        }
-        if (g_pack_manager_open && e.type == SDL_MOUSEBUTTONDOWN)
-        {
-            // SDL sends a second mouse-down with clicks=2 for a double click.
-            // The first down already toggles; never toggle it back.
-            if (e.button.clicks > 1) continue;
-            int window_w = 0, window_h = 0;
-            SDL_GetWindowSize(g_window, &window_w, &window_h);
-            if (window_w > 0 && window_h > 0)
+            // Select + Start toggles the modal manager. Gate the chord so
+            // Start cannot accidentally Save when opening or closing it.
+            const bool select_down = SDL_GameControllerGetButton(
+                g_pads[0], SDL_CONTROLLER_BUTTON_BACK) != 0;
+            const bool start_down = SDL_GameControllerGetButton(
+                g_pads[0], SDL_CONTROLLER_BUTTON_START) != 0;
+            if (select_down && start_down)
             {
-                const float scale = std::clamp(
-                    static_cast<float>(window_h) / 900.f, 0.55f, 1.5f);
-                const float step = 31.f * scale;
-                const float first_y = window_h * 0.10f;
-                const int line = static_cast<int>(
-                    (static_cast<float>(e.button.y) - first_y) / step);
-                const int enabled_offset = g_pack_column == 1
-                    && g_pack_row >= 9 ? g_pack_row - 8 : 0;
-                const int available_offset = g_pack_column == 0
-                    && g_pack_row >= 9 ? g_pack_row - 8 : 0;
-                const int enabled_start = 6;
-                const int available_start = 8
-                    + static_cast<int>(std::min<std::size_t>(9, g_pack_enabled.size()));
-                bool clicked_pack = false;
-                if (e.button.x >= static_cast<int>(window_w * 0.06f)
-                    && e.button.x <= static_cast<int>(window_w * 0.94f))
+                if (!g_pack_shortcut_down)
                 {
-                    if (line >= enabled_start && line < enabled_start
-                        + static_cast<int>(std::min<std::size_t>(9, g_pack_enabled.size())))
-                    {
-                        g_pack_column = 1;
-                        g_pack_row = line - enabled_start + enabled_offset;
-                        clicked_pack = true;
-                    }
-                    else if (line >= available_start && line < available_start
-                        + static_cast<int>(std::min<std::size_t>(9, g_pack_available.size())))
-                    {
-                        g_pack_column = 0;
-                        g_pack_row = line - available_start + available_offset;
-                        clicked_pack = true;
-                    }
+                    g_pack_shortcut_down = true;
+                    if (g_pack_manager_open) close_pack_manager(false);
+                    else open_pack_manager();
                 }
-                if (clicked_pack
-                    && (e.button.button == SDL_BUTTON_LEFT
-                        || e.button.button == SDL_BUTTON_RIGHT))
+            }
+            else if (g_pack_manager_open && !g_pack_shortcut_down)
+            {
+                switch (e.cbutton.button)
                 {
-                    // A click performs the same move as Space/controller A.
-                    // Double-click does not toggle twice.
-                    handle_pack_key(SDL_SCANCODE_SPACE);
-                }
-                else
-                {
-                    refresh_pack_overlay();
+                case SDL_CONTROLLER_BUTTON_DPAD_UP:
+                    handle_pack_action(_pack_action_up);
+                    break;
+                case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+                    handle_pack_action(_pack_action_down);
+                    break;
+                case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+                    handle_pack_action(_pack_action_left);
+                    break;
+                case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+                    handle_pack_action(_pack_action_right);
+                    break;
+                case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
+                    handle_pack_action(_pack_action_move_up);
+                    break;
+                case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
+                    handle_pack_action(_pack_action_move_down);
+                    break;
+                case SDL_CONTROLLER_BUTTON_A:
+                    handle_pack_action(_pack_action_toggle);
+                    break;
+                case SDL_CONTROLLER_BUTTON_START:
+                    handle_pack_action(_pack_action_save);
+                    break;
+                case SDL_CONTROLLER_BUTTON_B:
+                    handle_pack_action(_pack_action_cancel);
+                    break;
+                default:
+                    break;
                 }
             }
         }
@@ -685,6 +659,18 @@ void poll() {
                     SDL_GameControllerClose(pad);
                     pad = nullptr;
                 }
+    }
+    if (g_pads[0])
+    {
+        const bool chord = SDL_GameControllerGetButton(
+            g_pads[0], SDL_CONTROLLER_BUTTON_BACK)
+            && SDL_GameControllerGetButton(
+                g_pads[0], SDL_CONTROLLER_BUTTON_START);
+        if (!chord) g_pack_shortcut_down = false;
+    }
+    else
+    {
+        g_pack_shortcut_down = false;
     }
     poll_port(0);
     poll_port(1);
@@ -969,7 +955,7 @@ bool open_window(bool fullscreen) {
     SDL_SetWindowMinimumSize(g_window, 320, 240);
     save_preferences();
     std::fprintf(stderr, "[window] F5 GPU render scale | F7 filter | F8 field blending | F9 stats | F10 mute | +/- volume | F11 / Alt+Enter fullscreen\n");
-    std::fprintf(stderr, "[window] F6 resource pack manager (restart required)\n");
+    std::fprintf(stderr, "[window] F6 or Select+Start resource pack manager (controller navigation; restart required)\n");
     std::fprintf(stderr, "[window] settings: %s\n", g_preferences_path.c_str());
     SDL_AudioSpec want{}, have{};
     want.freq = 48000;

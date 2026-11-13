@@ -118,29 +118,31 @@ than changing guest-visible resources.
 
 ## In-game manager (experimental)
 
-Press **F6** in the native SDBZ window to open the resource pack manager.
-It renders a simple, resolution-scaled dark panel with text from the
-original `5-24-2.fon` font on the WebGPU presentation surface. No SVG
-engine or decorative textures are required.
+Press **F6** or **Select + Start** on the first game controller to open the
+resource-pack manager; use the same shortcut again to cancel.
+The simple, resolution-scaled WebGPU overlay uses the original
+`5-24-2.fon` game font and a flat translucent background.
 
-- Up/Down selects a pack in the current list
-- Left moves an enabled pack to Available (disabled)
-- Right moves a disabled pack to Enabled (highest-to-lowest load order)
-- Space toggles the highlighted pack between Enabled and Available
-- Page Up/Down reorders the selected enabled pack
-- Enter saves `disc/resourcepacks/load_order.txt` and closes
-- Escape or F6 cancels unsaved changes
+Controller-only controls:
 
-Controller input: D-pad navigation, shoulder buttons reorder, **A toggles**
-a pack, **Start saves**, and **B cancels**. A single mouse click on a pack
-row toggles it, and the wheel moves the selection. Double-clicking does
-not toggle a pack twice. While the manager is open, gameplay controller
-and keyboard input is neutralized, and the performance-stat overlay is
-hidden to keep it from covering the menu.
+- D-pad Up / Down selects a pack
+- D-pad Left moves an enabled pack into Available (disabled)
+- D-pad Right moves a disabled pack into Enabled
+- A toggles the selected pack between lists
+- LB / RB reorders the selected enabled pack
+- Start saves `disc/resourcepacks/load_order.txt` and closes
+- B or Select + Start cancels unsaved changes
 
-Changes apply after restarting SDBZ, because the current renderer caches
-the native PNG atlases. The overlay currently requires WebGPU and the
-game font; keyboard controls and persistence have no SVG dependency.
+The manager intentionally has **no mouse controls or keyboard navigation**;
+F6 remains an open/close shortcut. While
+it is open, gamepad inputs are consumed and do not reach gameplay.
+Keyboard input is also blocked from the game while the modal menu is
+open. Existing window-level shortcuts outside the manager are unchanged.
+
+Selections take effect after restarting SDBZ, since native PNG atlases
+are cached for the duration of the game session. The overlay requires
+WebGPU and the game's FFON font; pack selection is otherwise independent
+of any SVG or third-party UI library.
 
 ## Next steps
 
