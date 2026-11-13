@@ -908,6 +908,7 @@ bool sound_command_rpc(std::uint32_t method, std::uint32_t args,
         return true;
     }
     case 2: // IRX 0x4AC0, OR the two command flag words.
+    {
         if (!read_input(8)) break;
         // Original 0x4AC0 increments the global generation before
         // ORing the two flag words into the selected alternating slot.
@@ -924,6 +925,7 @@ bool sound_command_rpc(std::uint32_t method, std::uint32_t args,
             kernel::Job{kernel::kJobArkdVoice, parity});
         reply_u32(ret, ret_size, 0);
         return true;
+    }
     case 3: // IRX 0x4BB8, copy 0x33C stream command bytes.
     {
         const std::uint32_t next = (g_sound.buffer_generation + 1) & 1;
