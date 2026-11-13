@@ -34,6 +34,26 @@ up to 4096 x 4096. It returns RGBA8 pixels; malformed files and missing
 replacements return false. Indexed-color and interlaced PNGs are not yet
 supported. This is a **decoder API only**, not a working GS texture override.
 
+### Multi-texture FPIX containers
+
+Arika `.pix` assets can contain multiple XPIX/TIM2 chunks. In particular,
+`dis/main_menu.pix` contains 13 atlases (indices 0–12). Native replacements
+therefore use the FPIX **directory index**, not the changing GS texture
+base-pointer address:
+
+```text
+GAME/dis/main_menu.pix
+NATIVE/dis/main_menu.pix.000.png
+NATIVE/dis/main_menu.pix.001.png
+...
+NATIVE/dis/main_menu.pix.012.png
+```
+
+`load_fpix_chunk_png("dis/main_menu.pix", index, image)` resolves these names.
+This mapping is not yet wired into the guest FPIX loader. Atlas dimensions
+and ordering must match the original resource being replaced; the PNG decoder
+does not infer or alter the game's texture-coordinate mappings.
+
 **Important:** the native renderer and native audio playback path have not
 yet been connected. Adding PNG/WAV files will not change visible textures or
 audible sounds until their respective consumers are implemented. Sending
