@@ -24,6 +24,25 @@ struct s_asset
 // The original 0x501/0x101 bank reader examines the first DVD sector:
 // +4 entry count, +8 declared SPU2 memory span, +0x0C pairs of u32s.
 // These describe the bank's metadata, not raw PCM or decoded ADPCM.
+// One 16-byte command from the IRX 0x4A10 46-voice input array.
+// 0x3330 consumes the sample selector and +4/+6 word fields;
+// +8/+10 supply the source volume words for the 0x4DBC gain path.
+// This is parsing only: sample selection, key-on and pitch are not
+// emulated by this decoder.
+struct s_voice_command
+{
+    std::uint32_t sample_selector = 0xFFFFFFFFu;
+    std::uint16_t control = 0;
+    std::int16_t pitch_request = 0;
+    std::uint16_t volume_0 = 0;
+    std::uint16_t volume_1 = 0;
+    std::uint32_t remaining = 0;
+};
+
+std::optional<s_voice_command> inspect_voice_command(
+    const std::uint8_t *data, std::size_t size,
+    std::uint32_t voice_index);
+
 struct s_sound_bank_entry
 {
     std::uint32_t parameter = 0;
