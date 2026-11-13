@@ -78,7 +78,12 @@ public:
             m_upload.fnv1a64 *= 0x100000001b3ull;
         }
         m_upload.received_bytes += count;
-        return m_upload.received_bytes == m_upload.expected_bytes;
+        if (m_upload.received_bytes == m_upload.expected_bytes)
+        {
+            m_upload.active = false;
+            return true;
+        }
+        return false;
     }
 
     const s_texture_upload_signature &current() const
