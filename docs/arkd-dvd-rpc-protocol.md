@@ -113,18 +113,16 @@ set the worker state to `0x10000000`, and wake its thread.
 The thread dispatcher at `0x62C8` calls `0x5228` (opcode 1) or
 `0x5F08` (opcode 2).
 
-Native HLE now accepts and queues both RPC commands, reports busy
-when the same audio worker has a pending request, and serializes
-its selector, opcode, pending flag and serial in **savestate v9**.
-The job callback currently returns an explicit **unsupported SPU2
-operation error `0x40000064`**, rather than reporting a successful
-upload that did not happen. The status is exposed internally through
-`arkd::audio_worker_status()` for regression tests.
-
-**This is protocol admission only, not an emulation of the worker
-operations.** The original `0x5228`/`0x5F08` code manipulates
-per-bank IOP state and performs sound hardware interactions. Until
-those calls are ported, these RPCs cannot complete successfully.
+Native HLE now accepts and queues both RPC commands, reporting busy
+while another audio-bank operation is pending. For `0x102` it releases
+the selected SPU2 bank and makes that address available for a future
+allocation; it intentionally does **not** compact other live banks.
+For `0x103` it re-uploads the most recently cached matching bank
+using the native SPU2 DMA worker, reporting a failure if no such bank
+is cached. Full equivalence to `0x5228` and `0x5F08` is **not
+proven**: original compaction, playback state and callbacks still
+require differential validation. Audio request state is serialized
+by the latest v11 savestate format.
 
 ## Verified bank-header layout (original 0x5894–0x5C04)
 
@@ -149,10 +147,11 @@ these fields without assuming they are PCM samples. It limits the table
 to the first 2048 bytes, checks the declared SPU2 span against 2 MiB,
 and rejects relative entry offsets outside that span.
 
-This is **header structural validation only**. The original also
-uses per-bank sound allocation tables and synthesizes voice parameters;
-we still need to reconstruct the sample payload partition before
-issuing `sceSdVoiceTrans` calls.
+Header validation precedes native sample uploads from byte 0x800
+onwards via `sceSdVoiceTrans`. The original also synthesizes
+per-entry voice parameters and maintains additional bank tables;
+these are **not** reconstructed in full. A valid header alone does
+not prove that the complete sample-bank format is supported.
 
 ## Native 0x501/0x101 sound-bank preload (partial)
 
@@ -162,25 +161,23 @@ using the filename at request offset `+4`. The original then performs
 a more involved bank allocation and read sequence, followed by SPU2
 transfers and additional state changes.
 
-Native HLE now implements the **confirmed initial archive-read step**:
-the first word is retained as opaque request metadata, the following
-32 bytes identify the archive asset, and a `kJobArkdBank` event copies
-the actual file payload from the virtual `GAME.DAT` into a bounded
-native cache. Requests that overlap a pending bank transfer return an
-explicit busy error. Zero-length packets, missing assets, and a file
-larger than 64 MiB are rejected.
+Native HLE reads the archive file into a bounded 64 MiB bank cache.
+On a loose `GAME/` folder mount it reads directly from host files
+without rebuilding INFO.DAT; for indexed ISO mounts it uses the
+existing virtual GAME.DAT backend. The first request word selects
+the bank slot and the following 32 bytes contain its filename.
 
-The bank cache can subsequently be read through
-`arkd::sound_bank_ready()` and `arkd::copy_sound_bank()`. These
-are internal runtime helpers, **not** EE-visible replacements for the
-original bank-upload protocol. No SPU2 data DMA, bank decode, playback
-start, or exact completion interrupt is claimed here.
+For a validated bank header, the native SPU2 worker allocates sample
+memory, copies bytes after the 0x800-byte header into a persistent
+32 KiB IOP staging buffer, and issues `libsd` ordinal 17
+(`sceSdVoiceTrans`) with an optional fifth MIPS argument. It polls
+ordinal 19 to avoid changing or freeing the source during DMA.
+The actual game's per-voice setup, DMA callbacks and timing still
+need original-IRX differential validation.
 
-The pending bank identity, serial, and cache bytes are serialized in
-**version 8 savestates**, with the size checked before allocating on
-restore. A v7 state still loads and initializes the new bank state to
-empty. The native-only bank state is independent of the `0x503`
-file-transfer state machine.
+Pending bank IDs, direct host-file IDs, cache contents and SPU2
+uploads are serialized in **version 11 savestates**; cache sizes
+are checked before allocation on restore.
 
 ## Server 0x502 dispatch (0x9D38)
 
@@ -230,12 +227,11 @@ The shared native IOP guest-library bridge now optionally writes this
 fifth argument to the guest stack and restores the overwritten word
 after the guest call. Existing four-argument calls remain unchanged.
 
-**The audio transfer itself has not yet been wired to the sound-bank
-cache.** Before using ordinal 17, the native module must reproduce
-the original IOP buffer allocation, source-data lifetime, destination
-addresses, transfer-status polling and completion callbacks. Issuing
-an asynchronous `libsd` transfer from a temporary buffer and freeing
-it immediately would be incorrect.
+The native implementation now stages sample payloads from its bank
+cache in persistent IOP RAM, invokes ordinal 17 in chunks and polls
+ordinal 19 before changing or freeing the buffer. This sequence is
+covered by synthetic DMA tests, **not** by differential validation of
+the original IRQ, completion callback ordering, or gameplay playback.
 
 ## Sound worker details confirmed from original MIPS instructions
 
@@ -286,11 +282,12 @@ queued command buffers and perform the equivalent SPU2 effects.
 
 ## Savestate and build coverage
 
-Native state is serialized in a new `arkd` section of **savestate version
-7**, including the pending transfer job ID, file extent, destination,
-volume/control buffers, and sound state. Version 2–6 savestates remain
-loadable with native state reset to defaults. Loading a version 7 state
-with the wrong `SDBZ_ARKD_NATIVE` setting is explicitly rejected.
+Native state is serialized in a new `arkd` section, currently
+**savestate version 11**, including pending file request IDs, direct
+GAME asset IDs, sound buffers, loaded bank data, and in-flight SPU2
+transfer state. Versions 2–10 remain readable with missing newer
+fields initialized. Loading a native state with the original driver
+selected, or vice versa, is explicitly rejected.
 
 The GitHub Actions workflow now compiles the entire `ps2runtime` target
 using Clang and runs the ARKD unit harness under Clang and GCC.
@@ -305,8 +302,9 @@ unrelated `vu_ops.hpp` Clang-specific vector intrinsics.
   exposes native transfer state; `0x503/0x81` cancels queued reads.
 - Some 0x500 control methods are implemented, but the sound/stream
   handlers are **not** yet at parity. Keep the PR draft and HLE opt-in.
-- Queue state is currently process-global and needs savestate integration
-  before native mode becomes the default.
+- Native queue and transfer state has versioned savestate integration.
+  Accurate original-driver timing, callbacks and gameplay parity
+  remain prerequisites for removing the opt-in.
 - A successful C++ harness is not a substitute for differential tests
   of DMA completion, IRX return status, audio playback, and EE callbacks.
 
