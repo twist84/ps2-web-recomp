@@ -25,7 +25,8 @@ struct s_resource
 
 // A disc mount supplies the game identity and its adjacent resourcepacks/
 // folder. Higher priority wins; ties are resolved by stable pack ID.
-void mount(const std::filesystem::path &disc_root);
+void mount(const std::filesystem::path &disc_root,
+    const std::filesystem::path &executable_directory = {});
 void clear();
 const std::vector<s_pack_info> &packs();
 
