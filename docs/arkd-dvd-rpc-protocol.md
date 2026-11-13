@@ -99,6 +99,55 @@ a correct substitute.
 | 0x102 | 0x95C0 | Reads u32 and updates control bits |
 | 0x103 | 0x9628 | Reads u32 and updates control bits |
 
+## Sound worker details confirmed from original MIPS instructions
+
+- IRX `0x6920-0x6970`: the three sound-volume multipliers
+  (`master`, `channel left`, `channel right`) default to **`0x3FFF`**.
+  The native module now preserves these defaults on startup and old-state
+  restoration instead of zero-initialising them.
+- IRX `0x4A10` copies `0x2E0` bytes into the alternate command buffer.
+  **`0x2E0 = 46 * 16`**, so this is a 46-voice command array with
+  16 bytes per entry.
+- IRX `0x4BB8` copies `0x33C` bytes into another alternate buffer.
+  **`0x33C = 46 * 18`**, so this is a second 46-entry command array
+  with 18 bytes per entry.
+- IRX `0x3020`–`0x4618` consumes those arrays. Its loop iterates 46
+  voice slots, uses per-core voice bitmasks, and calls `libsd` ordinal
+  **5** (`sceSdSetParam`) for individual SPU2 register updates. The
+  16-byte voice record has two volume fields at offsets `+8` and
+  `+10`. The 18-byte command record has flags at offset `+0`.
+- IRX `0x4DBC` re-applies volumes for *active* voices after `0x501/0x12`
+  or `0x501/0x14`. It scales first by the master coefficient and then
+  by the corresponding channel coefficient (14-bit fixed point,
+  with a shift by 14 after each multiplication).
+- IRX `0x6528`, `0x65C8`, and `0x6668` queue three distinct
+  audio-worker opcodes. The dispatch at `0x62C8` calls `0x5894`,
+  `0x5228`, or `0x5F08`. These perform file/bank reads and sound
+  hardware operations. Merely copying the 46-voice command buffers does
+  **not** execute those operations.
+- IRX `0x5894` copies the first 32-bit request word into its working
+  bank index and calls archive lookup `0x0A60` with request offset `+4`,
+  then reads sectors through `0x0CCC`. This proves `0x501/0x101`
+  includes a real archive-backed audio-file load, not just an acknowledgement.
+
+The next implementation work is to reproduce the 46-voice worker's
+`libsd` calls and bank storage, followed by the other audio worker
+commands. No parity should be claimed until those workers consume the
+queued command buffers and perform the equivalent SPU2 effects.
+
+## Savestate and build coverage
+
+Native state is serialized in a new `arkd` section of **savestate version
+7**, including the pending transfer job ID, file extent, destination,
+volume/control buffers, and sound state. Version 2–6 savestates remain
+loadable with native state reset to defaults. Loading a version 7 state
+with the wrong `SDBZ_ARKD_NATIVE` setting is explicitly rejected.
+
+The GitHub Actions workflow now compiles the entire `ps2runtime` target
+using Clang and runs the ARKD unit harness under Clang and GCC.
+The complete runtime cannot be built with GCC without changes to the
+unrelated `vu_ops.hpp` Clang-specific vector intrinsics.
+
 ## Implementation notes
 
 - `SDBZ_ARKD_NATIVE=1` substitutes native HLE for the ARKD_DVD module.
