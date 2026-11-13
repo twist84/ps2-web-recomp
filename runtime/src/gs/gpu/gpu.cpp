@@ -1023,12 +1023,18 @@ void submit(WGPUTextureView present_view = nullptr) {
         wgpuRenderPassEncoderDraw(rp, 3, 1, 0, 0);
         // Draw stats overlay text in the same render pass so it composites
         // over the game frame without needing LoadOp_Load on a separate pass.
-        font_draw_text_in_pass(rp, present_view, g_surface_width, g_surface_height,
-            g_stats_text, 10.f, 10.f, 1.f, 255, 255, 0);
+        // Suppress the performance statistics while the modal pack manager is
+        // visible, so yellow debug text cannot overlap menu controls.
+        const auto overlay_lines = ps2::resource_pack_overlay::get_lines();
+        if (overlay_lines.empty())
+        {
+            font_draw_text_in_pass(rp, present_view,
+                g_surface_width, g_surface_height,
+                g_stats_text, 10.f, 10.f, 1.f, 255, 255, 0);
+        }
         // Native resource-pack selector: flat text, using SDBZ's FFON font.
         // The SDL/UI thread publishes a thread-safe snapshot. This presentation
         // path never accesses or mutates the pack catalogue.
-        const auto overlay_lines = ps2::resource_pack_overlay::get_lines();
         if (!overlay_lines.empty())
         {
             // One quiet translucent backdrop: no image assets or SVG engine.

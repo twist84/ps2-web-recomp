@@ -126,14 +126,17 @@ engine or decorative textures are required.
 - Up/Down selects a pack in the current list
 - Left moves an enabled pack to Available (disabled)
 - Right moves a disabled pack to Enabled (highest-to-lowest load order)
+- Space toggles the highlighted pack between Enabled and Available
 - Page Up/Down reorders the selected enabled pack
 - Enter saves `disc/resourcepacks/load_order.txt` and closes
 - Escape or F6 cancels unsaved changes
 
-Controller input: D-pad navigation, shoulder buttons reorder, A/Start
-save, and B cancels. Mouse click selects a row, double-click/right-click
-toggles it, and the wheel scrolls the selection. While the manager is
-open, gameplay controller/keyboard state is neutralized.
+Controller input: D-pad navigation, shoulder buttons reorder, **A toggles**
+a pack, **Start saves**, and **B cancels**. A single mouse click on a pack
+row toggles it, and the wheel moves the selection. Double-clicking does
+not toggle a pack twice. While the manager is open, gameplay controller
+and keyboard input is neutralized, and the performance-stat overlay is
+hidden to keep it from covering the menu.
 
 Changes apply after restarting SDBZ, because the current renderer caches
 the native PNG atlases. The overlay currently requires WebGPU and the

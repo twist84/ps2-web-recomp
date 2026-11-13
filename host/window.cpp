@@ -120,8 +120,9 @@ void refresh_pack_overlay()
     }
     std::vector<std::string> lines{
         "RESOURCE PACKS",
-        "F6 / ESC: cancel   ENTER: save",
-        "ARROWS: select / enable   PAGE UP/DOWN: move pack",
+        "F6 / ESC: cancel   ENTER / START: save",
+        "CLICK / SPACE / A: toggle   LEFT / RIGHT: move",
+        "UP / DOWN: select   PAGE UP / DOWN: reorder",
         "",
         "ENABLED - highest priority first"
     };
@@ -207,9 +208,12 @@ bool handle_pack_key(SDL_Scancode key)
                 + (key == SDL_SCANCODE_UP ? -1 : 1), 0,
                 static_cast<int>(current.size()) - 1);
     }
-    else if (key == SDL_SCANCODE_LEFT || key == SDL_SCANCODE_RIGHT)
+    else if (key == SDL_SCANCODE_LEFT || key == SDL_SCANCODE_RIGHT
+        || key == SDL_SCANCODE_SPACE)
     {
-        const int destination = key == SDL_SCANCODE_RIGHT ? 1 : 0;
+        const int destination = key == SDL_SCANCODE_SPACE
+            ? 1 - g_pack_column
+            : key == SDL_SCANCODE_RIGHT ? 1 : 0;
         if (destination != g_pack_column && !current.empty())
         {
             const std::string id = current[g_pack_row];
@@ -584,6 +588,8 @@ void poll() {
                 handle_pack_key(SDL_SCANCODE_PAGEDOWN);
                 break;
             case SDL_CONTROLLER_BUTTON_A:
+                handle_pack_key(SDL_SCANCODE_SPACE);
+                break;
             case SDL_CONTROLLER_BUTTON_START:
                 handle_pack_key(SDL_SCANCODE_RETURN);
                 break;
@@ -602,6 +608,9 @@ void poll() {
         }
         if (g_pack_manager_open && e.type == SDL_MOUSEBUTTONDOWN)
         {
+            // SDL sends a second mouse-down with clicks=2 for a double click.
+            // The first down already toggles; never toggle it back.
+            if (e.button.clicks > 1) continue;
             int window_w = 0, window_h = 0;
             SDL_GetWindowSize(g_window, &window_w, &window_h);
             if (window_w > 0 && window_h > 0)
@@ -616,25 +625,40 @@ void poll() {
                     && g_pack_row >= 9 ? g_pack_row - 8 : 0;
                 const int available_offset = g_pack_column == 0
                     && g_pack_row >= 9 ? g_pack_row - 8 : 0;
-                const int enabled_start = 5;
-                const int available_start = 7
+                const int enabled_start = 6;
+                const int available_start = 8
                     + static_cast<int>(std::min<std::size_t>(9, g_pack_enabled.size()));
-                if (line >= enabled_start && line < enabled_start
-                    + static_cast<int>(std::min<std::size_t>(9, g_pack_enabled.size())))
+                bool clicked_pack = false;
+                if (e.button.x >= static_cast<int>(window_w * 0.06f)
+                    && e.button.x <= static_cast<int>(window_w * 0.94f))
                 {
-                    g_pack_column = 1;
-                    g_pack_row = line - enabled_start + enabled_offset;
+                    if (line >= enabled_start && line < enabled_start
+                        + static_cast<int>(std::min<std::size_t>(9, g_pack_enabled.size())))
+                    {
+                        g_pack_column = 1;
+                        g_pack_row = line - enabled_start + enabled_offset;
+                        clicked_pack = true;
+                    }
+                    else if (line >= available_start && line < available_start
+                        + static_cast<int>(std::min<std::size_t>(9, g_pack_available.size())))
+                    {
+                        g_pack_column = 0;
+                        g_pack_row = line - available_start + available_offset;
+                        clicked_pack = true;
+                    }
                 }
-                else if (line >= available_start && line < available_start
-                    + static_cast<int>(std::min<std::size_t>(9, g_pack_available.size())))
+                if (clicked_pack
+                    && (e.button.button == SDL_BUTTON_LEFT
+                        || e.button.button == SDL_BUTTON_RIGHT))
                 {
-                    g_pack_column = 0;
-                    g_pack_row = line - available_start + available_offset;
+                    // A click performs the same move as Space/controller A.
+                    // Double-click does not toggle twice.
+                    handle_pack_key(SDL_SCANCODE_SPACE);
                 }
-                if (e.button.button == SDL_BUTTON_RIGHT || e.button.clicks >= 2)
-                    handle_pack_key(g_pack_column == 1
-                        ? SDL_SCANCODE_LEFT : SDL_SCANCODE_RIGHT);
-                refresh_pack_overlay();
+                else
+                {
+                    refresh_pack_overlay();
+                }
             }
         }
         if (e.type == SDL_KEYUP && e.key.keysym.scancode == SDL_SCANCODE_RETURN) g_fullscreen_enter = false;

@@ -17,6 +17,7 @@ on:
       - "runtime/src/resource_pack_overlay.cpp"
       - "runtime/include/ps2/resource_pack_overlay.hpp"
       - "host/window.cpp"
+      - "tests/test_resource_pack_menu_input.py"
       - "runtime/src/gs/gpu/font.cpp"
       - "runtime/src/gs/gpu/font.hpp"
       - "runtime/src/resource_pack_zip.cpp"
@@ -63,6 +64,7 @@ on:
       - "runtime/src/resource_pack_overlay.cpp"
       - "runtime/include/ps2/resource_pack_overlay.hpp"
       - "host/window.cpp"
+      - "tests/test_resource_pack_menu_input.py"
       - "runtime/src/gs/gpu/font.cpp"
       - "runtime/src/gs/gpu/font.hpp"
       - "runtime/src/resource_pack_zip.cpp"
@@ -127,6 +129,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_eu_beta_virtual_info.py' -v
           python3 -m unittest discover -s tests -p 'test_native_assets.py' -v
           python3 -m unittest discover -s tests -p 'test_resource_packs.py' -v
+          python3 -m unittest discover -s tests -p 'test_resource_pack_menu_input.py' -v
           python3 -m unittest discover -s tests -p 'test_native_png.py' -v
           python3 -m unittest discover -s tests -p 'test_gs_texture_upload_trace.py' -v
           python3 -m unittest discover -s tests -p 'test_sdbz_texture_log_analysis.py' -v
