@@ -64,6 +64,32 @@ int main(int argc, char **argv)
         if (save_selection({"invalid/not_found"})) return 41;
         if (save_selection({"lower", "lower"})) return 42;
         if (!save_selection({"lower"})) return 43;
+        // File persistence is not the same as applying on the GS thread.
+        // Before render-thread apply, the original resolver remains active.
+        if (!selection_pending() || packs().size() != 2) return 44;
+        if (!apply_pending_selection() || selection_pending()) return 45;
+        auto live = active_packs_snapshot();
+        if (live.size() != 1 || live[0].m_id != "lower") return 46;
+        std::vector<std::uint8_t> bytes;
+        if (!read_resource("textures/dis/main_menu.pix.001.png", bytes)
+            || std::string(bytes.begin(), bytes.end()) != "LOW-OLD") return 47;
+
+        if (!save_selection({"Higher Pack", "lower"})) return 48;
+        if (!apply_pending_selection()) return 49;
+        live = active_packs_snapshot();
+        if (live.size() != 2 || live[0].m_id != "Higher Pack") return 50;
+        if (!read_resource("textures/dis/main_menu.pix.001.png", bytes)
+            || std::string(bytes.begin(), bytes.end()) != "HIGH") return 51;
+
+        if (!save_selection({})) return 52;
+        if (!apply_pending_selection() || !active_packs_snapshot().empty())
+            return 53;
+        s_resource resource;
+        if (find_resource("textures/dis/main_menu.pix.001.png", resource))
+            return 54;
+        // Restore the original fixture's saved file for the Python assertion.
+        if (!save_selection({"lower"}) || !apply_pending_selection())
+            return 55;
         return 0;
     }
     if (argv[2] == std::string("disabled"))

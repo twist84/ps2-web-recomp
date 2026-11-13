@@ -100,7 +100,8 @@ folder. Use the **exact folder name** after the prefix. Packs not listed
 remain enabled and follow the listed packs, ordered by their numeric
 `pack.json` priorities. Duplicate entries and invalid lines are ignored
 with a warning. The file is optional: without it, the old manifest-priority
-behavior is unchanged. Restart SDBZ after editing this file.
+behavior is unchanged. The menu's Start button applies changes live; manual edits to this file
+outside the running game are loaded on the next game launch.
 
 Files in `assets/sdbz/` are addressed by logical keys, currently
 `textures/dis/main_menu.pix.001.png`. A pack does not need GS
@@ -139,10 +140,18 @@ it is open, gamepad inputs are consumed and do not reach gameplay.
 Keyboard input is also blocked from the game while the modal menu is
 open. Existing window-level shortcuts outside the manager are unchanged.
 
-Selections take effect after restarting SDBZ, since native PNG atlases
-are cached for the duration of the game session. The overlay requires
-WebGPU and the game's FFON font; pack selection is otherwise independent
-of any SVG or third-party UI library.
+Pressing Start saves the pack selection and **applies native PNG changes
+during the next GS render update**, without restarting SDBZ. The render
+thread finishes pending GPU draws, updates the resource resolver, refreshes
+the native PNG cache, and re-uploads replacement images for already-known
+GS texture identities. The game keeps its original GS VRAM contents and
+scene state. Disabling all packs restores the game's original GS texture
+sampling. Previously matched source textures remain eligible when packs
+are re-enabled, even without a new upload by the game.
+
+The overlay requires WebGPU and the game's FFON font; pack selection is
+otherwise independent of any SVG or third-party UI library. ZIP and folder
+pack selections both use this same live reload path.
 
 ## Next steps
 

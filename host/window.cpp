@@ -150,7 +150,7 @@ void refresh_pack_overlay()
     }
     lines.push_back("");
     if (!g_pack_feedback.empty()) lines.push_back(g_pack_feedback);
-    lines.push_back("Restart SDBZ to apply saved changes");
+    lines.push_back("Press START to apply packs without restarting");
     ps2::resource_pack_overlay::set_lines(std::move(lines));
 }
 
@@ -159,7 +159,7 @@ void open_pack_manager()
     g_pack_feedback.clear();
     g_pack_enabled.clear();
     g_pack_available.clear();
-    for (const auto &pack : ps2::resource_pack::packs())
+    for (const auto &pack : ps2::resource_pack::active_packs_snapshot())
         g_pack_enabled.push_back(pack.m_id);
     for (const auto &pack : ps2::resource_pack::discovered_packs())
     {
@@ -182,7 +182,7 @@ void close_pack_manager(bool save)
     }
     g_pack_manager_open = false;
     refresh_pack_overlay();
-    if (save) notify("Resource packs saved - restart SDBZ");
+    if (save) notify("Resource packs saved - applying live");
 }
 
 enum e_pack_action
@@ -975,7 +975,7 @@ bool open_window(bool fullscreen) {
     SDL_SetWindowMinimumSize(g_window, 320, 240);
     save_preferences();
     std::fprintf(stderr, "[window] F5 GPU render scale | F7 filter | F8 field blending | F9 stats | F10 mute | +/- volume | F11 / Alt+Enter fullscreen\n");
-    std::fprintf(stderr, "[window] F6 or Select+Start resource pack manager (controller navigation; restart required)\n");
+    std::fprintf(stderr, "[window] F6 or Select+Start resource pack manager (live apply on save)\n");
     std::fprintf(stderr, "[window] settings: %s\n", g_preferences_path.c_str());
     SDL_AudioSpec want{}, have{};
     want.freq = 48000;

@@ -4,6 +4,7 @@
 #include "texture_upload_trace.hpp"
 
 #include <cstdint>
+#include <vector>
 
 namespace ps2::gs::native_texture
 {
@@ -13,6 +14,10 @@ namespace ps2::gs::native_texture
 // Opt-in diagnostics: PS2_TRACE_NATIVE_TEXTURES=1.
 bool trace_native_textures();
 void reset_residency();
+// Preserve verified GS upload identities across pack changes. Only decoded
+// replacement images and catalog availability are invalidated.
+void reload_replacements();
+std::vector<int> resident_chunks();
 bool replacements_available();
 void invalidate_destination(std::uint64_t bitbltbuf, std::uint64_t trxreg);
 int complete_upload(const s_texture_upload_signature &upload);
