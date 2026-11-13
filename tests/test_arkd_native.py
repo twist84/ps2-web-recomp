@@ -362,6 +362,8 @@ int main(int argc, char **argv)
     // 0x501/0x101 accepts a 36-byte named audio bank and stages the
     // bytes asynchronously. It does not yet upload the bank to SPU2.
     std::memset(ps2::g_ram + 0x100, 0, 0x24);
+    const std::uint32_t bank_id = 7;
+    std::memcpy(ps2::g_ram + 0x100, &bank_id, 4);
     std::memcpy(ps2::g_ram + 0x104, "ply\\small.bin", 14);
     if (!ps2::sif::g_handlers.at(0x501)(0x101, 0x100, 0x24, 0x180, 4)
         || word(0x180) != 0) return 63;
@@ -386,7 +388,8 @@ int main(int argc, char **argv)
     arkd::state(bank_reader);
     if (arkd::sound_bank_ready()) return 67;
     kernel::g_bank_job(pending_bank_job);
-    if (!arkd::sound_bank_ready()) return 68;
+    if (!arkd::sound_bank_ready() || arkd::sound_bank_id() != bank_id)
+        return 68;
     std::vector<std::uint8_t> bank(5000);
     if (arkd::copy_sound_bank(bank.data(), bank.size()) != 5000)
         return 69;
