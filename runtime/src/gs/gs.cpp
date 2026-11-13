@@ -290,6 +290,9 @@ void feed_image(const std::uint8_t *data, std::size_t bytes) {
         report_texture_upload(true);
 #ifdef PS2_NATIVE_PNG
         const int chunk = native_texture::complete_upload(g_texture_trace.current());
+#ifndef PS2_GPU
+        (void)chunk;
+#endif
 #ifdef PS2_GPU
         if (chunk >= 0 && gpu_on())
         {
@@ -869,7 +872,7 @@ void write(std::uint32_t reg, std::uint64_t value) {
     case 0x50: s.bitbltbuf = value; break;
     case 0x51: s.trxpos = value; break;
     case 0x52: s.trxreg = value; break;
-    case 0x53:
+    case 0x53: {
         if (trace_display()) {
             std::fprintf(stderr, "[gs] trx dir %llu buf 0x%016llX pos 0x%016llX reg 0x%016llX\n", static_cast<unsigned long long>(value & 3u),
                          static_cast<unsigned long long>(s.bitbltbuf), static_cast<unsigned long long>(s.trxpos), static_cast<unsigned long long>(s.trxreg));
@@ -909,6 +912,7 @@ void write(std::uint32_t reg, std::uint64_t value) {
         else if ((value & 3u) == 2) { if (cpu_raster()) local_copy(); }
         else if ((value & 3u) == 1) g_transfer.active = true;
         break;
+    }
     case 0x54:
         feed_image(reinterpret_cast<const std::uint8_t *>(&value), 8);
         break;
