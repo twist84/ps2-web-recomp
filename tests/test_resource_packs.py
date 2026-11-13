@@ -155,9 +155,9 @@ class ResourcePackTests(unittest.TestCase):
         subprocess.run([str(self.binary), str(root), "zip"], check=True)
 
         order = folder / "load_order.txt"
-        order.write_text("-Red Menu\\n+Fallback Folder\\n", encoding="utf-8")
+        order.write_text("-Red Menu\n+Fallback Folder\n", encoding="utf-8")
         subprocess.run([str(self.binary), str(root), "zipdisabled"], check=True)
-        order.write_text("+Fallback Folder\\n+Red Menu\\n", encoding="utf-8")
+        order.write_text("+Fallback Folder\n+Red Menu\n", encoding="utf-8")
         subprocess.run([str(self.binary), str(root), "zipordered"], check=True)
 
         # Fail closed for malformed archives and path traversal. They should
