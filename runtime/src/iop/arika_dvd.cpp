@@ -118,6 +118,29 @@ std::array<std::vector<std::uint8_t>, k_sound_bank_slots> g_cached_banks{};
 constexpr std::size_t k_max_total_bank_cache = 128u * 1024u * 1024u;
 std::uint32_t g_spu_next = k_spu_base_start;
 s_spu_upload g_spu_upload;
+// 0 = free, 1 = bank, 2 = stream. A channel owner retains its IOP
+// source until sceSdVoiceTransStatus reports completion.
+std::array<std::uint8_t, 2> g_dma_owner{};
+
+struct s_ams_stream
+{
+    std::array<std::uint8_t, 0x17C> playlist{};
+    s_asset asset{};
+    std::uint32_t serial = 0, staging = 0;
+    std::uint32_t segment = 0, repeats = 0, block = 0, consumed = 0;
+    std::uint32_t length = 0, folded_blocks = 0, pitch = 0x1000;
+    std::uint32_t channel_gain = 0x4000;
+    std::uint32_t fade_total = 1, fade_step = 1, fade = 0x8000;
+    std::uint32_t out_total = 0, out_step = 0, out_base = 0x8000;
+    std::uint32_t error = 0, polls = 0;
+    std::array<std::uint32_t, 2> half_pitch{};
+    std::array<std::uint32_t, 2> half_bytes{};
+    std::array<bool, 2> last_half{};
+    std::uint8_t phase = 0, channel = 0, target_half = 0, read_half = 0;
+    std::uint8_t request = 0; // 1 = replace playlist, 2 = stop.
+    bool running = false, paused = false, waiting = false, eof = false;
+};
+s_ams_stream g_stream;
 
 // The original bank-release worker compacts sample memory. Native
 // allocations retain stable SPU2 addresses, reuse holes, and never move
@@ -228,6 +251,10 @@ void reset_sound_state()
     g_sound.master_volume = 0x3FFF;
     g_sound.channel_volume_left = 0x3FFF;
     g_sound.channel_volume_right = 0x3FFF;
+    g_sound.stream_status = 0x30000000u;
+    g_sound.current_stream = 0x4000;
+    g_sound.pending_stream = 0x3FFF;
+    g_sound.stream_pair_left = g_sound.stream_pair_right = 0x3FFF;
 }
 
 std::uint32_t read_u32(const std::uint8_t *bytes)
@@ -769,6 +796,11 @@ bool initialize_sound_hardware()
     std::uint32_t result = 0;
     if (!kernel::call_library_export("libsd", 4, 0, 0, 0, 0, result)
         || static_cast<std::int32_t>(result) < 0) return false;
+    if (g_stream.staging) kernel::free(g_stream.staging);
+    const auto next_stream_serial = g_stream.serial + 1;
+    g_stream = {};
+    g_stream.serial = next_stream_serial;
+    g_dma_owner = {};
     bool success = true;
     const auto call = [&](std::uint32_t ordinal, std::uint32_t reg, std::uint32_t value)
     {
@@ -813,6 +845,320 @@ bool initialize_sound_hardware()
     }
     kernel::free(staging);
     return success;
+}
+
+constexpr std::uint32_t k_stream_half = 0x8000;
+constexpr std::uint32_t k_stream_left = 0x180000;
+constexpr std::uint32_t k_stream_right = 0x190000;
+
+void schedule_stream(std::uint64_t delay = 500)
+{
+    kernel::schedule(kernel::now() + kernel::usec_to_cycles(delay),
+        kernel::Job{kernel::kJobArkdStream, g_stream.serial});
+}
+
+bool stream_call(std::uint32_t ordinal, std::uint32_t reg,
+    std::uint32_t value = 0)
+{
+    std::uint32_t result = 0;
+    return kernel::call_library_export("libsd", ordinal, reg, value, 0, 0, result);
+}
+
+void publish_stream_status()
+{
+    sif::publish_ee_sreg(13, (g_stream.running ? 1u : 0u)
+        | (g_stream.paused ? 2u : 0u) | (g_stream.request ? 0x200u : 0u));
+}
+
+void stream_gains()
+{
+    // IRX 0x7FE4: three independently truncated scaling stages.
+    const std::uint32_t base =
+        (static_cast<std::uint32_t>(g_sound.pending_stream) * g_stream.channel_gain) >> 14;
+    const auto scale = [&](std::uint16_t channel)
+    {
+        return static_cast<std::uint16_t>((((base * g_stream.fade) >> 15) * channel) >> 14);
+    };
+    const bool mono = (g_sound.streaming_flags & 2u) != 0;
+    stream_call(5, 0x12D, mono ? 0 : scale(g_sound.stream_pair_right));
+    stream_call(5, 0x02D, mono ? scale(g_sound.stream_pair_right) : 0);
+    stream_call(5, 0x12F, 0);
+    stream_call(5, 0x02F, scale(g_sound.stream_pair_left));
+}
+
+void stop_stream(std::uint32_t error = 0)
+{
+    stream_call(7, 0x1601, 0xC00000);
+    g_stream.running = false;
+    g_stream.paused = false;
+    g_stream.phase = 0;
+    g_stream.error = error;
+    g_stream.fade = 0;
+    g_stream.out_total = 0;
+    g_sound.stream_status = error ? error : 0x30000000u;
+    stream_gains();
+    publish_stream_status();
+}
+
+bool open_stream_segment(bool reset_repeats)
+{
+    const auto count = read_u32(g_stream.playlist.data() + 4);
+    if (!count || count > 10 || g_stream.segment >= count) return false;
+    const auto *entry = g_stream.playlist.data() + 20 + g_stream.segment * 36;
+    const auto *end = static_cast<const std::uint8_t *>(std::memchr(entry + 4, 0, 32));
+    const auto length = end ? static_cast<std::size_t>(end - entry - 4) : 32;
+    const auto asset = g_catalog.find(std::string_view(
+        reinterpret_cast<const char *>(entry + 4), length));
+    if (!asset || asset->file_size < 0x800) return false;
+    std::array<std::uint8_t, 0x800> header{};
+    if (g_catalog.read(*asset, 0, header.data(), header.size()) != header.size()) return false;
+    const auto bytes = read_u32(header.data() + 8);
+    const auto blocks = read_u32(header.data() + 12);
+    if (!bytes || (bytes & 15u) || !blocks
+        || static_cast<std::uint64_t>(bytes) > static_cast<std::uint64_t>(blocks) * 0x10000u
+        || 0x800ull + static_cast<std::uint64_t>(blocks) * 0x20000u > asset->file_size)
+        return false;
+    g_stream.asset = *asset;
+    g_stream.length = bytes;
+    g_stream.folded_blocks = blocks;
+    g_stream.pitch = static_cast<std::uint16_t>((read_u32(header.data() + 4) * g_control_value) >> 12);
+    g_stream.block = g_stream.consumed = 0;
+    if (reset_repeats) g_stream.repeats = read_u32(entry);
+    return g_stream.pitch != 0;
+}
+
+bool next_stream_segment()
+{
+    // Zero repeats underflows just as the original unsigned decrement,
+    // making it effectively indefinite rather than skipping the file.
+    if (--g_stream.repeats) return open_stream_segment(false);
+    const auto count = read_u32(g_stream.playlist.data() + 4);
+    if (++g_stream.segment == count)
+    {
+        if (!read_u32(g_stream.playlist.data() + 8))
+        {
+            g_stream.eof = true;
+            return true;
+        }
+        g_stream.segment = read_u32(g_stream.playlist.data() + 12);
+    }
+    return open_stream_segment(true);
+}
+
+bool prepare_stream_half()
+{
+    if (g_stream.consumed == g_stream.length && !g_stream.eof
+        && !next_stream_segment()) return false;
+    auto *stage = iop::ram_ptr(g_stream.staging);
+    std::memset(stage, 0, k_stream_half * 2);
+    const auto half = g_stream.target_half;
+    g_stream.last_half[half] = false;
+    g_stream.half_pitch[half] = g_stream.pitch;
+    std::uint32_t valid = 0x40;
+    if (!g_stream.eof)
+    {
+        const std::uint64_t j = g_stream.block, n = g_stream.folded_blocks;
+        if (j >= n * 2) return false;
+        const auto offset = j < n ? 0x800ull + j * 0x20000u
+            : (2 * n - j) * 0x20000u - 0xF800u;
+        if (offset > UINT32_MAX || offset + 0x10000u > g_stream.asset.file_size
+            || g_catalog.read(g_stream.asset, static_cast<std::uint32_t>(offset), stage, 0x10000)
+                != 0x10000) return false;
+        valid = std::min(k_stream_half, g_stream.length - g_stream.consumed);
+        g_stream.consumed += valid;
+        ++g_stream.block;
+        const auto count = read_u32(g_stream.playlist.data() + 4);
+        g_stream.last_half[half] = g_stream.consumed == g_stream.length
+            && g_stream.repeats == 1 && g_stream.segment + 1 == count
+            && !read_u32(g_stream.playlist.data() + 8);
+    }
+    g_stream.half_bytes[half] = valid;
+    for (unsigned channel = 0; channel < 2; ++channel)
+    {
+        auto *data = stage + channel * k_stream_half;
+        // Original 0x77C0: full first half marks loop start; the
+        // second half and partial tails mark loop end/repeat.
+        if (valid == k_stream_half && half == 0) data[1] |= 6;
+        else data[valid - 15] |= 3;
+        if (valid < k_stream_half)
+            std::memset(data + valid, 0, k_stream_half - valid);
+    }
+    g_stream.channel = 0;
+    return true;
+}
+
+void enter_stream_half(std::uint8_t half)
+{
+    const auto loop_half = g_stream.half_bytes[half] < k_stream_half ? 1u - half : 0u;
+    stream_call(9, 0x216F, k_stream_left + loop_half * k_stream_half);
+    stream_call(9, 0x216D, k_stream_right + loop_half * k_stream_half);
+    stream_call(5, 0x22F, g_stream.half_pitch[half]);
+    stream_call(5, 0x22D, g_stream.half_pitch[half]);
+}
+
+void process_stream(const kernel::Job &job)
+{
+    if (job.a != g_stream.serial) return;
+    if (job.b == 1)
+    {
+        if (g_stream.out_total)
+        {
+            if (g_stream.out_step < g_stream.out_total) ++g_stream.out_step;
+            g_stream.fade = static_cast<std::uint32_t>(
+                static_cast<std::uint64_t>(g_stream.out_base)
+                * (g_stream.out_total - g_stream.out_step) / g_stream.out_total);
+        }
+        else if (g_stream.running && !g_stream.paused && g_stream.fade_step < g_stream.fade_total)
+        {
+            ++g_stream.fade_step;
+            g_stream.fade = static_cast<std::uint32_t>(
+                static_cast<std::uint64_t>(g_stream.fade_step) * 0x8000 / g_stream.fade_total);
+        }
+        if (g_stream.running) stream_gains();
+        publish_stream_status();
+        return;
+    }
+
+    // Finish an admitted DMA before honoring replacement, stop or error.
+    if (g_stream.waiting)
+    {
+        std::uint32_t done = 0;
+        if (!kernel::call_library_export("libsd", 19, g_stream.channel, 0, 0, 0, done)
+            || !done)
+        {
+            if (++g_stream.polls == 10000)
+            {
+                g_stream.error = 0x40000065u;
+                g_sound.stream_status = g_stream.error;
+                std::fprintf(stderr, "[arkd-native] stream DMA completion timed out; retaining source RAM\n");
+            }
+            schedule_stream();
+            return;
+        }
+        g_dma_owner[g_stream.channel] = 0;
+        g_stream.waiting = false;
+        g_stream.polls = 0;
+        ++g_stream.channel;
+    }
+    if (g_stream.error)
+    {
+        stop_stream(g_stream.error);
+        g_stream.request = 0;
+        return;
+    }
+    if (g_stream.request)
+    {
+        if (g_stream.running && g_stream.out_total && g_stream.out_step < g_stream.out_total)
+        {
+            schedule_stream();
+            return;
+        }
+        stop_stream();
+        const auto request = g_stream.request;
+        g_stream.request = 0;
+        if (request == 2) { publish_stream_status(); return; }
+        g_stream.playlist = g_sound.stream_commands;
+        g_stream.segment = 0;
+        g_stream.eof = false;
+        if (!open_stream_segment(true)) { stop_stream(0x40000064u); return; }
+        if (!g_stream.staging) g_stream.staging = kernel::alloc(k_stream_half * 2);
+        if (!g_stream.staging || iop::phys(g_stream.staging) > iop::kRamSize - k_stream_half * 2)
+        { stop_stream(0x40000064u); return; }
+        g_stream.channel_gain = read_u32(g_stream.playlist.data() + 16) + 1u;
+        g_stream.fade_total = std::max(1u, read_u32(g_stream.playlist.data()));
+        g_stream.fade_step = 0;
+        g_stream.target_half = 0;
+        g_stream.read_half = 0;
+        g_stream.phase = 1; // Upload both initial halves before key-on.
+        g_sound.stream_status = 0x20000000u;
+        if (!prepare_stream_half()) { stop_stream(0x40000064u); return; }
+    }
+    if (!g_stream.phase) return;
+    if (g_stream.phase == 3)
+    {
+        const bool pause = (g_sound.streaming_flags & 4u) != 0;
+        if (pause != g_stream.paused)
+        {
+            g_stream.paused = pause;
+            stream_call(5, 0x22D, pause ? 0 : g_stream.half_pitch[g_stream.read_half]);
+            stream_call(5, 0x22F, pause ? 0 : g_stream.half_pitch[g_stream.read_half]);
+            publish_stream_status();
+        }
+        if (pause) { schedule_stream(); return; }
+        std::uint32_t address = 0;
+        if (!kernel::call_library_export("libsd", 10, 0x226F, 0, 0, 0, address)
+            || address < k_stream_left || address >= k_stream_left + k_stream_half * 2)
+        { stop_stream(0x40000065u); return; }
+        const auto half = static_cast<std::uint8_t>((address - k_stream_left) / k_stream_half);
+        if (half == g_stream.read_half) { schedule_stream(); return; }
+        if (g_stream.last_half[g_stream.read_half]) { stop_stream(); return; }
+        g_stream.target_half = g_stream.read_half;
+        g_stream.read_half = half;
+        enter_stream_half(half);
+        if (!prepare_stream_half()) { stop_stream(0x40000064u); return; }
+        g_stream.phase = 2;
+    }
+    if (g_stream.channel < 2)
+    {
+        const auto channel = g_stream.channel;
+        if (g_dma_owner[channel]) { schedule_stream(); return; }
+        if (g_stream.running)
+        {
+            std::uint32_t address = 0;
+            if (!kernel::call_library_export("libsd", 10, 0x226F, 0, 0, 0, address)
+                || address < k_stream_left || address >= k_stream_left + k_stream_half * 2
+                || (address - k_stream_left) / k_stream_half == g_stream.target_half)
+            { stop_stream(0x40000065u); return; }
+        }
+        const auto destination = (channel ? k_stream_right : k_stream_left)
+            + g_stream.target_half * k_stream_half;
+        std::uint32_t transferred = 0;
+        if (!kernel::call_library_export("libsd", 17, channel, 0,
+                g_stream.staging + channel * k_stream_half, destination,
+                transferred, k_stream_half) || static_cast<std::int32_t>(transferred) < 0)
+        { stop_stream(0x40000064u); return; }
+        g_dma_owner[channel] = 2;
+        g_stream.waiting = true;
+        schedule_stream();
+        return;
+    }
+    if (g_stream.phase == 1 && g_stream.target_half == 0)
+    {
+        g_stream.target_half = 1;
+        if (!prepare_stream_half()) { stop_stream(0x40000064u); return; }
+        schedule_stream();
+        return;
+    }
+    if (!g_stream.running)
+    {
+        stream_call(9, 0x206F, k_stream_left);
+        stream_call(9, 0x206D, k_stream_right);
+        enter_stream_half(0);
+        g_stream.fade_step = 1;
+        g_stream.fade = 0x8000u / g_stream.fade_total;
+        g_stream.running = true;
+        stream_gains();
+        if (!stream_call(7, 0x1501, 0xC00000)) { stop_stream(0x40000064u); return; }
+        g_sound.stream_status = 0x30000000u;
+        std::fprintf(stderr, "[arkd-native] AMS stream started (%u segments)\n",
+            read_u32(g_stream.playlist.data() + 4));
+        publish_stream_status();
+    }
+    g_stream.phase = 3;
+    schedule_stream();
+}
+
+void queue_stream(std::uint8_t request, std::uint32_t fade_frames)
+{
+    ++g_stream.serial;
+    g_stream.error = 0;
+    g_stream.request = request;
+    g_stream.out_total = g_stream.running ? fade_frames : 0;
+    g_stream.out_step = 0;
+    g_stream.out_base = g_stream.fade;
+    g_sound.stream_status = 0x20000000u;
+    publish_stream_status();
+    schedule_stream(0);
 }
 
 void complete_audio_command(const kernel::Job &job)
@@ -897,6 +1243,8 @@ void complete_spu_upload(const kernel::Job &job)
     auto &upload = g_spu_upload;
     auto fail = [&upload]()
     {
+        const auto channel = (upload.offset / k_iop_stage_bytes) & 1u;
+        if (g_dma_owner[channel] == 1) g_dma_owner[channel] = 0;
         upload.pending = false;
         upload.waiting_for_dma = false;
         upload.state = 0x40000064u;
@@ -935,6 +1283,7 @@ void complete_spu_upload(const kernel::Job &job)
             return;
         }
         upload.waiting_for_dma = false;
+        g_dma_owner[(upload.offset / k_iop_stage_bytes) & 1u] = 0;
         upload.offset += upload.chunk;
         upload.chunk = 0;
         upload.polls = 0;
@@ -975,6 +1324,13 @@ void complete_spu_upload(const kernel::Job &job)
         return;
     }
 
+    const auto channel = (upload.offset / k_iop_stage_bytes) & 1u;
+    if (g_dma_owner[channel])
+    {
+        kernel::schedule(kernel::now() + kernel::usec_to_cycles(200),
+            kernel::Job{kernel::kJobArkdSpuUpload, upload.serial});
+        return;
+    }
     // Copy into a persistent IOP buffer; pad the last 16-byte block.
     // SPU2 sample data starts after the 2 KiB sound-bank header.
     std::memset(iop::ram_ptr(upload.staging_iop), 0, padded);
@@ -995,6 +1351,7 @@ void complete_spu_upload(const kernel::Job &job)
     upload.state = 0x20000000u;
     upload.chunk = chunk;
     upload.waiting_for_dma = true;
+    g_dma_owner[channel] = 1;
     kernel::schedule(kernel::now() + kernel::usec_to_cycles(200),
         kernel::Job{kernel::kJobArkdSpuUpload, upload.serial});
 }
@@ -1278,16 +1635,19 @@ bool stream_control_rpc(std::uint32_t method, std::uint32_t args,
 
     switch (method)
     {
-    case 1: // IRX 0x96C4, store requested stream number + 1.
+    case 1: // IRX 0x96C4, channel gain is the requested u16 plus one.
     {
         std::uint16_t stream = 0;
         if (!read16(0, stream)) break;
         g_sound.current_stream = static_cast<std::uint16_t>(stream + 1);
+        g_stream.channel_gain = static_cast<std::uint32_t>(stream) + 1u;
+        if (g_stream.running) stream_gains();
         reply_u32(ret, ret_size, 0);
         return true;
     }
-    case 2: // IRX 0x9754, store stream configuration.
+    case 2: // IRX 0x9754, master stream gain.
         if (!read16(0, g_sound.pending_stream)) break;
+        if (g_stream.running) stream_gains();
         reply_u32(ret, ret_size, 0);
         return true;
     case 3: // IRX 0x9878, toggles stream flag based on request u32.
@@ -1296,6 +1656,7 @@ bool stream_control_rpc(std::uint32_t method, std::uint32_t args,
         if (!read32(enabled)) break;
         g_sound.streaming_flags = (g_sound.streaming_flags & ~0x2u)
             | (enabled ? 0u : 0x2u);
+        if (g_stream.running) stream_gains();
         reply_u32(ret, ret_size, 0);
         return true;
     }
@@ -1305,6 +1666,7 @@ bool stream_control_rpc(std::uint32_t method, std::uint32_t args,
     case 5: // IRX 0x97DC copies two stream-channel u16 controls.
         if (!read16(0, g_sound.stream_pair_left)
             || !read16(2, g_sound.stream_pair_right)) break;
+        if (g_stream.running) stream_gains();
         reply_u32(ret, ret_size, 0);
         return true;
     case 0x101: // IRX 0x9548, 0x17C-byte command and update bitfield.
@@ -1312,6 +1674,7 @@ bool stream_control_rpc(std::uint32_t method, std::uint32_t args,
         std::memcpy(g_sound.stream_commands.data(),
             ps2::g_ram + (args & (ps2::kRamSize - 1)), 0x17C);
         g_sound.control_flags = (g_sound.control_flags | 1u) & ~6u;
+        queue_stream(1, g_stream.running ? 60 : 0);
         reply_u32(ret, ret_size, 0);
         return true;
     case 0x102: // IRX 0x95C0, stores word, sets bit 1 and clears 0/2.
@@ -1320,6 +1683,7 @@ bool stream_control_rpc(std::uint32_t method, std::uint32_t args,
         if (!read32(value)) break;
         g_sound.stream_control = value;
         g_sound.control_flags = (g_sound.control_flags | 2u) & ~5u;
+        queue_stream(2, value);
         reply_u32(ret, ret_size, 0);
         return true;
     }
@@ -1890,8 +2254,12 @@ void on_vblank()
 {
     if (native_requested() && g_catalog.entry_count()
         && kernel::library_exists("libsd"))
+    {
         kernel::schedule(kernel::now(),
             kernel::Job{kernel::kJobArkdVoice, 0, 1});
+        kernel::schedule(kernel::now(),
+            kernel::Job{kernel::kJobArkdStream, g_stream.serial, 1});
+    }
 }
 
 bool intercept_module(const std::string &path)
@@ -1916,6 +2284,8 @@ void install()
     g_sound_bank_data.clear();
     g_audio_worker = {};
     g_spu_upload = {};
+    g_stream = {};
+    g_dma_owner = {};
     g_spu_banks = {};
     g_cached_banks = {};
     g_spu_next = k_spu_base_start;
@@ -1930,6 +2300,7 @@ void install()
     kernel::register_job(kernel::kJobArkdBank, complete_sound_bank);
     kernel::register_job(kernel::kJobArkdAudio, complete_audio_command);
     kernel::register_job(kernel::kJobArkdSpuUpload, complete_spu_upload);
+    kernel::register_job(kernel::kJobArkdStream, process_stream);
     kernel::register_hle_module("ARKD_DVD", start_module);
     std::fprintf(stderr,
         "[arkd-native] experimental native module selected; "
@@ -1953,6 +2324,8 @@ void state(ps2::state::Stream &stream)
             g_sound_bank_data.clear();
             g_audio_worker = {};
             g_spu_upload = {};
+            g_stream = {};
+            g_dma_owner = {};
             g_spu_banks = {};
             g_cached_banks = {};
             g_spu_next = k_spu_base_start;
@@ -2095,6 +2468,41 @@ void state(ps2::state::Stream &stream)
         stream.pod(g_voice_end_redirect);
     else if (stream.loading())
         g_voice_end_redirect = {};
+
+    if (stream.version() >= 15)
+    {
+        stream.pod(g_stream);
+        stream.pod(g_dma_owner);
+        if (stream.loading())
+        {
+            if (g_stream.phase > 3 || g_stream.channel > 2 || g_stream.target_half > 1
+                || g_stream.read_half > 1 || g_stream.request > 2
+                || (g_stream.staging && iop::phys(g_stream.staging) > iop::kRamSize - 0x10000u)
+                || (g_stream.waiting && (g_stream.channel >= 2
+                    || g_dma_owner[g_stream.channel] != 2)))
+                throw std::runtime_error("invalid native AMS stream state");
+            for (auto owner : g_dma_owner)
+                if (owner > 2) throw std::runtime_error("invalid native audio DMA owner");
+            if (g_stream.phase && (!g_stream.staging || !g_stream.length
+                || g_stream.consumed > g_stream.length
+                || !read_u32(g_stream.playlist.data() + 4)
+                || read_u32(g_stream.playlist.data() + 4) > 10))
+                throw std::runtime_error("invalid native AMS playlist state");
+        }
+    }
+    else if (stream.loading())
+    {
+        g_stream = {};
+        g_dma_owner = {};
+        if (g_spu_upload.pending && g_spu_upload.waiting_for_dma)
+            g_dma_owner[(g_spu_upload.offset / k_iop_stage_bytes) & 1u] = 1;
+        // These fields existed as inert bookkeeping before streams ran.
+        // Newly implemented hardware controls begin at original defaults.
+        g_sound.current_stream = 0x4000;
+        g_sound.pending_stream = 0x3FFF;
+        g_sound.stream_pair_left = g_sound.stream_pair_right = 0x3FFF;
+        g_sound.stream_status = 0x30000000u;
+    }
 
     if (stream.loading() && native)
     {

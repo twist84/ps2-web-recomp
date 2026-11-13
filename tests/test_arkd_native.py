@@ -47,11 +47,14 @@ JobHandler g_voice_job = nullptr;
 JobHandler g_bank_job = nullptr;
 JobHandler g_audio_job = nullptr;
 JobHandler g_upload_job = nullptr;
+JobHandler g_stream_job = nullptr;
 Job g_queued_read;
 Job g_queued_voice;
 Job g_queued_bank;
 Job g_queued_audio;
 Job g_queued_upload;
+Job g_queued_stream;
+std::array<std::uint32_t, 2> g_dma_done{1, 1};
 
 struct s_capture
 {
@@ -73,7 +76,7 @@ std::vector<std::pair<std::uint32_t, std::uint32_t>> g_switch_writes;
 std::vector<std::vector<std::uint8_t>> g_effect_calls;
 std::vector<std::uint32_t> g_effect_cores;
 bool library_exists(const std::string &name) { return name == "libsd"; }
-std::uint32_t alloc(std::uint32_t, int, std::uint32_t) { return 0x1000; }
+std::uint32_t alloc(std::uint32_t size, int, std::uint32_t) { return size >= 0x10000 ? 0x10000 : 0x1000; }
 void free(std::uint32_t) {}
 bool call_library_export(const std::string &name, std::uint32_t ordinal,
     std::uint32_t a0, std::uint32_t a1, std::uint32_t a2,
@@ -107,7 +110,7 @@ bool call_library_export(const std::string &name, std::uint32_t ordinal,
     }
     if (ordinal == 17)
     {
-        if (!a4 || *a4 > 0x8000 || a2 != 0x1000
+        if (!a4 || *a4 > 0x8000 || (a2 != 0x1000 && a2 != 0x10000 && a2 != 0x18000)
             || a0 > 1 || a1 != 0) return false;
         s_capture capture;
         capture.channel = a0;
@@ -123,7 +126,7 @@ bool call_library_export(const std::string &name, std::uint32_t ordinal,
     }
     if (ordinal == 19)
     {
-        result = 1;
+        result = g_dma_done[a0 & 1u];
         return true;
     }
     if (ordinal == 7)
@@ -157,6 +160,7 @@ void register_job(std::uint32_t kind, JobHandler callback)
     else if (kind == kJobArkdBank) g_bank_job = callback;
     else if (kind == kJobArkdAudio) g_audio_job = callback;
     else if (kind == kJobArkdSpuUpload) g_upload_job = callback;
+    else if (kind == kJobArkdStream) g_stream_job = callback;
 }
 std::uint64_t now() { return 0; }
 std::uint64_t usec_to_cycles(std::uint64_t us) { return us; }
@@ -166,6 +170,7 @@ void schedule(std::uint64_t, const Job &job)
     else if (job.kind == kJobArkdBank) g_queued_bank = job;
     else if (job.kind == kJobArkdAudio) g_queued_audio = job;
     else if (job.kind == kJobArkdSpuUpload) g_queued_upload = job;
+    else if (job.kind == kJobArkdStream) g_queued_stream = job;
     else g_queued_read = job;
 }
 }
@@ -190,6 +195,134 @@ std::uint32_t word(std::uint32_t at)
     return value;
 }
 
+int test_streams()
+{
+    using namespace ps2::iop;
+    arkd::install();
+    kernel::g_start();
+    auto status = [&]() {
+        ps2::sif::g_handlers.at(0x502)(4, 0, 0, 0x180, 4);
+        return word(0x180);
+    };
+    auto step = [&]() { kernel::g_stream_job(kernel::g_queued_stream); };
+    auto streams = [&]() {
+        std::vector<kernel::s_capture> result;
+        for (const auto &capture : kernel::g_captures)
+            if (capture.destination >= 0x180000) result.push_back(capture);
+        return result;
+    };
+    std::array<std::uint32_t, 0x17C / 4> packet{};
+    packet[1] = 1; // One playlist segment.
+    packet[4] = 0x3FFF;
+    packet[5] = 1; // Play the segment once.
+    std::memcpy(reinterpret_cast<std::uint8_t *>(packet.data()) + 24, "sqm/test.ams", 13);
+    const auto submit = [&]() {
+        std::memcpy(ps2::g_ram + 0x800, packet.data(), sizeof(packet));
+        ps2::sif::g_handlers.at(0x502)(0x101, 0x800, sizeof(packet), 0x180, 4);
+    };
+    kernel::g_loop_addresses[0x226F] = 0x180010;
+    kernel::g_dma_done[0] = 0;
+    submit();
+    if (!kernel::g_stream_job || status() != 0x20000000u) return 180;
+    step(); // First channel is now in flight.
+    if (streams().size() != 1 || streams()[0].contents[2] != 0x11) return 181;
+    const auto pending = kernel::g_queued_stream;
+    ps2::state::Writer writer;
+    writer.set_version(15);
+    arkd::state(writer);
+    const std::uint32_t immediate = 0;
+    std::memcpy(ps2::g_ram + 0x400, &immediate, 4);
+    ps2::sif::g_handlers.at(0x502)(0x102, 0x400, 4, 0x180, 4);
+    step();
+    if (streams().size() != 1 || ps2::iop::g_ram[0x10002] != 0x11) return 182;
+    ps2::state::Reader reader(writer.out.data(), writer.out.size());
+    reader.set_version(15);
+    arkd::state(reader);
+    kernel::g_stream_job(pending);
+    kernel::g_dma_done[0] = 1;
+    for (unsigned n = 0; n < 12 && status() != 0x30000000u; ++n) step();
+    auto uploaded = streams();
+    if (uploaded.size() != 4 || status() != 0x30000000u
+        || uploaded[0].destination != 0x180000 || uploaded[1].destination != 0x190000
+        || uploaded[2].destination != 0x188000 || uploaded[3].destination != 0x198000
+        || uploaded[2].contents[2] != 0x21 || uploaded[3].contents[2] != 0x22)
+        return 183;
+
+    // Pause freezes the hardware pitch, retaining both prepared halves.
+    ps2::sif::g_handlers.at(0x502)(0x103, 0x400, 4, 0x180, 4);
+    step();
+    if (ps2::sif::g_ee_sregs.back()
+        != std::pair<std::uint32_t, std::uint32_t>{13, 3}) return 184;
+    const std::uint32_t resume = 1;
+    std::memcpy(ps2::g_ram + 0x400, &resume, 4);
+    ps2::sif::g_handlers.at(0x502)(0x103, 0x400, 4, 0x180, 4);
+    step();
+    if (streams().size() != 4 || ps2::sif::g_ee_sregs.back().second != 1) return 185;
+
+    // Cross to half 1; the freed half must use the folded third block.
+    kernel::g_loop_addresses[0x226F] = 0x188010;
+    kernel::g_dma_done[0] = 0;
+    step();
+    if (streams().size() != 5 || streams().back().contents[2] != 0x31) return 186;
+    std::memset(ps2::g_ram + 0x400, 0, 0x24);
+    const std::uint32_t bank_id = 7;
+    std::memcpy(ps2::g_ram + 0x400, &bank_id, 4);
+    std::memcpy(ps2::g_ram + 0x404, "snd/test.bnk", 13);
+    ps2::sif::g_handlers.at(0x501)(0x101, 0x400, 0x24, 0x180, 4);
+    kernel::g_bank_job(kernel::g_queued_bank);
+    const auto before_bank = kernel::g_captures.size();
+    kernel::g_upload_job(kernel::g_queued_upload);
+    if (kernel::g_captures.size() != before_bank) return 187;
+    kernel::g_dma_done[0] = 1;
+    for (unsigned n = 0; n < 8; ++n)
+    {
+        step();
+        kernel::g_upload_job(kernel::g_queued_upload);
+    }
+    if (streams().size() != 6 || arkd::sound_upload_status() != 0x30000000u) return 188;
+
+    // Fourth logical block is the second physical half of block 0.
+    kernel::g_loop_addresses[0x226F] = 0x180010;
+    for (unsigned n = 0; n < 4; ++n) step();
+    uploaded = streams();
+    if (uploaded.size() != 8 || uploaded[6].contents[2] != 0x41
+        || uploaded[7].contents[2] != 0x42
+        || (uploaded[6].contents[0xF1] & 3) != 3 || uploaded[6].contents[0x100] != 0)
+        return 189;
+    kernel::g_loop_addresses[0x226F] = 0x188010;
+    for (unsigned n = 0; n < 4; ++n) step();
+    kernel::g_loop_addresses[0x226F] = 0x180010;
+    step();
+    if (status() != 0x30000000u || kernel::g_switch_writes.back()
+        != std::pair<std::uint32_t, std::uint32_t>{0x1601, 0xC00000}) return 190;
+
+    // A looping playlist reopens the selected segment instead of ending.
+    packet[2] = 1;
+    submit();
+    for (unsigned n = 0; n < 8; ++n) step();
+    for (unsigned half : {1u, 0u, 1u})
+    {
+        kernel::g_loop_addresses[0x226F] = 0x180010 + half * 0x8000;
+        for (unsigned n = 0; n < 4; ++n) step();
+    }
+    if (streams().back().contents[2] != 0x12 || status() != 0x30000000u) return 191;
+    const std::uint32_t fade = 2;
+    std::memcpy(ps2::g_ram + 0x400, &fade, 4);
+    ps2::sif::g_handlers.at(0x502)(0x102, 0x400, 4, 0x180, 4);
+    step();
+    auto tick = kernel::g_queued_stream;
+    tick.b = 1;
+    kernel::g_stream_job(tick);
+    kernel::g_stream_job(tick);
+    step();
+    if (status() != 0x30000000u) return 192;
+    packet[1] = 11;
+    submit();
+    step();
+    if (status() != 0x40000064u) return 193;
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     using namespace ps2::iop;
@@ -204,6 +337,7 @@ int main(int argc, char **argv)
     }
     if ((argc != 2 && argc != 3) || !ps2::disc::open(argv[1]))
         return 1;
+    if (argc == 3 && std::strcmp(argv[2], "streams") == 0) return test_streams();
 
     // The native catalog operates on the synthetic DVD, with no IRX bytes.
     arkd::c_catalog catalog;
@@ -253,7 +387,7 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    if (catalog.entry_count() != 6) return 2;
+    if (catalog.entry_count() != 7) return 2;
     const auto entry = catalog.find("PLY/SMALL.BIN");
     if (!entry || entry->file_size != 5000) return 3;
     if (catalog.find("missing.bin")) return 4;
@@ -1213,12 +1347,21 @@ class ArkdNativeHleTests(unittest.TestCase):
             big_bank[0x800 + index] = index & 0xFF
         reserved_bank = bytearray(bank)
         struct.pack_into("<I", reserved_bank, 8, 0x190000)
+        ams = bytearray(0x40800)
+        struct.pack_into("<IIII", ams, 0, 120, 0x1000, 3 * 0x8000 + 0x100, 2)
+        for offset, marker in ((0x800, 0x11), (0x20800, 0x21), (0x30800, 0x31), (0x10800, 0x41)):
+            for channel in range(2):
+                start = offset + channel * 0x8000
+                ams[start:start + 0x8000] = bytes([marker + channel]) * 0x8000
+                for block in range(start, start + 0x8000, 16):
+                    ams[block:block + 2] = bytes([12, 0])
         for name, content in {
             "dis/a_first.bin": b"A" * 13,
             "ply/small.bin": b"S" * 5000,
             "snd/test.bnk": bytes(bank),
             "snd/reserved.bnk": bytes(reserved_bank),
             "snd/big.bnk": bytes(big_bank),
+            "sqm/test.ams": bytes(ams),
             "trc/z_last.bin": b"Z" * 17,
         }.items():
             target = cls.game / name
@@ -1248,6 +1391,12 @@ class ArkdNativeHleTests(unittest.TestCase):
         self.assertFalse((self.root / "disc" / "INFO.DAT").exists())
         self.assertFalse((self.root / "disc" / "GAME.DAT").exists())
         self.assertFalse((self.root / "disc" / "ARKD_DVD.IRX").exists())
+
+    def test_ams_stream_buffers_and_controls(self):
+        environment = os.environ.copy()
+        environment["SDBZ_ARKD_NATIVE"] = "1"
+        subprocess.run([str(self.executable), str(self.root / "disc"), "streams"],
+                       env=environment, check=True)
 
     def test_pitch_against_original_mips(self):
         reference = os.environ.get("ARKD_REFERENCE_IRX")
