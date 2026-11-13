@@ -150,6 +150,23 @@ void invalidate_destination(std::uint64_t bitbltbuf, std::uint64_t trxreg)
     }
 }
 
+std::uint32_t atlas_scale(std::uint32_t chunk, std::uint32_t width,
+    std::uint32_t height)
+{
+    if (chunk >= 13) return 0;
+    const std::uint32_t base = chunk == 0 ? 256u : 512u;
+    if (width != height) return 0;
+    if (width == base) return 1;
+    if (width == base * 2u) return 2;
+    return 0;
+}
+
+bool valid_atlas_size(std::uint32_t chunk, std::uint32_t width,
+    std::uint32_t height)
+{
+    return atlas_scale(chunk, width, height) != 0;
+}
+
 const s_image *chunk_image(int index)
 {
     if (index < 0 || index >= static_cast<int>(g_images.size())) return nullptr;
@@ -160,10 +177,10 @@ const s_image *chunk_image(int index)
         if (!load_fpix_chunk_png("dis/main_menu.pix",
                 static_cast<std::uint32_t>(index), g_images[at]))
             g_images[at] = {};
-        const std::uint32_t expected = at == 0 ? 256u : 512u;
-        if (g_images[at].width != expected || g_images[at].height != expected
+        if (!valid_atlas_size(static_cast<std::uint32_t>(at),
+                g_images[at].width, g_images[at].height)
             || g_images[at].rgba.size() !=
-                static_cast<std::size_t>(expected) * expected * 4)
+                static_cast<std::size_t>(g_images[at].width) * g_images[at].height * 4)
             g_images[at] = {};
         if (trace_native_textures() && !g_image_reported[at])
         {
