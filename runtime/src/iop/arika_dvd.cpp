@@ -714,22 +714,6 @@ void complete_sound_bank(const kernel::Job &job)
     }
     g_loaded_bank_id = g_pending_bank.bank_id;
     g_bank_ready = true;
-    if (g_loaded_bank_id < k_sound_bank_slots)
-    {
-        std::size_t total = 0;
-        for (std::size_t index = 0; index < g_cached_banks.size(); ++index)
-        {
-            if (index != g_loaded_bank_id)
-                total += g_cached_banks[index].size();
-        }
-        if (g_sound_bank_data.size() <= k_max_total_bank_cache
-            && total <= k_max_total_bank_cache - g_sound_bank_data.size())
-            g_cached_banks[g_loaded_bank_id] = g_sound_bank_data;
-        else
-            std::fprintf(stderr,
-                "[arkd-native] total audio-bank cache limit reached; "
-                "older bank reloads may be unavailable\n");
-    }
     if (const auto metadata = inspect_sound_bank(
             g_sound_bank_data.data(), g_sound_bank_data.size()))
     {
@@ -738,6 +722,26 @@ void complete_sound_bank(const kernel::Job &job)
             g_loaded_bank_id, metadata->entry_count,
             metadata->spu_memory_bytes);
         begin_spu_upload();
+        // Cache only banks accepted for SPU2 upload. A malformed
+        // preload or failed growth must not replace an existing,
+        // potentially still-playing bank's reload source.
+        if (g_spu_upload.pending
+            && g_loaded_bank_id < k_sound_bank_slots)
+        {
+            std::size_t total = 0;
+            for (std::size_t index = 0; index < g_cached_banks.size(); ++index)
+            {
+                if (index != g_loaded_bank_id)
+                    total += g_cached_banks[index].size();
+            }
+            if (g_sound_bank_data.size() <= k_max_total_bank_cache
+                && total <= k_max_total_bank_cache - g_sound_bank_data.size())
+                g_cached_banks[g_loaded_bank_id] = g_sound_bank_data;
+            else
+                std::fprintf(stderr,
+                    "[arkd-native] total audio-bank cache limit reached; "
+                    "older bank reloads may be unavailable\n");
+        }
     }
 }
 
