@@ -201,7 +201,7 @@ class NewGameAssetTests(unittest.TestCase):
             cls.temp.cleanup()
 
     def run_fixture(self, fixture, mode):
-        subprocess.run([str(self.harness), str(fixture), mode], check=True)
+        # This suite validates the original IRX-compatible ISO overlay. Native\n        # ARKD reads GAME/ directly and intentionally skips this rebuild path.\n        env = os.environ.copy()\n        env["SDBZ_ARKD_NATIVE"] = "0"\n        subprocess.run([str(self.harness), str(fixture), mode], check=True, env=env)
         self.assertFalse((fixture / ".ps2-disc").exists())
 
     def test_builds_runtime_iso_without_sidecar(self):

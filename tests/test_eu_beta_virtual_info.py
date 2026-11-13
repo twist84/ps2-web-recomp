@@ -135,7 +135,7 @@ class EuBetaVirtualInfoTests(unittest.TestCase):
         root = self.make_assets(3)
         subprocess.run([
             str(self.executable), str(root), "3", "EU-BETA-TEST!",
-        ], check=True)
+        ], check=True, env={**os.environ, "SDBZ_ARKD_NATIVE": "0"})
         self.assertFalse((root / "INFO.DAT").exists())
         self.assertFalse((root / "GAME.DAT").exists())
 
@@ -143,13 +143,13 @@ class EuBetaVirtualInfoTests(unittest.TestCase):
         root = self.make_assets(1934)
         subprocess.run([
             str(self.executable), str(root), "1934", "EU-BETA-TEST!",
-        ], check=True)
+        ], check=True, env={**os.environ, "SDBZ_ARKD_NATIVE": "0"})
 
     def test_reaches_suspected_irx_sector_boundary(self):
         root = self.make_assets(2005)
         subprocess.run([
             str(self.executable), str(root), "2005", "EU-BETA-TEST!",
-        ], check=True)
+        ], check=True, env={**os.environ, "SDBZ_ARKD_NATIVE": "0"})
 
 
 if __name__ == "__main__":

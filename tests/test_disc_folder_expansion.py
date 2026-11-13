@@ -108,7 +108,7 @@ class LooseGameExpansionTests(unittest.TestCase):
             cls.temp.cleanup()
 
     def run_fixture(self, fixture, mode):
-        subprocess.run([str(self.harness), str(fixture), mode], check=True)
+        # Legacy GAME.DAT extent expansion is used by the original IRX path.\n        env = os.environ.copy()\n        env["SDBZ_ARKD_NATIVE"] = "0"\n        subprocess.run([str(self.harness), str(fixture), mode], check=True, env=env)
         self.assertFalse((fixture / ".ps2-disc").exists())
 
     def test_expands_when_game_dat_is_absent(self):
