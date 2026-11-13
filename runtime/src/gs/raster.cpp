@@ -96,7 +96,78 @@ std::uint32_t fetch(const Setup &s, int x, int y) {
     }
 }
 
+#ifdef PS2_NATIVE_PNG
+std::uint32_t fetch_native(const Setup &s, int x, int y)
+{
+    const int scale = static_cast<int>(s.native_image->width >> s.tw);
+    const auto wrap = [scale](int v, int base_size, int mode,
+        std::uint32_t min, std::uint32_t max)
+    {
+        const int size = base_size * scale;
+        switch (mode)
+        {
+        case 0: return v & (size - 1);
+        case 1: return std::clamp(v, 0, size - 1);
+        case 2: return std::clamp(v,
+            static_cast<int>(min) * scale,
+            static_cast<int>(max + 1u) * scale - 1);
+        default:
+            return static_cast<int>(
+                (static_cast<std::uint32_t>(v)
+                    & (min * scale + static_cast<std::uint32_t>(scale - 1)))
+                | (max * scale));
+        }
+    };
+    x = wrap(x, 1 << s.tw, s.wms, s.minu, s.maxu);
+    y = wrap(y, 1 << s.th, s.wmt, s.minv, s.maxv);
+    const std::size_t pixel =
+        (static_cast<std::size_t>(y) * s.native_image->width
+            + static_cast<std::size_t>(x)) * 4u;
+    const auto *rgba = s.native_image->rgba.data() + pixel;
+    const std::uint32_t alpha = (static_cast<std::uint32_t>(rgba[3]) + 1u) / 2u;
+    return static_cast<std::uint32_t>(rgba[0])
+        | (static_cast<std::uint32_t>(rgba[1]) << 8)
+        | (static_cast<std::uint32_t>(rgba[2]) << 16)
+        | (alpha << 24);
+}
+#endif
+
 std::uint32_t sample(const Setup &s, float u, float v) {
+#ifdef PS2_NATIVE_PNG
+    if (s.native_image && s.native_image->width != (1u << s.tw))
+    {
+        const float scale = static_cast<float>(s.native_image->width >> s.tw);
+        const float su = u * scale;
+        const float sv = v * scale;
+        if (!s.bilinear)
+            return fetch_native(s, static_cast<int>(std::floor(su)),
+                static_cast<int>(std::floor(sv)));
+        u = su - 0.5f;
+        v = sv - 0.5f;
+        const int x0 = static_cast<int>(std::floor(u));
+        const int y0 = static_cast<int>(std::floor(v));
+        const float fx = u - static_cast<float>(x0);
+        const float fy = v - static_cast<float>(y0);
+        const std::uint32_t c00 = fetch_native(s, x0, y0);
+        const std::uint32_t c10 = fetch_native(s, x0 + 1, y0);
+        const std::uint32_t c01 = fetch_native(s, x0, y0 + 1);
+        const std::uint32_t c11 = fetch_native(s, x0 + 1, y0 + 1);
+        std::uint32_t out = 0;
+        for (int ch = 0; ch < 32; ch += 8)
+        {
+            const float a = static_cast<float>((c00 >> ch) & 0xffu);
+            const float b = static_cast<float>((c10 >> ch) & 0xffu);
+            const float c = static_cast<float>((c01 >> ch) & 0xffu);
+            const float d = static_cast<float>((c11 >> ch) & 0xffu);
+            const float top = a + (b - a) * fx;
+            const float bottom = c + (d - c) * fx;
+            out |= static_cast<std::uint32_t>(
+                std::clamp(top + (bottom - top) * fy + 0.5f,
+                    0.0f, 255.0f)) << ch;
+        }
+        return out;
+    }
+#endif
     if (!s.bilinear) return fetch(s, static_cast<int>(std::floor(u)), static_cast<int>(std::floor(v)));
     u -= 0.5f;
     v -= 0.5f;
