@@ -466,9 +466,22 @@ int main(int argc, char **argv)
     const std::uint32_t spu_span = 0x18000;
     std::memcpy(header.data() + 4, &two_entries, 4);
     std::memcpy(header.data() + 8, &spu_span, 4);
+    const std::uint32_t first_parameter = 0x1111;
+    const std::uint32_t first_offset = 0;
+    const std::uint32_t second_parameter = 0x2222;
+    const std::uint32_t second_offset = 0x10000;
+    std::memcpy(header.data() + 0x0C, &first_parameter, 4);
+    std::memcpy(header.data() + 0x10, &first_offset, 4);
+    std::memcpy(header.data() + 0x14, &second_parameter, 4);
+    std::memcpy(header.data() + 0x18, &second_offset, 4);
     auto info = arkd::inspect_sound_bank(header.data(), header.size());
     if (!info || info->entry_count != 2 ||
-        info->spu_memory_bytes != spu_span) return 84;
+        info->spu_memory_bytes != spu_span
+        || info->entries.size() != 2
+        || info->entries[0].parameter != first_parameter
+        || info->entries[0].spu_offset != first_offset
+        || info->entries[1].parameter != second_parameter
+        || info->entries[1].spu_offset != second_offset) return 84;
     if (arkd::inspect_sound_bank(header.data(), 11)) return 85;
     const std::uint32_t excessive_entries = 255;
     std::memcpy(header.data() + 4, &excessive_entries, 4);
@@ -480,6 +493,10 @@ int main(int argc, char **argv)
     const std::uint32_t excessive_spu_span = 0x200001;
     std::memcpy(header.data() + 8, &excessive_spu_span, 4);
     if (arkd::inspect_sound_bank(header.data(), header.size())) return 88;
+    std::memcpy(header.data() + 8, &spu_span, 4);
+    const std::uint32_t invalid_offset = spu_span;
+    std::memcpy(header.data() + 0x18, &invalid_offset, 4);
+    if (arkd::inspect_sound_bank(header.data(), header.size())) return 89;
     return 0;
 }
 '''
