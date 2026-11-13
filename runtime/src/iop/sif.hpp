@@ -24,5 +24,6 @@ void dump();
 
 void register_hle_server(std::uint32_t id, HleServer server);
 void complete_call(std::uint32_t id);
+void publish_ee_sreg(std::uint32_t index, std::uint32_t value);
 
 }

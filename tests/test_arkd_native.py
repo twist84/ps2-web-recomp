@@ -142,6 +142,11 @@ void schedule(std::uint64_t, const Job &job)
 
 namespace ps2::sif {
 std::map<std::uint32_t, HleServer> g_handlers;
+std::vector<std::pair<std::uint32_t, std::uint32_t>> g_ee_sregs;
+void publish_ee_sreg(std::uint32_t index, std::uint32_t value)
+{
+    g_ee_sregs.emplace_back(index, value);
+}
 void register_hle_server(std::uint32_t id, HleServer callback)
 {
     g_handlers[id] = std::move(callback);
@@ -653,6 +658,11 @@ int main(int argc, char **argv)
     }
     if (arkd::sound_upload_status() != 0x30000000u
         || kernel::g_captures.size() != 2) return 95;
+    // The EE waits on the audio-worker result delivered via SIF command
+    // 0x80000001, SREG 12. RPC completion alone cannot release that wait.
+    if (ps2::sif::g_ee_sregs.empty()
+        || ps2::sif::g_ee_sregs.back().first != 12
+        || ps2::sif::g_ee_sregs.back().second != 0x30009000u) return 155;
 
     const auto &first_upload = kernel::g_captures[0];
     const auto &second_upload = kernel::g_captures[1];

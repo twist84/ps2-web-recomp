@@ -654,6 +654,7 @@ void complete_spu_upload(const kernel::Job &job)
         upload.pending = false;
         upload.waiting_for_dma = false;
         upload.state = 0x40000064u;
+        sif::publish_ee_sreg(12, upload.state);
         if (g_audio_worker.opcode == 2
             && g_audio_worker.selector == upload.bank_id)
             g_audio_worker.state = upload.state;
@@ -697,6 +698,12 @@ void complete_spu_upload(const kernel::Job &job)
     {
         upload.pending = false;
         upload.state = 0x30000000u;
+        const auto metadata = inspect_sound_bank(
+            g_sound_bank_data.data(), g_sound_bank_data.size());
+        // IRX 0x2CBC forwards the audio-worker result to EE SREG 12.
+        // Successful bank load retains the low halfword of the bank span.
+        sif::publish_ee_sreg(12, upload.state
+            | (metadata ? metadata->spu_memory_bytes & 0xFFFFu : 0u));
         if (g_audio_worker.opcode == 2
             && g_audio_worker.selector == upload.bank_id)
             g_audio_worker.state = upload.state;

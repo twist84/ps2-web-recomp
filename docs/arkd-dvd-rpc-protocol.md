@@ -466,6 +466,20 @@ instructions are included in this repository.
 
 ## Game-backed startup correction
 
+The subsequent black-screen loading stall was caused by a missing EE SIF
+status notification. Original worker `0x2C90` sends the audio-worker result
+to EE SREG 12 at `0x2CBC-0x2CCC` via SIF command `0x80000001`.
+The load result at `0x6480-0x649C` is `0x30000000 | (result & 0xFFFF)`;
+the first local sound bank produces `0x3000C270` (declared span 49,776).
+Native upload completion now sends this packet after DMA completes;
+upload failure also sends its error status. Completing the bank RPC alone
+did not satisfy the EE's separate status check.
+
+After this correction, a native 1,200-frame game-backed run loads menu
+textures and displays the 50Hz/60Hz/TEST/To Game menu, as visually checked
+against the original driver. This establishes startup/menu progress only;
+voice startup, gameplay and audio parity remain unverified.
+
 Native testing with the local EU beta initially stopped at frame 11 with a
 null EE call (return address `0x001ABB24`), while the original IRX reached
 the video-mode menu. The dispatch above corrects an earlier reversal of

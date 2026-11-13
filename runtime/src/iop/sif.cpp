@@ -773,6 +773,11 @@ void set_reg(std::uint32_t reg, std::uint32_t value) {
     else if (reg == 3) g_msflag |= value;
 }
 
+void publish_ee_sreg(std::uint32_t index, std::uint32_t value) {
+    const std::uint32_t packet[6] = {24, 0, kCmdSetSreg, 0, index, value};
+    send(packet, sizeof packet);
+}
+
 std::uint32_t set_dma(std::uint32_t transfers, std::uint32_t count) {
     if (!count) count = 1;
     std::uint64_t bytes = 0;
