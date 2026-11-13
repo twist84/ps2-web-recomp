@@ -37,7 +37,7 @@ class ResourcePackMenuInputTests(unittest.TestCase):
 
     def test_no_mouse_or_keyboard_in_pack_menu(self):
         self.assertNotIn("handle_pack_key", self.host)
-        self.assertNotIn("SDL_SCANCODE_F6", self.host)
+        self.assertIn("e.key.keysym.scancode == SDL_SCANCODE_F6", self.host)
         self.assertNotIn("e.type == SDL_MOUSEBUTTONDOWN", self.host)
         self.assertNotIn("e.type == SDL_MOUSEWHEEL", self.host)
         self.assertNotIn("SDL_SCANCODE_SPACE", self.host)
