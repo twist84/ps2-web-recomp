@@ -42,9 +42,11 @@ HleModuleStart g_start;
 JobHandler g_read_job = nullptr;
 JobHandler g_voice_job = nullptr;
 JobHandler g_bank_job = nullptr;
+JobHandler g_audio_job = nullptr;
 Job g_queued_read;
 Job g_queued_voice;
 Job g_queued_bank;
+Job g_queued_audio;
 std::vector<std::pair<std::uint32_t, std::uint32_t>> g_voice_writes;
 std::vector<std::vector<std::uint8_t>> g_effect_calls;
 std::vector<std::uint32_t> g_effect_cores;
@@ -79,6 +81,7 @@ void register_job(std::uint32_t kind, JobHandler callback)
     if (kind == kJobArkdRead) g_read_job = callback;
     else if (kind == kJobArkdVoice) g_voice_job = callback;
     else if (kind == kJobArkdBank) g_bank_job = callback;
+    else if (kind == kJobArkdAudio) g_audio_job = callback;
 }
 std::uint64_t now() { return 0; }
 std::uint64_t usec_to_cycles(std::uint64_t us) { return us; }
@@ -86,6 +89,7 @@ void schedule(std::uint64_t, const Job &job)
 {
     if (job.kind == kJobArkdVoice) g_queued_voice = job;
     else if (job.kind == kJobArkdBank) g_queued_bank = job;
+    else if (job.kind == kJobArkdAudio) g_queued_audio = job;
     else g_queued_read = job;
 }
 }
@@ -405,6 +409,43 @@ int main(int argc, char **argv)
     loaded_reader.set_version(8);
     arkd::state(loaded_reader);
     if (!arkd::sound_bank_ready()) return 71;
+
+    // IRX 0x501/0x102 and /0x103 queue a single word selector for
+    // the audio worker. Until the SPU2 stage is ported, completion
+    // must report an explicit failure, never false success.
+    const std::uint32_t selector = 0x12345678;
+    std::memcpy(ps2::g_ram + 0x400, &selector, 4);
+    if (!ps2::sif::g_handlers.at(0x501)(0x102, 0x400, 4, 0x180, 4)
+        || word(0x180) != 0) return 72;
+    if (!kernel::g_audio_job || kernel::g_queued_audio.kind != kernel::kJobArkdAudio
+        || arkd::audio_worker_status() != 0x10000000u) return 73;
+    if (!ps2::sif::g_handlers.at(0x501)(0x103, 0x400, 4, 0x180, 4)
+        || word(0x180) != 0x80000065u) return 74;
+
+    const auto pending_audio_job = kernel::g_queued_audio;
+    ps2::state::Writer audio_writer;
+    audio_writer.set_version(9);
+    arkd::state(audio_writer);
+    kernel::g_audio_job(pending_audio_job);
+    if (arkd::audio_worker_status() != 0x40000064u) return 75;
+
+    ps2::state::Reader audio_reader(audio_writer.out.data(), audio_writer.out.size());
+    audio_reader.set_version(9);
+    arkd::state(audio_reader);
+    if (arkd::audio_worker_status() != 0x10000000u) return 76;
+    kernel::g_audio_job(pending_audio_job);
+    if (arkd::audio_worker_status() != 0x40000064u) return 77;
+    if (!ps2::sif::g_handlers.at(0x501)(0x103, 0x400, 4, 0x180, 4)
+        || word(0x180) != 0) return 78;
+    kernel::g_audio_job(kernel::g_queued_audio);
+    if (arkd::audio_worker_status() != 0x40000064u) return 79;
+
+    // Loading an older version discards the new worker state.
+    ps2::state::Reader legacy_audio(loaded_writer.out.data(),
+        loaded_writer.out.size());
+    legacy_audio.set_version(8);
+    arkd::state(legacy_audio);
+    if (arkd::audio_worker_status() != 0x30000000u) return 80;
     return 0;
 }
 '''
