@@ -497,14 +497,14 @@ int main(int argc, char **argv)
     audio_writer.set_version(9);
     arkd::state(audio_writer);
     kernel::g_audio_job(pending_audio_job);
-    if (arkd::audio_worker_status() != 0x40000064u) return 75;
+    if (arkd::audio_worker_status() != 0x4000012Cu) return 75;
 
     ps2::state::Reader audio_reader(audio_writer.out.data(), audio_writer.out.size());
     audio_reader.set_version(9);
     arkd::state(audio_reader);
     if (arkd::audio_worker_status() != 0x10000000u) return 76;
     kernel::g_audio_job(pending_audio_job);
-    if (arkd::audio_worker_status() != 0x40000064u) return 77;
+    if (arkd::audio_worker_status() != 0x4000012Cu) return 77;
     if (!ps2::sif::g_handlers.at(0x501)(0x103, 0x400, 4, 0x180, 4)
         || word(0x180) != 0) return 78;
     kernel::g_audio_job(kernel::g_queued_audio);
@@ -608,6 +608,29 @@ int main(int argc, char **argv)
         if (first_upload.contents[index] != (index & 0xFFu)) return 97;
     for (std::uint32_t index = 0; index < 0x40; ++index)
         if (second_upload.contents[index] != (index & 0xFFu)) return 98;
+
+    // The original 0x501/0x102 command releases a selected SPU bank.
+    // Native mode retains other banks at stable addresses and can then
+    // reuse the freed interval on a later allocation.
+    const auto bank_address = arkd::sound_bank_spu_address(upload_bank_id);
+    if (!bank_address || *bank_address != 0x5050) return 104;
+    std::memcpy(ps2::g_ram + 0x400, &upload_bank_id, 4);
+    if (!ps2::sif::g_handlers.at(0x501)(0x102, 0x400, 4, 0x180, 4)
+        || word(0x180) != 0) return 105;
+    kernel::g_audio_job(kernel::g_queued_audio);
+    if (arkd::audio_worker_status() != 0x30000000u
+        || arkd::sound_bank_spu_address(upload_bank_id))
+        return 106;
+
+    if (!ps2::sif::g_handlers.at(0x501)(0x101, 0x100, 0x24, 0x180, 4)
+        || word(0x180) != 0) return 107;
+    kernel::g_bank_job(kernel::g_queued_bank);
+    const auto reused = arkd::sound_bank_spu_address(upload_bank_id);
+    if (!reused || *reused != *bank_address) return 108;
+    for (unsigned step = 0; step < 8 &&
+         arkd::sound_upload_status() != 0x30000000u; ++step)
+        kernel::g_upload_job(kernel::g_queued_upload);
+    if (arkd::sound_upload_status() != 0x30000000u) return 109;
     return 0;
 }
 '''
