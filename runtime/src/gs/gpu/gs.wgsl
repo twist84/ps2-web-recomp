@@ -931,7 +931,7 @@ fn plot(s: Setup, x: i32, y: i32, k: u32, at: Attr) {
 }
 
 const PRIM_WORDS: u32 = 28u;
-const SETUP_WORDS: u32 = 25u;
+const SETUP_WORDS: u32 = 26u;
 
 fn fat(i: u32) -> f32 {
     return bitcast<f32>(data[i]);
