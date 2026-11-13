@@ -104,6 +104,28 @@ so supporting them means reproducing actual SPU2 interactions and
 interrupt/completion semantics. A generic zero-valued reply is not
 a correct substitute.
 
+## 0x501/0x102 and 0x501/0x103 audio worker admission
+
+The EU IRX handlers at `0x65C8` and `0x6668` share the same
+control sequence: copy the 32-bit request selector to `0x3334` or
+`0x3338`, clear a worker-ready bit, set command opcode 1 or 2,
+set the worker state to `0x10000000`, and wake its thread.
+The thread dispatcher at `0x62C8` calls `0x5228` (opcode 1) or
+`0x5F08` (opcode 2).
+
+Native HLE now accepts and queues both RPC commands, reports busy
+when the same audio worker has a pending request, and serializes
+its selector, opcode, pending flag and serial in **savestate v9**.
+The job callback currently returns an explicit **unsupported SPU2
+operation error `0x40000064`**, rather than reporting a successful
+upload that did not happen. The status is exposed internally through
+`arkd::audio_worker_status()` for regression tests.
+
+**This is protocol admission only, not an emulation of the worker
+operations.** The original `0x5228`/`0x5F08` code manipulates
+per-bank IOP state and performs sound hardware interactions. Until
+those calls are ported, these RPCs cannot complete successfully.
+
 ## Native 0x501/0x101 sound-bank preload (partial)
 
 The original `0x6528` method copies 36 bytes to its worker request
