@@ -37,7 +37,7 @@ public:
         std::uint32_t bpp = 0;
         switch (psm)
         {
-        case 0x00: case 0x30: case 0x1b: case 0x24: case 0x2c:
+        case 0x00: case 0x30:
             bpp = 32;
             break;
         case 0x01: case 0x31:
@@ -46,10 +46,10 @@ public:
         case 0x02: case 0x0a: case 0x32: case 0x3a:
             bpp = 16;
             break;
-        case 0x13:
+        case 0x13: case 0x1b:
             bpp = 8;
             break;
-        case 0x14:
+        case 0x14: case 0x24: case 0x2c:
             bpp = 4;
             break;
         default:
