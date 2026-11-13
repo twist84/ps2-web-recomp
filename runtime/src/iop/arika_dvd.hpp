@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace ps2::state { class Stream; }
 
@@ -20,10 +21,17 @@ struct s_asset
 // The original 0x501/0x101 bank reader examines the first DVD sector:
 // +4 entry count, +8 declared SPU2 memory span, +0x0C pairs of u32s.
 // These describe the bank's metadata, not raw PCM or decoded ADPCM.
+struct s_sound_bank_entry
+{
+    std::uint32_t parameter = 0;
+    std::uint32_t spu_offset = 0;
+};
+
 struct s_sound_bank_info
 {
     std::uint32_t entry_count = 0;
     std::uint32_t spu_memory_bytes = 0;
+    std::vector<s_sound_bank_entry> entries;
 };
 
 std::optional<s_sound_bank_info> inspect_sound_bank(
