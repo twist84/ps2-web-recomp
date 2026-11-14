@@ -4,6 +4,7 @@
 
 #include "window.hpp"
 #include "window_preferences.hpp"
+#include "texture_dump_job.hpp"
 
 #include "ps2/system.hpp"
 #include "ps2/presentation.hpp"
@@ -31,6 +32,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <thread>
 #include <vector>
@@ -108,6 +110,8 @@ void notify(const char *message)
 bool g_pack_manager_open = false;
 bool g_pack_shortcut_down = false;
 int g_pack_column = 1;
+int g_pack_last_column = 1;
+std::string g_dump_last_status;
 int g_pack_row = 0;
 std::vector<std::string> g_pack_enabled;
 std::vector<std::string> g_pack_available;
@@ -124,7 +128,7 @@ void refresh_pack_overlay()
         "RESOURCE PACKS",
         "F6 / SELECT + START: open / cancel   START: save",
         "A: toggle   D-PAD LEFT / RIGHT: move",
-        "D-PAD UP / DOWN: select   LB / RB: reorder   B: cancel",
+        "D-PAD: select   A: activate dump row   LB/RB: reorder   B: cancel",
         "",
         "ENABLED - highest priority first"
     };
@@ -149,8 +153,14 @@ void refresh_pack_overlay()
             + g_pack_available[i]);
     }
     lines.push_back("");
+    lines.push_back(g_pack_column == 2
+        ? "> DUMP ALL TEXTURES TO PACK"
+        : "  DUMP ALL TEXTURES TO PACK");
+    const auto dump_status = sdbz::texture_dump_job::status();
+    if (!dump_status.message.empty())
+        lines.push_back(dump_status.message);
     if (!g_pack_feedback.empty()) lines.push_back(g_pack_feedback);
-    lines.push_back("Press START to apply packs without restarting");
+    lines.push_back("START: apply packs live; DOWN at end: dump action");
     ps2::resource_pack_overlay::set_lines(std::move(lines));
 }
 
@@ -168,7 +178,9 @@ void open_pack_manager()
             g_pack_available.push_back(pack.m_id);
     }
     g_pack_manager_open = true;
-    g_pack_column = g_pack_enabled.empty() ? 0 : 1;
+    g_pack_column = g_pack_enabled.empty()
+        ? (g_pack_available.empty() ? 2 : 0) : 1;
+    g_pack_last_column = g_pack_column == 2 ? 1 : g_pack_column;
     g_pack_row = 0;
     refresh_pack_overlay();
 }
@@ -211,13 +223,45 @@ void handle_pack_action(e_pack_action action)
         close_pack_manager(true);
         return;
     }
+    if (g_pack_column == 2)
+    {
+        if (action == _pack_action_toggle)
+        {
+            const char *base = SDL_GetBasePath();
+            const std::string executable = base ? base : ".";
+            if (base) SDL_free(const_cast<char *>(base));
+            const bool started = sdbz::texture_dump_job::start(
+                ps2::g_options.disc_path, executable);
+            g_pack_feedback = started ? "Texture export started"
+                : sdbz::texture_dump_job::status().message;
+        }
+        else if (action == _pack_action_up || action == _pack_action_left
+            || action == _pack_action_right)
+        {
+            g_pack_column = g_pack_last_column;
+            auto &previous = g_pack_column ? g_pack_enabled : g_pack_available;
+            g_pack_row = previous.empty()
+                ? 0 : static_cast<int>(previous.size()) - 1;
+        }
+        refresh_pack_overlay();
+        return;
+    }
     auto &current = g_pack_column ? g_pack_enabled : g_pack_available;
     if (action == _pack_action_up || action == _pack_action_down)
     {
-        if (!current.empty())
+        if (action == _pack_action_down && (current.empty()
+            || g_pack_row >= static_cast<int>(current.size()) - 1))
+        {
+            g_pack_last_column = g_pack_column;
+            g_pack_column = 2;
+            g_pack_row = 0;
+        }
+        else if (!current.empty())
+        {
             g_pack_row = std::clamp(g_pack_row
                 + (action == _pack_action_up ? -1 : 1), 0,
                 static_cast<int>(current.size()) - 1);
+        }
     }
     else if (action == _pack_action_left || action == _pack_action_right
         || action == _pack_action_toggle)
@@ -691,6 +735,15 @@ void poll() {
     else
     {
         g_pack_shortcut_down = false;
+    }
+    if (g_pack_manager_open)
+    {
+        const auto job = sdbz::texture_dump_job::status();
+        if (job.message != g_dump_last_status)
+        {
+            g_dump_last_status = job.message;
+            refresh_pack_overlay();
+        }
     }
     poll_port(0);
     poll_port(1);
