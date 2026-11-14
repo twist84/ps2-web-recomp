@@ -888,7 +888,8 @@ void write(std::uint32_t reg, std::uint64_t value) {
         need_trace = need_trace || native_texture::replacements_available();
         if ((value & 3u) == 0 || (value & 3u) == 2)
         {
-            native_texture::invalidate_destination(s.bitbltbuf, s.trxreg);
+            native_texture::invalidate_destination(s.bitbltbuf, s.trxreg,
+                s.trxpos);
             ++g_setup_generation;
         }
 #endif
