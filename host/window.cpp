@@ -227,12 +227,12 @@ void handle_pack_action(e_pack_action action)
     {
         if (action == _pack_action_toggle)
         {
-            const char *base = SDL_GetBasePath();
+            char *base = SDL_GetBasePath();
             const std::string executable = base ? base : ".";
-            if (base) SDL_free(const_cast<char *>(base));
+            if (base) SDL_free(base);
             const bool started = sdbz::texture_dump_job::start(
                 ps2::g_options.disc_path, executable);
-            g_pack_feedback = started ? "Texture export started"
+            g_pack_feedback = started ? ""
                 : sdbz::texture_dump_job::status().message;
         }
         else if (action == _pack_action_up || action == _pack_action_left
