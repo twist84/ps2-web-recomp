@@ -429,7 +429,38 @@ const s_image *chunk_image(int index)
                 entry.image.width, entry.image.height)
             || entry.image.rgba.size() !=
                 static_cast<std::size_t>(entry.image.width) * entry.image.height * 4)
+        {
             entry.image = {};
+        }
+        if (trace_native_textures())
+        {
+            resource_pack::s_resource source{};
+            const bool packed = resource_pack::find_resource(
+                "textures/" + entry.path + ".png", source);
+            std::size_t black_opaque = 0;
+            std::size_t transparent = 0;
+            const auto &pixels = entry.image.rgba;
+            for (std::size_t at = 0; at + 3 < pixels.size(); at += 4)
+            {
+                if (!pixels[at] && !pixels[at + 1] && !pixels[at + 2]
+                    && pixels[at + 3] >= 250)
+                {
+                    ++black_opaque;
+                }
+                if (!pixels[at + 3])
+                {
+                    ++transparent;
+                }
+            }
+            std::fprintf(stderr,
+                "[gs-native] png name=%s source=%s result=%s"
+                " size=%ux%u opaque-black=%zu transparent=%zu total=%zu\\n",
+                entry.path.c_str(),
+                packed ? source.m_pack_id.c_str() : "legacy-NATIVE/none",
+                pixels.empty() ? "missing/invalid" : "loaded",
+                entry.image.width, entry.image.height,
+                black_opaque, transparent, pixels.size() / 4);
+        }
     }
     return entry.image.rgba.empty() ? nullptr : &entry.image;
 }
