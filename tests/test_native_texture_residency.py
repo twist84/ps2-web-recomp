@@ -89,16 +89,22 @@ int main()
             | (2ull << 48) | (0x13ull << 56);
         const std::uint64_t trxreg = 64ull | (64ull << 32);
         if (!register_named_upload("ply/name_only.pix.000",
-            bitbltbuf, trxreg, 0)) return 45;
+            bitbltbuf, trxreg, 0, 0x123u)) return 45;
         if (register_named_upload("ply/name_only.pix.000",
-            bitbltbuf, trxreg, 0)) return 46; // already registered
-        const int index = resident_chunk(0x3800, 2, 0x13, 64, 64);
+            bitbltbuf, trxreg, 0, 0x123u)) return 46; // already registered
+        const int index = resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u);
         if (index < 0 || texture_path(index) != "ply/name_only.pix.000")
         {
             return 47;
         }
+        // TEX2 can change the palette without changing the pixel buffer.
+        // Do not paint a PNG decoded for the previous CLUT over this draw.
+        if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x124u) != -1)
+        {
+            return 50;
+        }
         reload_replacements();
-        const int restored = resident_chunk(0x3800, 2, 0x13, 64, 64);
+        const int restored = resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u);
         if (restored < 0
             || texture_path(restored) != "ply/name_only.pix.000") return 48;
         invalidate_destination(bitbltbuf, trxreg);
