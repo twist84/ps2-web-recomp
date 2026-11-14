@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cctype>
+#include <exception>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -337,10 +339,11 @@ void export_asset(const std::string &name, const std::vector<std::uint8_t> &data
     {
         s_texture image;
         const bool wrapped = std::memcmp(data.data(), "XPIX", 4) == 0;
-        const auto *tim2 = data.data() + (wrapped ? 32 : 0);
-        const auto length = wrapped && data.size() >= 32 ? data.size() - 32 : 0;
-        if ((wrapped && data.size() < 36)
-            || !decode_tim2(tim2, wrapped ? length : data.size(), image, reason))
+        const bool valid_wrapper = !wrapped || data.size() >= 36;
+        const auto *tim2 = data.data() + (wrapped && valid_wrapper ? 32 : 0);
+        const auto length = wrapped && valid_wrapper ? data.size() - 32 : data.size();
+        if (!valid_wrapper
+            || !decode_tim2(tim2, length, image, reason))
         {
             if (reason.empty()) reason = "unsupported asset";
         }
