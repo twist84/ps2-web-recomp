@@ -28,6 +28,10 @@ std::vector<int> resident_chunks();
 bool replacements_available();
 void invalidate_destination(std::uint64_t bitbltbuf, std::uint64_t trxreg,
     std::uint64_t trxpos = 0);
+// Preserve canonical source identity when a verified complete indexed
+// image is copied within GS VRAM. Unknown/partial copies only invalidate.
+void local_copy_destination(std::uint64_t bitbltbuf,
+    std::uint64_t trxreg, std::uint64_t trxpos);
 int complete_upload(const s_texture_upload_signature &upload);
 // Register an upload whose identity is established by an asset decoder.
 // Must be called on the GS render thread after a complete image upload.
