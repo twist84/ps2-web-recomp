@@ -3,6 +3,7 @@
 #include <array>
 #include <algorithm>
 #include <iterator>
+#include <regex>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -92,6 +93,21 @@ bool wait_done()
     return false;
 }
 
+std::vector<fs::path> dumped_packs(const fs::path &root)
+{
+    std::vector<fs::path> result;
+    const std::regex pattern(
+        R"(^GAME Texture Dump [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}-[0-9]{2}-[0-9]{2}( \([0-9]+\))?$)");
+    for (const auto &entry : fs::directory_iterator(root / "resourcepacks"))
+    {
+        if (entry.is_directory()
+            && std::regex_match(entry.path().filename().string(), pattern))
+            result.push_back(entry.path());
+    }
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
 bool check_result(const fs::path &output)
 {
     const auto png = output / "assets/sdbz/textures/dis/sample.tim2.000.png";
@@ -126,7 +142,8 @@ int main()
                   << sdbz::texture_dump_job::status().message << "\n";
         return 1;
     }
-    if (!check_result(root / "resourcepacks/GAME Texture Dump")) return 2;
+    const auto first_packs = dumped_packs(root);
+    if (first_packs.size() != 1 || !check_result(first_packs.front())) return 2;
     const auto archived = root / "archived";
     make_archive(archived);
     if (!sdbz::texture_dump_job::start(archived.string(), root.string())
@@ -136,8 +153,14 @@ int main()
                   << sdbz::texture_dump_job::status().message << "\n";
         return 3;
     }
-    if (!check_result(root / "resourcepacks/GAME Texture Dump 2")) return 4;
-    if (!fs::exists(root / "resourcepacks/GAME Texture Dump/pack.json")) return 5;
+    const auto all_packs = dumped_packs(root);
+    if (all_packs.size() != 2) return 4;
+    for (const auto &pack : all_packs)
+    {
+        if (!check_result(pack)) return 5;
+        if (!fs::exists(pack / "pack.json")) return 6;
+    }
+    if (all_packs[0] == all_packs[1]) return 7;
     fs::remove_all(root);
     return 0;
 }
