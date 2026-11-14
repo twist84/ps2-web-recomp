@@ -70,6 +70,9 @@ struct s_resident
     std::string logical_name;
     bool named = false;
     bool valid = false;
+    // Original CLUT address is part of indexed texture identity.
+    // UINT32_MAX is retained for legacy fingerprint entries.
+    std::uint32_t clut_bp = 0xffffffffu;
 };
 
 std::vector<s_entry> g_entries;
@@ -474,7 +477,7 @@ int complete_upload(const s_texture_upload_signature &upload)
 
 bool register_named_upload(const std::string &logical_name,
     std::uint64_t bitbltbuf, std::uint64_t trxreg,
-    std::uint64_t trxpos)
+    std::uint64_t trxpos, std::uint32_t clut_bp)
 {
     if (trxpos != 0)
     {
@@ -485,7 +488,7 @@ bool register_named_upload(const std::string &logical_name,
     const auto height = static_cast<std::uint32_t>(trxreg >> 32) & 0xfffu;
     const auto bw = static_cast<std::uint32_t>(bitbltbuf >> 48) & 0x3fu;
     const auto bp = static_cast<std::uint32_t>(bitbltbuf >> 32) & 0x3fffu;
-    if (!bw || bp >= k_gs_blocks
+    if (!bw || bp >= k_gs_blocks || clut_bp > 0x3fffu
         || find_named_identity(logical_name, psm, width, height) < 0)
     {
         return false;
@@ -501,6 +504,7 @@ bool register_named_upload(const std::string &logical_name,
             && existing.bp == bp && existing.bw == bw
             && existing.psm == psm && existing.width == width
             && existing.height == height
+            && existing.clut_bp == clut_bp
             && existing.logical_name == logical_name)
         {
             return false; // No new residency: avoid invalidating setup.
@@ -533,12 +537,13 @@ bool register_named_upload(const std::string &logical_name,
     *slot = {bp, std::min(k_gs_blocks,
         bp + transfer_blocks(bitbltbuf, trxreg)),
         bw, width, height, psm, 0, logical_name, true, true};
+    slot->clut_bp = clut_bp;
     g_resident_by_bp[bp] = static_cast<int>(slot_index);
     return true;
 }
 
 int resident_chunk(std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
-    std::uint32_t width, std::uint32_t height)
+    std::uint32_t width, std::uint32_t height, std::uint32_t clut_bp)
 {
     if (bp >= k_gs_blocks)
     {
@@ -552,7 +557,10 @@ int resident_chunk(std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
     const auto &resident = g_residents[static_cast<std::size_t>(slot)];
     if (!resident.valid || resident.bp != bp || resident.bw != bw
         || resident.psm != psm || resident.width != width
-        || resident.height != height)
+        || resident.height != height
+        || (resident.named && resident.clut_bp != 0xffffffffu
+            && clut_bp != 0xffffffffu
+            && resident.clut_bp != clut_bp))
     {
         return -1;
     }
