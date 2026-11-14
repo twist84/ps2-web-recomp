@@ -128,17 +128,26 @@ int main()
         }
         if (!register_named_upload("ply/name_only.pix.000",
             bitbltbuf, trxreg, 0, 0x123u)) return 58;
-        // Changing the CLUT bytes at the same CBP also invalidates a
-        // decoded PNG, even when TEX0's palette address never changes.
+        // The game frequently animates a menu selection by rewriting
+        // only its CLUT, without re-uploading the original indexed pixels
+        // or repeating the texture-handle bind. The native PNG identity
+        // must survive these writes, or the text flashes back to English.
         const std::uint64_t clut_buf = (0x123ull << 32)
             | (1ull << 48) | (0x00ull << 56);
         const std::uint64_t clut_reg = 16ull | (16ull << 32);
-        invalidate_destination(clut_buf, clut_reg);
-        if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u) != -1)
+        for (int n = 0; n < 8; ++n)
         {
-            return 59;
+            invalidate_destination(clut_buf, clut_reg);
+            const int selection = resident_chunk(0x3800, 2,
+                0x13, 64, 64, 0x123u);
+            if (selection != index
+                || texture_path(selection) != "ply/name_only.pix.000")
+            {
+                return 59;
+            }
         }
-        if (!register_named_upload("ply/name_only.pix.000",
+        // Reusing a name with the same GS layout is not a new bind.
+        if (register_named_upload("ply/name_only.pix.000",
             bitbltbuf, trxreg, 0, 0x123u)) return 60;
         // Unrelated writes must not discard an otherwise live image.
         const std::uint64_t unrelated = (0x3000ull << 32)
