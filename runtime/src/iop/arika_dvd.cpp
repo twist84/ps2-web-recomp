@@ -2041,6 +2041,7 @@ void start_module()
 void c_catalog::clear()
 {
     m_assets.clear();
+    m_texture_paths.clear();
     m_game_sector = 0;
 }
 
@@ -2137,6 +2138,37 @@ bool c_catalog::open()
     }
 
     m_assets = std::move(assets);
+
+    // Canonicalize by the archive's own filenames, not texture hashes.
+    // In-game CTexture names omit the path, ".pix", and the dot before
+    // the three-digit FPIX chunk index. Duplicate basenames are unsafe:
+    // an empty value explicitly marks them as ambiguous.
+    for (const auto &[filename, asset] : m_assets)
+    {
+        (void)asset;
+        if (filename.size() <= 4
+            || filename.compare(filename.size() - 4, 4, ".pix") != 0)
+        {
+            continue;
+        }
+        const auto separator = filename.find_last_of("/\\");
+        const std::size_t begin = separator == std::string::npos
+            ? 0 : separator + 1;
+        const std::string stem = filename.substr(
+            begin, filename.size() - begin - 4);
+        if (stem.empty())
+        {
+            continue;
+        }
+        std::string canonical = filename;
+        std::replace(canonical.begin(), canonical.end(), '\\', '/');
+        const auto [it, inserted] =
+            m_texture_paths.emplace(stem, canonical);
+        if (!inserted && it->second != canonical)
+        {
+            it->second.clear();
+        }
+    }
     return !m_assets.empty();
 }
 
@@ -2145,6 +2177,34 @@ std::optional<s_asset> c_catalog::find(std::string_view name) const
     const auto it = m_assets.find(name_key(name));
     if (it == m_assets.end()) return std::nullopt;
     return it->second;
+}
+
+std::string c_catalog::resolve_texture_name(std::string_view source) const
+{
+    if (source.size() < 4)
+    {
+        return {};
+    }
+    const std::size_t suffix_at = source.size() - 3;
+    for (std::size_t i = suffix_at; i < source.size(); ++i)
+    {
+        if (source[i] < '0' || source[i] > '9')
+        {
+            return {};
+        }
+    }
+    const std::string stem = name_key(source.substr(0, suffix_at));
+    const auto it = m_texture_paths.find(stem);
+    if (it == m_texture_paths.end() || it->second.empty())
+    {
+        return {};
+    }
+    return it->second + "." + std::string(source.substr(suffix_at));
+}
+
+std::string resolve_texture_name(std::string_view name)
+{
+    return g_catalog.resolve_texture_name(name);
 }
 
 std::size_t c_catalog::read(const s_asset &asset, std::uint32_t offset,
