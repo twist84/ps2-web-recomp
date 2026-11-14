@@ -1901,9 +1901,10 @@ bool open_folder(const fs::path &root)
         const bool native = native_arkd_selected();
         std::vector<s_direct_game_asset> direct_assets;
         std::vector<s_native_asset> replacement_assets;
+        fs::path regional_zip;
         if (native)
         {
-            direct_assets = enumerate_direct_game(root);
+            direct_assets = enumerate_direct_game(root, regional_zip);
             replacement_assets = enumerate_native_assets(root);
         }
 
@@ -1914,7 +1915,13 @@ bool open_folder(const fs::path &root)
             });
         if (mounted && native)
         {
-            g_direct_game_assets = std::move(direct_assets);
+            {
+                std::lock_guard<std::mutex> lock(g_direct_zip_mutex);
+                g_direct_zip_cache.clear();
+                g_direct_zip_cached_bytes = 0;
+                g_direct_game_zip_path = std::move(regional_zip);
+                g_direct_game_assets = std::move(direct_assets);
+            }
             g_native_assets = std::move(replacement_assets);
             const fs::path native_dir = find_directory(root, "NATIVE");
             if (!native_dir.empty())
