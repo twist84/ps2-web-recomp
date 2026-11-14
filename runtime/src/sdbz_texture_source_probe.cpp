@@ -13,13 +13,12 @@ namespace ps2
 {
 namespace
 {
-// Identified from the EU Beta SLES_541.61 ELF, not valid for other regions.
-// 0x19AA70: CPixTexture::Initialize(this, FPIX*, ...)
-// 0x19A670: CTexture::Initialize(this, TIM2*, ..., ...)
-// 0x10E700: the texture-handle allocator called by CTexture::Initialize.
+// Identified from the EU Beta SLES_541.61 and Japan SLPS_256.42 ELFs.
+// Original guest execution is retained; these are observation points only.
 constexpr std::uint32_t k_pix_initialize_eu_beta = 0x0019AA70u;
 constexpr std::uint32_t k_texture_initialize_eu_beta = 0x0019A670u;
-constexpr std::uint32_t k_texture_handle_alloc_eu_beta = 0x0010E700u;
+constexpr std::uint32_t k_pix_initialize_japan = 0x0019A860u;
+constexpr std::uint32_t k_texture_initialize_japan = 0x0019A460u;
 constexpr std::size_t k_max_name = 80;
 
 const std::uint8_t *ee_bytes(std::uint32_t address, std::size_t size)
@@ -158,14 +157,12 @@ void sdbz_texture_source_probe(Cpu &cpu, std::uint32_t pc)
     switch (pc)
     {
     case k_pix_initialize_eu_beta:
+    case k_pix_initialize_japan:
         inspect_pix(cpu);
         break;
     case k_texture_initialize_eu_beta:
+    case k_texture_initialize_japan:
         inspect_texture(cpu);
-        break;
-    case k_texture_handle_alloc_eu_beta:
-        // Reserved for correlating the guest handle with its source.
-        // Do not inspect non-texture guest memory or make guessed bindings.
         break;
     default:
         break;
