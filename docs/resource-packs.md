@@ -186,6 +186,37 @@ correct loader/decode hook is available, the existing fingerprint-based
 path remains in service. Do not remove the registry files or enable a
 strict name-only mode on this intermediate change.
 
+### Name capture from the actual EE texture constructors (research)
+
+Disassembly of the user-provided PS2 executables establishes the following
+name-preserving call chain:
+
+| Operation | EU Beta SLES_541.61 | Japan SLPS_256.42 |
+|---|---|---|
+| CPixTexture::Initialize | 0x0019AA70 | 0x0019A860 |
+| CTexture::Initialize | 0x0019A670 | 0x0019A460 |
+| Texture-handle allocator | 0x0010E700 | 0x0010E670 |
+
+The CPixTexture function calls the FPIX validator/chunk enumerator, formats a
+per-chunk name with `%s%03d`, and creates the individual texture object.
+The CTexture function has the inline texture name at `this + 0x10`, its
+TIM2 source pointer in its second argument and stores the returned texture
+handle at `this + 0x38`.
+
+`PS2_TRACE_SDBZ_TEXTURE_NAMES=1` now enables **read-only** observation of
+these constructor entries in the generated EE dispatcher. For a valid FPIX
+or TIM2 input it prints source addresses, logical names and dimensions.
+The observer does not replace game code, does not compute a pixel hash and
+does not assign any GS VRAM address based on timing.
+
+**Still required:** locate where the game turns an allocated texture handle
+into the GS base pointer for the upload/bind and carry that association to
+the GS render thread (which may be consuming queued commands). Until this
+provenance link is validated, the observer remains diagnostic only, the
+fingerprint fallback remains enabled, and the in-game texture replacement
+system is **not yet pure-name**. Do not merge the draft as a finished
+replacement pipeline.
+
 ### Data-driven texture identities
 
 The C++ dumper now writes `assets/sdbz/textures.registry` alongside exported PNGs.
