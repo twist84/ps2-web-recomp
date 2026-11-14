@@ -52,7 +52,7 @@ constexpr std::uint32_t kPrimWords = 28;
 constexpr std::uint32_t kSetupWords = 26;
 constexpr std::uint32_t kNativeAtlasSide = 1024u;
 constexpr std::uint32_t kNativeAtlasPixels = kNativeAtlasSide * kNativeAtlasSide;
-constexpr std::uint32_t kMaxNativeSlots = 32;
+constexpr std::uint32_t kMaxNativeSlots = 16;
 std::uint32_t g_native_slot_count = 0;
 std::uint32_t g_native_next_slot = 0;
 std::unordered_map<std::uint32_t, std::uint32_t> g_native_slot_by_texture;
@@ -1182,19 +1182,7 @@ std::uint32_t make_setup(const State &st, std::uint64_t attr, std::uint32_t *w) 
                 }
             }
         }
-        // Limit logging to menu-atlas draws; avoid dumping the game's
-        // thousands of unrelated GS texture bindings per frame.
-        if (native_texture::trace_native_textures()
-            && w[12] == 0x2a00 && w[14] == 0x13
-            && (1u << (w[15] & 0xffu)) == 512)
-        {
-            static unsigned samples = 0;
-            if (samples++ < 16)
-                std::fprintf(stderr,
-                    "[gs-native] gpu draw BP=%04X BW=%u size=%ux%u selector=%d\n",
-                    w[12], w[13], 1u << (w[15] & 0xffu),
-                    1u << (w[15] >> 8), chunk);
-        }
+
     }
 #endif
     return flags;
@@ -1470,7 +1458,7 @@ int native_slot(std::uint32_t index, std::uint32_t width,
     }
     g_native_slot_owner[slot] = static_cast<int>(index);
     g_native_slot_by_texture[index] = slot;
-    // Each atlas has a fixed 512x512 slot. PNGs contain conventional
+    // Each physical atlas slot has a 1024x1024 RGBA capacity. PNGs contain conventional
     // 0..255 alpha; PS2 texture arithmetic uses 0..128 alpha.
     std::vector<std::uint32_t> converted(static_cast<std::size_t>(width) * height);
     for (std::size_t i = 0; i < converted.size(); ++i)
