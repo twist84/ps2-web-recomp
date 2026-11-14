@@ -12,6 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 HARNESS = r'''
 #include "gs/native_texture_residency.hpp"
 #include "ps2/disc.hpp"
+#include "ps2/resource_pack.hpp"
+#include <filesystem>
+#include <fstream>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -34,9 +37,9 @@ std::optional<NativeAsset> find_native_asset(
 
 namespace ps2::gs::native_texture
 {
-bool load_fpix_chunk_png(const std::string &, std::uint32_t chunk, s_image &out)
+bool load_png(const std::string &name, s_image &out)
 {
-    if (!g_replacement_enabled || chunk != 0) return false;
+    if (!g_replacement_enabled || name != "dis/main_menu.pix.000") return false;
     out.width = out.height = 512;
     out.rgba.assign(512 * 512 * 4, 255);
     return true;
@@ -47,8 +50,17 @@ int main()
 {
     using namespace ps2::gs;
     using namespace ps2::gs::native_texture;
+    const auto root = std::filesystem::temp_directory_path()
+        / "sdbz-native-registry-test";
+    std::filesystem::create_directories(root / "resourcepacks");
+    {
+        std::ofstream registry(root / "native_textures.registry");
+        registry << "825F7B0566C19109\t19\t256\t256\tdis/main_menu.pix.000\n"
+            << "B51AF81B5A15B2A7\t19\t512\t512\tdis/main_menu.pix.001\n";
+    }
+    ps2::resource_pack::mount(root, root);
     reset_residency();
-    if (!replacements_available()) return 1;
+    if (!replacements_available() || registered_texture_count() != 2) return 1;
     if (atlas_scale(0, 256, 256) != 1
         || atlas_scale(0, 512, 512) != 2
         || atlas_scale(1, 512, 512) != 1
@@ -86,7 +98,7 @@ int main()
     // Changing resource packs must not destroy the original upload's identity.
     g_replacement_enabled = false;
     reload_replacements();
-    if (replacements_available() || chunk_image(0)) return 17;
+    if (!replacements_available() || chunk_image(0)) return 17;
     if (resident_chunk(0x3200, 4, 0x13, 256, 256) != 0) return 18;
     const auto active = resident_chunks();
     if (active.size() != 1 || active[0] != 0) return 19;
