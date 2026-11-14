@@ -72,10 +72,7 @@ struct Transfer {
 // reused, so neither it nor TEX0 alone establishes an asset identity.
 c_texture_upload_trace g_texture_trace;
 std::uint64_t g_texture_trace_serial = 0;
-#ifdef PS2_NATIVE_PNG
-bool g_native_gpu_uploaded[13] = {};
-bool g_native_match_logged[13] = {};
-#endif
+
 
 bool trace_texture_uploads()
 {
@@ -296,33 +293,16 @@ void feed_image(const std::uint8_t *data, std::size_t bytes) {
         report_texture_upload(true);
 #ifdef PS2_NATIVE_PNG
         const int chunk = native_texture::complete_upload(g_texture_trace.current());
-        if (chunk >= 0 && chunk < 13
-            && native_texture::chunk_image(chunk)
-            && !g_native_match_logged[chunk])
+        if (chunk >= 0)
         {
-            const auto &upload = g_texture_trace.current();
-            std::fprintf(stderr,
-                "[gs-native] matched dis/main_menu.pix.%03d at BP=%04X "
-                "hash=%016llX; using native PNG\n",
-                chunk, static_cast<unsigned>((upload.bitbltbuf >> 32) & 0x3fffu),
-                static_cast<unsigned long long>(upload.fnv1a64));
-            g_native_match_logged[chunk] = true;
+            ++g_setup_generation;
+            if (native_texture::trace_native_textures())
+                std::fprintf(stderr,
+                    "[gs-native] matched %s at BP=%04X hash=%016llX\n",
+                    native_texture::texture_path(chunk).c_str(),
+                    static_cast<unsigned>((g_texture_trace.current().bitbltbuf >> 32) & 0x3fffu),
+                    static_cast<unsigned long long>(g_texture_trace.current().fnv1a64));
         }
-#ifndef PS2_GPU
-        (void)chunk;
-#endif
-#ifdef PS2_GPU
-        if (chunk >= 0 && chunk < 13 && gpu_on()
-            && !g_native_gpu_uploaded[chunk])
-        {
-            if (const auto *img = native_texture::chunk_image(chunk))
-            {
-                gpu::upload_native_atlas(static_cast<std::uint32_t>(chunk),
-                    img->width, img->height, img->rgba.data());
-                g_native_gpu_uploaded[chunk] = true;
-            }
-        }
-#endif
 #endif
     }
 #ifdef PS2_GPU
@@ -535,8 +515,9 @@ void render_reset() {
     g_texture_trace_serial = 0;
 #ifdef PS2_NATIVE_PNG
     native_texture::reset_residency();
-    std::memset(g_native_gpu_uploaded, 0, sizeof g_native_gpu_uploaded);
-    std::memset(g_native_match_logged, 0, sizeof g_native_match_logged);
+#ifdef PS2_GPU
+    if (gpu_on()) gpu::invalidate_native_atlases();
+#endif
 #endif
     g_primitives = 0;
     raster::reset();
@@ -904,13 +885,12 @@ void write(std::uint32_t reg, std::uint64_t value) {
         capture::transfer(s, value);
         bool need_trace = trace_texture_uploads();
 #ifdef PS2_NATIVE_PNG
-        const bool native_enabled = native_texture::replacements_available();
-        need_trace = need_trace || native_enabled;
-        if (native_enabled && (value & 3u) == 0)
+        need_trace = need_trace || native_texture::replacements_available();
+        if ((value & 3u) == 0 || (value & 3u) == 2)
+        {
             native_texture::invalidate_destination(s.bitbltbuf, s.trxreg);
-        // Local-to-local copies can overwrite texture residency too.
-        if (native_enabled && (value & 3u) == 2)
-            native_texture::invalidate_destination(s.bitbltbuf, s.trxreg);
+            ++g_setup_generation;
+        }
 #endif
         if (need_trace)
         {
@@ -1354,22 +1334,8 @@ void apply_live_resource_packs()
     if (!resource_pack::apply_pending_selection()) return;
 #ifdef PS2_NATIVE_PNG
     native_texture::reload_replacements();
-    std::memset(g_native_gpu_uploaded, 0, sizeof g_native_gpu_uploaded);
-    std::memset(g_native_match_logged, 0, sizeof g_native_match_logged);
 #ifdef PS2_GPU
-    if (gpu_on())
-    {
-        for (const int chunk : native_texture::resident_chunks())
-        {
-            if (chunk < 0 || chunk >= 13) continue;
-            if (const auto *image = native_texture::chunk_image(chunk))
-            {
-                gpu::upload_native_atlas(static_cast<std::uint32_t>(chunk),
-                    image->width, image->height, image->rgba.data());
-                g_native_gpu_uploaded[chunk] = true;
-            }
-        }
-    }
+    if (gpu_on()) gpu::invalidate_native_atlases();
 #endif
     // WebGPU caches its setup, including the native atlas selector, by
     // generation. Bump it even when the game's TEX0 registers are unchanged.
