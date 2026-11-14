@@ -19,6 +19,7 @@ namespace
 {
 namespace fs = std::filesystem;
 std::vector<s_pack_info> g_packs;
+fs::path g_native_registry_file;
 std::mutex g_selection_mutex;
 std::vector<std::string> g_pending_selection;
 bool g_selection_pending = false;
@@ -250,12 +251,16 @@ void clear()
     g_packs.clear();
     g_discovered.clear();
     g_pack_directory.clear();
+    g_native_registry_file.clear();
 }
 
 void mount(const fs::path &disc_root,
     const fs::path &executable_directory)
 {
     clear();
+    g_native_registry_file = executable_directory.empty()
+        ? disc_root / "native_textures.registry"
+        : executable_directory / "native_textures.registry";
     std::error_code error;
     // Standalone builds keep resource packs beside SDBZ.exe. For existing
     // development layouts, retain the disc-adjacent location as a fallback.
@@ -490,10 +495,9 @@ std::vector<std::string> texture_registries()
     std::lock_guard<std::mutex> lock(g_selection_mutex);
     // The built-in registry is a data file, not a compiled fingerprint table.
     // It remains available even if every resource pack is disabled.
-    if (!g_pack_directory.empty())
+    if (!g_native_registry_file.empty())
     {
-        const auto base = g_pack_directory.parent_path()
-            / "native_textures.registry";
+        const auto &base = g_native_registry_file;
         std::error_code error;
         const auto size = fs::file_size(base, error);
         if (!error && size && size <= k_max_resource)
