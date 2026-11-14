@@ -26,6 +26,11 @@ std::vector<int> resident_chunks();
 bool replacements_available();
 void invalidate_destination(std::uint64_t bitbltbuf, std::uint64_t trxreg);
 int complete_upload(const s_texture_upload_signature &upload);
+// Register an upload whose identity is established by an asset decoder.
+// Must be called on the GS render thread after a complete image upload.
+// Unnamed GPU transfers are deliberately not assigned guessed filenames.
+bool register_named_upload(const std::string &logical_name,
+    std::uint64_t bitbltbuf, std::uint64_t trxreg, std::uint64_t trxpos);
 
 // Returns an index only when both the current residency and TEX0 layout agree.
 // A GS base pointer alone is deliberately not sufficient.
