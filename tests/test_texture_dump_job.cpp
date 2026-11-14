@@ -108,7 +108,7 @@ bool check_result(const fs::path &output)
     const std::string contents(std::istreambuf_iterator<char>{registry}, {});
     return text.find("\"textures_exported\": 1") != std::string::npos
         && text.find("\"assets_failed\": 0") != std::string::npos
-        && contents.find("\\t0\\t2\\t1\\tdis/sample.tim2.000.png") != std::string::npos;
+        && contents.find("\t0\t2\t1\tdis/sample.tim2.000.png") != std::string::npos;
 }
 
 int main()
