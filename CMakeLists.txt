@@ -225,13 +225,22 @@ if(PS2_GENERATED)
     endif()
     find_package(SDL2 QUIET)
     if(SDL2_FOUND AND NOT EMSCRIPTEN)
-        target_sources(ps2run PRIVATE host/window.cpp)
+        target_sources(ps2run PRIVATE host/window.cpp host/texture_dump_job.cpp)
         target_compile_definitions(ps2run PRIVATE PS2_WINDOW)
         target_link_libraries(ps2run PRIVATE SDL2::SDL2)
         if(WIN32)
-            add_executable(SDBZ host/game_main.cpp host/window.cpp)
+            add_executable(SDBZ host/game_main.cpp host/window.cpp host/texture_dump_job.cpp)
             target_compile_definitions(SDBZ PRIVATE PS2_WINDOW)
             target_link_libraries(SDBZ PRIVATE ps2game ps2runtime SDL2::SDL2 psapi user32)
+            # The packaged game needs both the exporter and its FPIX parser.
+            # Copy them beside SDBZ.exe; no source checkout is required at runtime.
+            add_custom_command(TARGET SDBZ POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:SDBZ>/scripts"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${CMAKE_SOURCE_DIR}/scripts/dump_sdbz_game_textures.py"
+                    "${CMAKE_SOURCE_DIR}/scripts/match_sdbz_fpix_gs.py"
+                    "$<TARGET_FILE_DIR:SDBZ>/scripts"
+                VERBATIM)
             set(PS2_GAME_OUTPUT_DIR "" CACHE PATH "Output directory for the direct SDBZ.exe target")
             if(PS2_GAME_OUTPUT_DIR)
                 set_target_properties(SDBZ PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PS2_GAME_OUTPUT_DIR}")
