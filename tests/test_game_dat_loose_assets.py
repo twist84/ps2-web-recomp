@@ -192,7 +192,8 @@ class NewGameAssetTests(unittest.TestCase):
             "-std=c++20", "-Wall", "-Wextra",
             "-I", str(ROOT / "runtime/include"), "-I", str(ROOT / "runtime/src"),
             str(cls.harness_source), str(ROOT / "runtime/src/disc.cpp"),
-            str(ROOT / "runtime/src/disc_folder.cpp"), "-o", str(cls.harness),
+            str(ROOT / "runtime/src/disc_folder.cpp"),
+            str(ROOT / "runtime/src/resource_pack_zip.cpp"), "-lz", "-o", str(cls.harness),
         ], check=True)
 
     @classmethod
