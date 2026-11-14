@@ -666,6 +666,7 @@ bool start(const std::string &disc_path, const std::string &executable_directory
     }
     std::ofstream manifest(output / "pack.json", std::ios::binary);
     manifest << "{\n  \"pack\": {\"format\": 1, \"game\": \"sdbz\","
+        << " \"name\": \"" << output.filename().string() << "\","
         << " \"region\": \"eu-beta\", \"priority\": 0}\n}\n";
     manifest.close();
     if (!manifest)
