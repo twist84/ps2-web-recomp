@@ -31,7 +31,7 @@ void publish_named_texture(const std::string &logical_name,
     std::uint32_t width, std::uint32_t height)
 {
     if (logical_name == "dis/main_menu.pix.001" && bp == 0x120u
-        && bw == 4 && psm == 19 && width == 4 && height == 4)
+        && bw == 1 && psm == 19 && width == 4 && height == 4)
     {
         ++g_named_publishes;
     }
@@ -80,7 +80,7 @@ int main()
     {
         auto *slot = ps2::g_ram + table;
         put_u16(slot + 2, 0x0120u); // GS base block
-        put_u16(slot + 4, 4);       // GS buffer width
+        put_u16(slot + 4, 4);       // CLUT base pointer, not TBW
         put_u16(slot + 14, 19);     // GS PSMT8
         put_u16(slot + 22, 4);      // original width
         put_u16(slot + 24, 4);      // original height
@@ -137,7 +137,7 @@ class NamedTextureProbeTests(unittest.TestCase):
             self.assertEqual(done.stderr.count("[sdbz-name] texture="), 2)
             self.assertEqual(done.stderr.count("[sdbz-name] FPIX"), 2)
             self.assertEqual(done.stderr.count("[sdbz-name] bind"), 2)
-            self.assertIn("bp=0120 bw=4 psm=19 size=4x4", done.stderr)
+            self.assertIn("bp=0120 bw=1 psm=19 size=4x4", done.stderr)
             self.assertIn("dis/main_menu.pix.001", done.stderr)
             self.assertIn("pixels=000020B0", done.stderr)
             self.assertIn("PSM=19 size=4x4", done.stderr)
