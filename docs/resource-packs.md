@@ -133,6 +133,17 @@ Controller-only controls:
 - LB / RB moves the selected enabled pack up / down in priority (requires at least two enabled packs; no wrapping at the ends)
 - Start saves `disc/resourcepacks/load_order.txt` and closes
 - B or Select + Start cancels unsaved changes
+- D-pad Down past the last pack selects **Dump All Textures to Pack**;
+  press A to export textures to a new folder pack without leaving the game
+
+The dump action uses native C++ to read both loose `GAME/` and indexed
+`INFO.DAT` + `GAME.DAT` directly (preferring the archive when both are
+available). It writes an editable `GAME Texture Dump` folder under the
+executable's `resourcepacks/`, using numbered suffixes to avoid overwriting
+previous dumps. Supported FPIX/XPIX/TIM2 images become PNGs; the
+`dump_report.json` records which assets could not be decoded. Extraction
+runs on a worker thread and the FFON menu displays a completion summary.
+No Python installation, script process, or other executable is required.
 
 The manager intentionally has **no mouse controls or keyboard navigation**;
 F6 remains an open/close shortcut. While
