@@ -166,23 +166,14 @@ void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc,
                                 // old resident. Restore only if the upload
                                 // has a unique verified original name.
                                 ps2::s_named_texture_binding bind;
-                                if (ps2::sdbz_texture_source_transfer(
-                                    g_scanned_transfer.bitbltbuf,
-                                    g_scanned_transfer.trxreg,
-                                    g_scanned_transfer.trxpos, bind))
+                                if (events
+                                    && ps2::sdbz_texture_source_transfer(
+                                        g_scanned_transfer.bitbltbuf,
+                                        g_scanned_transfer.trxreg,
+                                        g_scanned_transfer.trxpos, bind))
                                 {
-                                    if (events)
-                                    {
-                                        events->push_back(
-                                            {i + 1, std::move(bind)});
-                                    }
-                                    else
-                                    {
-                                        gs::publish_named_texture(
-                                            bind.name, bind.bp, bind.bw,
-                                            bind.psm, bind.width,
-                                            bind.height, bind.clut_bp);
-                                    }
+                                    events->push_back(
+                                        {i + 1, std::move(bind)});
                                 }
                             }
                         }
@@ -191,16 +182,10 @@ void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc,
                         std::uint64_t value;
                         std::memcpy(&value, at, 8);
                         ps2::s_named_texture_binding bind;
-                        if (events)
+                        if (events
+                            && ps2::sdbz_texture_source_tex0(value, &bind))
                         {
-                            if (ps2::sdbz_texture_source_tex0(value, &bind))
-                            {
-                                events->push_back({i + 1, std::move(bind)});
-                            }
-                        }
-                        else
-                        {
-                            ps2::sdbz_texture_source_tex0(value);
+                            events->push_back({i + 1, std::move(bind)});
                         }
                     }
                 }
@@ -225,16 +210,10 @@ void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc,
                         std::uint64_t tex0;
                         std::memcpy(&tex0, at + half * 8, 8);
                         ps2::s_named_texture_binding bind;
-                        if (events)
+                        if (events
+                            && ps2::sdbz_texture_source_tex0(tex0, &bind))
                         {
-                            if (ps2::sdbz_texture_source_tex0(tex0, &bind))
-                            {
-                                events->push_back({i + 1, std::move(bind)});
-                            }
-                        }
-                        else
-                        {
-                            ps2::sdbz_texture_source_tex0(tex0);
+                            events->push_back({i + 1, std::move(bind)});
                         }
                     }
                     if (++p.reg >= p.nreg) {
