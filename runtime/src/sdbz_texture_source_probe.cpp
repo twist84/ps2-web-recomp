@@ -14,6 +14,7 @@
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace ps2
 {
@@ -479,8 +480,12 @@ bool sdbz_texture_source_tex0(std::uint64_t tex0,
     }
     if (trace_enabled())
     {
-        static std::uint32_t reports = 0;
-        if (reports++ < 128)
+        // The game can reissue the same TEX0 thousands of times per menu.
+        // Report distinct names and palette variants, rather than wasting
+        // the entire trace quota on the first repeatedly bound sprite.
+        static std::unordered_set<std::string> reported;
+        const std::string key = *match + ":" + std::to_string(tex0);
+        if (reported.size() < 1024 && reported.insert(key).second)
         {
             std::fprintf(stderr,
                 "[sdbz-name] tex0-bind name=%s bp=%04X bw=%u"
