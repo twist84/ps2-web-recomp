@@ -292,6 +292,37 @@ void inspect_binding(Cpu &cpu, std::uint32_t table_base)
 
 void sdbz_texture_source_probe(Cpu &cpu, std::uint32_t pc)
 {
+    // Region-specific addresses are not interchangeable. The other region
+    // can contain unrelated executable code at the same PC. Require both
+    // verified entry prologues before trusting any object/handle data.
+    const auto *eu_pix = ee_bytes(k_pix_initialize_eu_beta, 4);
+    const auto *eu_bind = ee_bytes(k_bind_texture_eu_beta, 4);
+    const auto *jp_pix = ee_bytes(k_pix_initialize_japan, 4);
+    const auto *jp_bind = ee_bytes(k_bind_texture_japan, 4);
+    const bool is_eu_beta = eu_pix && eu_bind
+        && u32(eu_pix) == 0x27BDFF70u
+        && u32(eu_bind) == 0x27BDFF30u;
+    const bool is_japan = jp_pix && jp_bind
+        && u32(jp_pix) == 0x27BDFF70u
+        && u32(jp_bind) == 0x27BDFF30u;
+    if (is_eu_beta == is_japan)
+    {
+        return;
+    }
+    if (is_eu_beta
+        && pc != k_pix_initialize_eu_beta
+        && pc != k_texture_initialize_eu_beta
+        && pc != k_bind_texture_eu_beta)
+    {
+        return;
+    }
+    if (is_japan
+        && pc != k_pix_initialize_japan
+        && pc != k_texture_initialize_japan
+        && pc != k_bind_texture_japan)
+    {
+        return;
+    }
     switch (pc)
     {
     case k_pix_initialize_eu_beta:
