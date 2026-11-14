@@ -100,7 +100,8 @@ class LooseGameExpansionTests(unittest.TestCase):
         cls.harness_source.write_text(HARNESS, encoding="utf-8")
         subprocess.run(compiler + ["-std=c++20", "-Wall", "-Wextra", "-I", str(ROOT / "runtime/include"),
             "-I", str(ROOT / "runtime/src"), str(cls.harness_source), str(ROOT / "runtime/src/disc.cpp"),
-            str(ROOT / "runtime/src/disc_folder.cpp"), "-o", str(cls.harness)], check=True)
+            str(ROOT / "runtime/src/disc_folder.cpp"),
+            str(ROOT / "runtime/src/resource_pack_zip.cpp"), "-lz", "-o", str(cls.harness)], check=True)
 
     @classmethod
     def tearDownClass(cls):
