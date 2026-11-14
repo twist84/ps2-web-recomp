@@ -453,3 +453,15 @@ report up to four cases per filename, including whether the write came
 from a host upload or a GS local copy. The actual rendering result
 still requires testing in-game; neither a hash fallback nor a special
 case for main-menu filenames is introduced.
+
+### VIF1 shadow-only GIF scans and original texture name ordering
+
+VIF1 performs a shadow pass on the emulation thread while the VU thread
+executes actual GIF packets. The shadow pass exists for signal and
+transfer-state observation, not GS rendering. Previously, this pass
+could publish a canonical TEX0 name despite not submitting any draw,
+and it advanced the *same* name-scanner GIF parser state as the real stream.
+That could give later real packets an incorrect register/halfword position.
+Shadow scans now have independent parser state and never publish
+native-name bindings or upload-provenance updates. Only actual
+queue-submitted GIF packets can change the renderer's source identity.
