@@ -274,6 +274,7 @@ void inspect_binding(Cpu &cpu, std::uint32_t table_base)
         return;
     }
     const std::uint32_t bp = u16(slot + 2);
+    const std::uint32_t clut_bp = u16(slot + 4);
     const std::uint32_t psm = u16(slot + 14);
     const std::uint32_t width = u16(slot + 22);
     const std::uint32_t height = u16(slot + 24);
@@ -293,7 +294,7 @@ void inspect_binding(Cpu &cpu, std::uint32_t table_base)
     if (name_only_enabled())
     {
         gs::publish_named_texture(identity.name, bp, bw, psm,
-            width, height);
+            width, height, clut_bp);
     }
     if (trace_enabled())
     {
@@ -331,6 +332,8 @@ bool sdbz_texture_source_tex0(std::uint64_t tex0,
     }
 
     const std::uint32_t bp = static_cast<std::uint32_t>(tex0) & 0x3fffu;
+    const std::uint32_t clut_bp = static_cast<std::uint32_t>(
+        tex0 >> 37) & 0x3fffu;
     const std::uint32_t bw = static_cast<std::uint32_t>(tex0 >> 14) & 0x3fu;
     const std::uint32_t psm = static_cast<std::uint32_t>(tex0 >> 20) & 0x3fu;
     const std::uint32_t width = 1u << ((tex0 >> 26) & 0xfu);
@@ -362,6 +365,7 @@ bool sdbz_texture_source_tex0(std::uint64_t tex0,
         const auto *slot = ee_bytes(table_base
             + (handle - 1u) * k_handle_stride, k_handle_stride);
         if (!slot || slot[0] != 1 || u16(slot + 2) != bp
+            || u16(slot + 4) != clut_bp
             || u16(slot + 14) != psm || u16(slot + 22) != width
             || u16(slot + 24) != height)
         {
@@ -380,11 +384,12 @@ bool sdbz_texture_source_tex0(std::uint64_t tex0,
     }
     if (result)
     {
-        *result = {*match, bp, bw, psm, width, height};
+        *result = {*match, bp, bw, psm, clut_bp, width, height};
     }
     else if (name_only_enabled())
     {
-        gs::publish_named_texture(*match, bp, bw, psm, width, height);
+        gs::publish_named_texture(*match, bp, bw, psm, width, height,
+            clut_bp);
     }
     if (trace_enabled())
     {
@@ -393,8 +398,8 @@ bool sdbz_texture_source_tex0(std::uint64_t tex0,
         {
             std::fprintf(stderr,
                 "[sdbz-name] tex0-bind name=%s bp=%04X bw=%u"
-                " psm=%u size=%ux%u\n",
-                match->c_str(), bp, bw, psm, width, height);
+                " psm=%u cbp=%04X size=%ux%u\n",
+                match->c_str(), bp, bw, psm, clut_bp, width, height);
         }
     }
     return true;
