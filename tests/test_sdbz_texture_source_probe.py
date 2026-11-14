@@ -58,8 +58,6 @@ int main()
     // Verified first words of CPixTexture::Initialize and TEX0 builder.
     put_u32(ps2::g_ram + 0x19AA70u, 0x27BDFF70u);
     put_u32(ps2::g_ram + 0x10C3E0u, 0x27BDFF30u);
-    put_u32(ps2::g_ram + 0x19A860u, 0x27BDFF70u);
-    put_u32(ps2::g_ram + 0x10C350u, 0x27BDFF30u);
     std::uint8_t *name = ps2::g_ram + 0x1010u;
     std::strcpy(reinterpret_cast<char *>(name), "dis/main_menu.pix.001");
 
@@ -75,7 +73,6 @@ int main()
     cpu.r[4].w[0] = 0x1000u;
     cpu.r[5].w[0] = 0x2000u;
     ps2::sdbz_texture_source_probe(cpu, 0x0019A670u);
-    ps2::sdbz_texture_source_probe(cpu, 0x0019A460u);
 
     // Guest CTexture::Initialize writes its handle at object +0x38.
     put_u32(ps2::g_ram + 0x1038u, 1);
@@ -92,7 +89,6 @@ int main()
     }
     cpu.r[4].w[0] = 1;
     ps2::sdbz_texture_source_probe(cpu, 0x0010C3E0u);
-    ps2::sdbz_texture_source_probe(cpu, 0x0010C350u);
     // Invalid handles cannot be assigned a filename.
     cpu.r[4].w[0] = 256;
     ps2::sdbz_texture_source_probe(cpu, 0x0010C3E0u);
@@ -104,12 +100,27 @@ int main()
     put_u32(fpix + 8, 1);
     cpu.r[5].w[0] = 0x3000u;
     ps2::sdbz_texture_source_probe(cpu, 0x0019AA70u);
+
+    // Switch to the Japanese executable. The EU addresses now contain
+    // unrelated code and must no longer identify textures or handles.
+    put_u32(ps2::g_ram + 0x19AA70u, 0);
+    put_u32(ps2::g_ram + 0x10C3E0u, 0);
+    put_u32(ps2::g_ram + 0x19A860u, 0x27BDFF70u);
+    put_u32(ps2::g_ram + 0x10C350u, 0x27BDFF30u);
+    cpu.r[5].w[0] = 0x2000u;
+    ps2::sdbz_texture_source_probe(cpu, 0x0019A670u);
+    ps2::sdbz_texture_source_probe(cpu, 0x0019A460u);
+    cpu.r[4].w[0] = 1;
+    ps2::sdbz_texture_source_probe(cpu, 0x0010C3E0u);
+    ps2::sdbz_texture_source_probe(cpu, 0x0010C350u);
+    cpu.r[4].w[0] = 0x1000u;
+    cpu.r[5].w[0] = 0x3000u;
     ps2::sdbz_texture_source_probe(cpu, 0x0019A860u);
 
     // An invalid TIM2 source must not generate a named identity.
     tim2[0] = 0;
     cpu.r[5].w[0] = 0x2000u;
-    ps2::sdbz_texture_source_probe(cpu, 0x0019A670u);
+    ps2::sdbz_texture_source_probe(cpu, 0x0019A460u);
     return ps2::gs::g_named_publishes == 2 ? 0 : 1;
 }
 '''
