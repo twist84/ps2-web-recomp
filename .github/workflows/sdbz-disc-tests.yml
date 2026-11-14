@@ -17,6 +17,9 @@ on:
       - "runtime/src/resource_pack_overlay.cpp"
       - "runtime/include/ps2/resource_pack_overlay.hpp"
       - "host/window.cpp"
+      - "host/texture_dump_job.cpp"
+      - "host/texture_dump_job.hpp"
+      - "tests/test_texture_dump_job.cpp"
       - "tests/test_resource_pack_menu_input.py"
       - "runtime/src/gs/gpu/font.cpp"
       - "runtime/src/gs/gpu/font.hpp"
@@ -66,6 +69,9 @@ on:
       - "runtime/src/resource_pack_overlay.cpp"
       - "runtime/include/ps2/resource_pack_overlay.hpp"
       - "host/window.cpp"
+      - "host/texture_dump_job.cpp"
+      - "host/texture_dump_job.hpp"
+      - "tests/test_texture_dump_job.cpp"
       - "tests/test_resource_pack_menu_input.py"
       - "runtime/src/gs/gpu/font.cpp"
       - "runtime/src/gs/gpu/font.hpp"
@@ -123,7 +129,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends libsdl2-dev
           $CXX -std=c++20 -Wall -Wextra -fsyntax-only \
             -I host -I runtime/include -I runtime/src \
-            $(sdl2-config --cflags) host/window.cpp
+            $(sdl2-config --cflags) host/window.cpp host/texture_dump_job.cpp
       - name: Run archive and ISO regression harnesses
         env:
           CXX: ${{ matrix.compiler }}
@@ -140,6 +146,10 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_sdbz_texture_crosswalk.py' -v
           python3 -m unittest discover -s tests -p 'test_sdbz_fpix_gs_match.py' -v
           python3 -m unittest discover -s tests -p 'test_dump_sdbz_game_textures.py' -v
+          $CXX -std=c++20 -Wall -Wextra -Werror -pthread \
+            -I host tests/test_texture_dump_job.cpp host/texture_dump_job.cpp \
+            -lz -o /tmp/sdbz-native-texture-dump-test
+          /tmp/sdbz-native-texture-dump-test
           python3 -m unittest discover -s tests -p 'test_native_texture_residency.py' -v
           python3 -m unittest discover -s tests -p 'test_gs_shader_setup_stride.py' -v
           python3 scripts/generate_native_menu_manifest.py --check
