@@ -138,6 +138,14 @@ jobs:
           $CXX -std=c++20 -Wall -Wextra -fsyntax-only \
             -I host -I runtime/include -I runtime/src \
             $(sdl2-config --cflags) host/window.cpp host/texture_dump_job.cpp
+      - name: Compile full PS2 runtime including named GS bindings
+        env:
+          CXX: ${{ matrix.compiler }}
+        run: |
+          cmake -S . -B /tmp/sdbz-texture-compiler-check \
+            -DCMAKE_CXX_COMPILER="$CXX" -DPS2_FETCH_ZLIB=OFF
+          cmake --build /tmp/sdbz-texture-compiler-check \
+            --target ps2runtime --parallel 2
       - name: Run archive and ISO regression harnesses
         env:
           CXX: ${{ matrix.compiler }}
