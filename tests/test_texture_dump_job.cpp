@@ -104,8 +104,11 @@ bool check_result(const fs::path &output)
     if (data[24] != 8 || data[25] != 6) return false; // RGBA8 IHDR
     std::ifstream report(output / "dump_report.json");
     std::string text(std::istreambuf_iterator<char>{report}, {});
+    std::ifstream registry(output / "assets/sdbz/textures.registry");
+    const std::string contents(std::istreambuf_iterator<char>{registry}, {});
     return text.find("\"textures_exported\": 1") != std::string::npos
-        && text.find("\"assets_failed\": 0") != std::string::npos;
+        && text.find("\"assets_failed\": 0") != std::string::npos
+        && contents.find("\\t0\\t2\\t1\\tdis/sample.tim2.000.png") != std::string::npos;
 }
 
 int main()
