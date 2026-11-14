@@ -156,6 +156,24 @@ int main()
     invalidate_destination((0x3500ull << 32), 64ull | (64ull << 32));
     if (resident_chunk(0x3500, 1, 0x14, 64, 64) != -1) return 27;
 
+    // A loader can identify a texture by logical filename even when its
+    // pixel fingerprint is absent from every external registry.
+    const std::uint64_t named_buf = (0x3600ull << 32)
+        | (2ull << 48) | (0x13ull << 56);
+    const std::uint64_t named_reg = 64ull | (64ull << 32);
+    const std::string named_path = "ply/named_only.pix.000";
+    if (!register_named_upload(named_path, named_buf, named_reg, 0)) return 38;
+    const int named_index = resident_chunk(0x3600, 2, 0x13, 64, 64);
+    if (named_index < 0 || texture_path(named_index) != named_path) return 39;
+    if (register_named_upload("../escape", named_buf, named_reg, 0)) return 40;
+    if (register_named_upload(named_path, named_buf, named_reg, 1)) return 41;
+    reload_replacements();
+    const int restored_index = resident_chunk(0x3600, 2, 0x13, 64, 64);
+    if (restored_index < 0
+        || texture_path(restored_index) != named_path) return 42;
+    invalidate_destination(named_buf, named_reg);
+    if (resident_chunk(0x3600, 2, 0x13, 64, 64) != -1) return 43;
+
     // Wrong fingerprints or incomplete transfers may never establish identity.
     upload.bitbltbuf = (0x3300ull << 32) | (4ull << 48) | (0x13ull << 56);
     upload.fnv1a64 ^= 0x1234;
