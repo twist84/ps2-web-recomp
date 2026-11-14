@@ -1958,14 +1958,65 @@ std::size_t read_loose_game_asset(std::uint32_t id,
         return 0;
     const auto &asset = g_direct_game_assets[id];
     if (offset >= asset.size) return 0;
+    const std::size_t count = static_cast<std::size_t>(
+        std::min<std::uint64_t>(capacity, asset.size - offset));
+
+    if (asset.zip_entry)
+    {
+        // The ZIP central directory is indexed once at mount time. A read
+        // inflates only the requested member and checks its CRC. The LRU
+        // avoids repeated decompression for ARKD's partial file reads.
+        std::lock_guard<std::mutex> lock(g_direct_zip_mutex);
+        if (g_direct_game_zip_path.empty())
+        {
+            return 0;
+        }
+        const auto cached = std::find_if(g_direct_zip_cache.begin(),
+            g_direct_zip_cache.end(),
+            [id](const s_cached_game_zip_file &entry)
+            {
+                return entry.id == id;
+            });
+        if (cached != g_direct_zip_cache.end())
+        {
+            std::memcpy(destination, cached->bytes.data() + offset, count);
+            g_direct_zip_cache.splice(g_direct_zip_cache.begin(),
+                g_direct_zip_cache, cached);
+            return count;
+        }
+
+        std::vector<std::uint8_t> decoded;
+        if (!resource_pack::zip::read(g_direct_game_zip_path,
+                *asset.zip_entry, decoded, k_game_zip_limits)
+            || decoded.size() != asset.size)
+        {
+            std::fprintf(stderr,
+                "[disc] failed to read regional GAME ZIP member: %s\n",
+                asset.name.c_str());
+            return 0;
+        }
+        std::memcpy(destination, decoded.data() + offset, count);
+        if (decoded.size() <= k_direct_zip_cache_limit)
+        {
+            while (!g_direct_zip_cache.empty()
+                && g_direct_zip_cached_bytes + decoded.size()
+                    > k_direct_zip_cache_limit)
+            {
+                g_direct_zip_cached_bytes -=
+                    g_direct_zip_cache.back().bytes.size();
+                g_direct_zip_cache.pop_back();
+            }
+            g_direct_zip_cached_bytes += decoded.size();
+            g_direct_zip_cache.push_front({id, std::move(decoded)});
+        }
+        return count;
+    }
 
     std::error_code error;
     const auto canonical = fs::canonical(asset.path, error);
     if (error || !is_inside(g_direct_game_root, canonical)
         || !fs::is_regular_file(canonical, error) || error)
         return 0;
-    const std::size_t count = static_cast<std::size_t>(
-        std::min<std::uint64_t>(capacity, asset.size - offset));
     std::ifstream input(canonical, std::ios::binary);
     if (!input) return 0;
     input.seekg(static_cast<std::streamoff>(offset));
@@ -2043,7 +2094,13 @@ void clear_loose_game_assets()
 {
     g_native_assets.clear();
     g_native_asset_root.clear();
-    g_direct_game_assets.clear();
+    {
+        std::lock_guard<std::mutex> lock(g_direct_zip_mutex);
+        g_direct_zip_cache.clear();
+        g_direct_zip_cached_bytes = 0;
+        g_direct_game_zip_path.clear();
+        g_direct_game_assets.clear();
+    }
     g_direct_game_root.clear();
 }
 }
