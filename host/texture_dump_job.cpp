@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <chrono>
+#include <ctime>
 #include <cctype>
 #include <exception>
 #include <cstdio>
@@ -628,11 +630,33 @@ bool start(const std::string &disc_path, const std::string &executable_directory
         g_status = {false, true, 1, "Cannot create resourcepacks directory"};
         return false;
     }
+    // Local wall-clock time, using a filename-safe format on Windows.
+    const auto now = std::chrono::system_clock::to_time_t(
+        std::chrono::system_clock::now());
+    std::tm local_time{};
+#ifdef _WIN32
+    if (localtime_s(&local_time, &now) != 0)
+#else
+    if (localtime_r(&now, &local_time) == nullptr)
+#endif
+    {
+        g_status = {false, true, 1, "Cannot determine texture dump timestamp"};
+        return false;
+    }
+    char timestamp[32]{};
+    if (!std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H-%M-%S",
+            &local_time))
+    {
+        g_status = {false, true, 1, "Cannot format texture dump timestamp"};
+        return false;
+    }
+    const std::string name = std::string("GAME Texture Dump ") + timestamp;
     fs::path output;
     for (unsigned index = 1; index <= 9999; ++index)
     {
-        output = pack_root / (index == 1 ? "GAME Texture Dump"
-            : "GAME Texture Dump " + std::to_string(index));
+        output = pack_root / (index == 1 ? name
+            : name + " (" + std::to_string(index) + ")");
+        error.clear();
         if (fs::create_directory(output, error)) break;
         if (error || index == 9999)
         {

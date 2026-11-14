@@ -167,8 +167,9 @@ ambiguous and not substituted.
 
 The dump action uses native C++ to read both loose `GAME/` and indexed
 `INFO.DAT` + `GAME.DAT` directly (preferring the archive when both are
-available). It writes an editable `GAME Texture Dump` folder under the
-executable's `resourcepacks/`, using numbered suffixes to avoid overwriting
+available). It writes an editable `GAME Texture Dump YYYY-MM-DD HH-MM-SS`
+folder under the executable's `resourcepacks/`, using the machine's local
+clock. If two dumps share a timestamp, a numbered suffix avoids overwriting
 previous dumps. Supported FPIX/XPIX/TIM2 images become PNGs; the
 `dump_report.json` records which assets could not be decoded. Extraction
 runs on a worker thread and the FFON menu displays a completion summary.
