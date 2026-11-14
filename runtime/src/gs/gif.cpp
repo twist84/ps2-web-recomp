@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include <utility>
 
 namespace ps2::gif {
 
@@ -87,7 +88,14 @@ struct GsSink {
     void image(const std::uint8_t *data, std::uint32_t qwords) { gs::write_image(data, qwords); }
 };
 
-void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc) {
+struct s_named_scan_event
+{
+    std::uint32_t after_qword = 0;
+    ps2::s_named_texture_binding bind;
+};
+
+void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc,
+    std::vector<s_named_scan_event> *events = nullptr) {
     // The real game may call the TEX0 builder within a generated EE unit,
     // bypassing the dispatcher entry probe. Observe GIF texture binds
     // during the existing emulation-thread scan, before queuing this GIF.
@@ -129,7 +137,18 @@ void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc) {
                     if (scan_names && (at[8] == 0x06 || at[8] == 0x07)) {
                         std::uint64_t value;
                         std::memcpy(&value, at, 8);
-                        ps2::sdbz_texture_source_tex0(value);
+                        ps2::s_named_texture_binding bind;
+                        if (events)
+                        {
+                            if (ps2::sdbz_texture_source_tex0(value, &bind))
+                            {
+                                events->push_back({i + 1, std::move(bind)});
+                            }
+                        }
+                        else
+                        {
+                            ps2::sdbz_texture_source_tex0(value);
+                        }
                     }
                 }
                 if (++p.reg >= p.nreg) {
@@ -152,7 +171,18 @@ void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc) {
                     if (reg == 0x06 || reg == 0x07) {
                         std::uint64_t tex0;
                         std::memcpy(&tex0, at + half * 8, 8);
-                        ps2::sdbz_texture_source_tex0(tex0);
+                        ps2::s_named_texture_binding bind;
+                        if (events)
+                        {
+                            if (ps2::sdbz_texture_source_tex0(tex0, &bind))
+                            {
+                                events->push_back({i + 1, std::move(bind)});
+                            }
+                        }
+                        else
+                        {
+                            ps2::sdbz_texture_source_tex0(tex0);
+                        }
                     }
                     if (++p.reg >= p.nreg) {
                         p.reg = 0;
@@ -209,8 +239,43 @@ void out(int path, const std::uint8_t *data, std::uint32_t qwc) {
         render(path, data, qwc);
         return;
     }
-    if (gs::queue::role() != gs::queue::Role::Vu) scan(g_scan[path], data, qwc);
-    gs::queue::post(gs::queue::kGif, static_cast<std::uint32_t>(path), qwc, data, qwc * 16);
+    // If one GIF packet binds several textures, it is not safe to post all
+    // named bindings before that packet. Split only at matched TEX0 qwords;
+    // the GS retains its GIF parser state across the queued pieces.
+    static const bool name_only = []()
+    {
+        const char *value = std::getenv("PS2_SDBZ_NAME_ONLY");
+        return value && *value && *value != '0';
+    }();
+    std::vector<s_named_scan_event> events;
+    if (gs::queue::role() != gs::queue::Role::Vu)
+    {
+        scan(g_scan[path], data, qwc, name_only ? &events : nullptr);
+    }
+    std::uint32_t emitted = 0;
+    for (const auto &event : events)
+    {
+        if (event.after_qword > emitted && event.after_qword <= qwc)
+        {
+            const std::uint32_t length = event.after_qword - emitted;
+            gs::queue::post(gs::queue::kGif,
+                static_cast<std::uint32_t>(path), length,
+                data + static_cast<std::size_t>(emitted) * 16u,
+                length * 16u);
+            emitted = event.after_qword;
+        }
+        gs::publish_named_texture(event.bind.name, event.bind.bp,
+            event.bind.bw, event.bind.psm, event.bind.width,
+            event.bind.height);
+    }
+    if (emitted < qwc)
+    {
+        const std::uint32_t remaining = qwc - emitted;
+        gs::queue::post(gs::queue::kGif,
+            static_cast<std::uint32_t>(path), remaining,
+            data + static_cast<std::size_t>(emitted) * 16u,
+            remaining * 16u);
+    }
 }
 
 // How many of these qwords belong to the packet under way; mid_packet is left set when
