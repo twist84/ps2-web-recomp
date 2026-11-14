@@ -114,6 +114,22 @@ std::string normalized_name(std::string name)
     return name;
 }
 
+fs::path path_from_utf8(const std::string &value)
+{
+#ifdef _WIN32
+    const int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+        value.data(), static_cast<int>(value.size()), nullptr, 0);
+    if (count <= 0) return {};
+    std::wstring wide(static_cast<std::size_t>(count), L'\0');
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+            value.data(), static_cast<int>(value.size()), wide.data(), count))
+        return {};
+    return fs::path(wide);
+#else
+    return fs::path(value);
+#endif
+}
+
 fs::path archive_path(const std::string &name)
 {
 #ifdef _WIN32
@@ -545,10 +561,10 @@ bool start(const std::string &disc_path, const std::string &executable_directory
     std::lock_guard<std::mutex> lock(g_status_mutex);
     if (g_status.running) return false;
     std::error_code error;
-    const fs::path disc_root = fs::u8path(disc_path);
+    const fs::path disc_root = path_from_utf8(disc_path);
     const fs::path disc = fs::is_directory(disc_root, error)
         ? disc_root : disc_root.parent_path();
-    const fs::path exe = fs::u8path(executable_directory);
+    const fs::path exe = path_from_utf8(executable_directory);
     const bool archive = fs::is_regular_file(disc / "INFO.DAT", error)
         && fs::is_regular_file(disc / "GAME.DAT", error);
     if (!archive && !fs::is_directory(disc / "GAME", error))
