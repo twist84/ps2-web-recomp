@@ -493,19 +493,35 @@ std::vector<std::string> texture_registries()
 {
     std::vector<std::string> result;
     std::lock_guard<std::mutex> lock(g_selection_mutex);
-    // The built-in registry is a data file, not a compiled fingerprint table.
-    // It remains available even if every resource pack is disabled.
+    // Read the bundled compatibility registry plus optional per-release
+    // source fingerprints. Different versions may upload different bytes for
+    // the same logical image; the GS resolver unifies them by filename/layout.
+    // These are data files beside the executable, not hardcoded hashes.
     if (!g_native_registry_file.empty())
     {
-        const auto &base = g_native_registry_file;
-        std::error_code error;
-        const auto size = fs::file_size(base, error);
-        if (!error && size && size <= k_max_resource)
+        const auto directory = g_native_registry_file.parent_path();
+        for (const auto &filename : {
+            fs::path("native_textures.registry"),
+            fs::path("native_textures.eu-beta.registry"),
+            fs::path("native_textures.japan.registry")})
         {
-            std::ifstream input(base, std::ios::binary);
+            const auto file = directory / filename;
+            std::error_code error;
+            if (fs::is_symlink(file, error) || error)
+            {
+                continue;
+            }
+            const auto size = fs::file_size(file, error);
+            if (error || !size || size > k_max_resource)
+            {
+                continue;
+            }
+            std::ifstream input(file, std::ios::binary);
             if (input)
+            {
                 result.emplace_back(std::istreambuf_iterator<char>(input),
                     std::istreambuf_iterator<char>());
+            }
         }
     }
     // Scan discovered, not only enabled, packs: a source identity must
