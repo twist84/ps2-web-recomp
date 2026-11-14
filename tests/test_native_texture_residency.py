@@ -118,6 +118,13 @@ int main()
         // PNG substitution for the black-rectangle A/B diagnostic.
         return chunk_image(0) ? 51 : 0;
     }
+    if (std::getenv("PS2_SDBZ_SKIP_PNG_NAMES"))
+    {
+        // Skip exactly one named PNG without affecting the other entries.
+        if (texture_path(0) != "dis/main_menu.pix.000") return 52;
+        if (texture_path(1).empty()) return 53;
+        return chunk_image(0) ? 54 : 0;
+    }
     if (texture_path(3) != "ply/extra.pix.000") return 28;
     // Alias must resolve to the same canonical filename/index.
     s_texture_upload_signature japan_upload{};
@@ -266,6 +273,10 @@ class NativeResidencyTests(unittest.TestCase):
             skip_png_env = dict(os.environ)
             skip_png_env["PS2_SDBZ_SKIP_PNG"] = "1"
             subprocess.run([str(exe)], env=skip_png_env, check=True)
+            skip_names_env = dict(os.environ)
+            skip_names_env["PS2_SDBZ_SKIP_PNG_NAMES"] = "dis/main_menu.pix.000"
+            skip_names_env.pop("PS2_SDBZ_SKIP_PNG", None)
+            subprocess.run([str(exe)], env=skip_names_env, check=True)
 
 if __name__ == "__main__":
     unittest.main()
