@@ -126,12 +126,14 @@ int main()
         {
             return 69;
         }
-        // A partial PSMT8 transfer begins *before* the old texture BP.
-        // Its raw 64*64 bytes fit in 16 GS blocks, but its swizzled page
-        // occupies 32 blocks and overwrites the old texture's first page.
+        // A full PSMT8 page (128x64) begins 16 blocks before the source
+        // and really does overwrite its first 16 GS blocks. A 64x64 half
+        // page would NOT reach that BP: the old page-wide approximation
+        // incorrectly invalidated the source in that case.
         const std::uint64_t partial_buf = (0x37f0ull << 32)
             | (8ull << 48) | (0x13ull << 56);
-        invalidate_destination(partial_buf, trxreg);
+        const std::uint64_t partial_reg = 128ull | (64ull << 32);
+        invalidate_destination(partial_buf, partial_reg);
         if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u) != -1)
         {
             return 55;
@@ -199,6 +201,47 @@ int main()
         if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u) != -1)
         {
             return 65;
+        }
+
+        // Regression from real EU Beta main-menu navigation: PSMT8 menu
+        // labels begin at GS BP 0x2E20, with CLUTs at 0x2E04 / 0x2E1C.
+        // A 16x16 PSMCT32 CLUT transfer uses exactly 4 GS blocks.
+        // The previous entire-page estimate wrongly included BP 0x2E20
+        // and made the Japanese PNG revert to English on selection.
+        const std::string menu_name = "dis/main_menu.pix.002";
+        const std::uint64_t menu_buf = (0x2e20ull << 32)
+            | (8ull << 48) | (0x13ull << 56);
+        const std::uint64_t menu_reg = 512ull | (512ull << 32);
+        if (!register_named_upload(menu_name, menu_buf, menu_reg,
+            0, 0x2e04u)) return 70;
+        const int menu_index = resident_chunk(0x2e20, 8, 0x13,
+            512, 512, 0x2e04u);
+        if (menu_index < 0 || texture_path(menu_index) != menu_name)
+        {
+            return 71;
+        }
+        const std::uint64_t clut_reg_menu = 16ull | (16ull << 32);
+        for (std::uint32_t cbp : {0x2e04u, 0x2e18u, 0x2e1cu})
+        {
+            const std::uint64_t buf = (static_cast<std::uint64_t>(cbp)
+                << 32) | (1ull << 48);
+            for (int frame = 0; frame < 4; ++frame)
+            {
+                invalidate_destination(buf, clut_reg_menu);
+                if (resident_chunk(0x2e20, 8, 0x13,
+                    512, 512, 0x2e04u) != menu_index)
+                {
+                    return 72;
+                }
+            }
+        }
+        // A real transfer into the sprite's indexed-pixel storage must
+        // still retire it, unlike adjacent palette changes.
+        invalidate_destination(menu_buf, 128ull | (64ull << 32));
+        if (resident_chunk(0x2e20, 8, 0x13,
+            512, 512, 0x2e04u) != -1)
+        {
+            return 73;
         }
         return 0;
     }
