@@ -16,6 +16,7 @@ HARNESS = r'''
 #include <filesystem>
 #include <fstream>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <vector>
@@ -79,6 +80,31 @@ int main()
     }
     ps2::resource_pack::mount(root, root);
     reset_residency();
+    if (name_only_mode())
+    {
+        // Pure-name residency requires no fingerprint registry or upload
+        // hashing, and retains a named texture across pack reloads.
+        if (replacements_available() || registered_texture_count()) return 44;
+        const std::uint64_t bitbltbuf = (0x3800ull << 32)
+            | (2ull << 48) | (0x13ull << 56);
+        const std::uint64_t trxreg = 64ull | (64ull << 32);
+        if (!register_named_upload("ply/name_only.pix.000",
+            bitbltbuf, trxreg, 0)) return 45;
+        if (register_named_upload("ply/name_only.pix.000",
+            bitbltbuf, trxreg, 0)) return 46; // already registered
+        const int index = resident_chunk(0x3800, 2, 0x13, 64, 64);
+        if (index < 0 || texture_path(index) != "ply/name_only.pix.000")
+        {
+            return 47;
+        }
+        reload_replacements();
+        const int restored = resident_chunk(0x3800, 2, 0x13, 64, 64);
+        if (restored < 0
+            || texture_path(restored) != "ply/name_only.pix.000") return 48;
+        invalidate_destination(bitbltbuf, trxreg);
+        if (resident_chunk(0x3800, 2, 0x13, 64, 64) != -1) return 49;
+        return 0;
+    }
     if (!replacements_available() || registered_texture_count() != 4) return 1;
     if (texture_path(3) != "ply/extra.pix.000") return 28;
     // Alias must resolve to the same canonical filename/index.
@@ -222,6 +248,9 @@ class NativeResidencyTests(unittest.TestCase):
             str(ROOT / "runtime/src/resource_pack_zip.cpp"),
                 "-lz", "-o", str(exe)], check=True)
             subprocess.run([str(exe)], check=True)
+            pure_name_env = dict(os.environ)
+            pure_name_env["PS2_SDBZ_NAME_ONLY"] = "1"
+            subprocess.run([str(exe)], env=pure_name_env, check=True)
 
 if __name__ == "__main__":
     unittest.main()
