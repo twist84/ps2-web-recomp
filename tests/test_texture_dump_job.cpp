@@ -118,6 +118,11 @@ bool check_result(const fs::path &output)
     };
     if (data.size() < 60 || data[0] != 137 || data[1] != 'P') return false;
     if (data[24] != 8 || data[25] != 6) return false; // RGBA8 IHDR
+    std::ifstream manifest(output / "pack.json");
+    const std::string manifest_text(std::istreambuf_iterator<char>{manifest}, {});
+    if (manifest_text.find("\"name\": \"" + output.filename().string() + "\"")
+        == std::string::npos)
+        return false;
     std::ifstream report(output / "dump_report.json");
     std::string text(std::istreambuf_iterator<char>{report}, {});
     std::ifstream registry(output / "assets/sdbz/textures.registry");
