@@ -63,7 +63,7 @@ int main()
     // same filename and layout, without requiring another PNG/GPU slot.
     {
         std::ofstream japan(root / "native_textures.japan.registry");
-        japan << "0123456789ABCDEF\\t19\\t256\\t256\\tdis/main_menu.pix.000\\n";
+        japan << "0123456789ABCDEF\t19\t256\t256\tdis/main_menu.pix.000\n";
     }
     // Registry entries are discovered from pack assets even when disabled.
     const auto extra = root / "resourcepacks" / "Extra Pack"
