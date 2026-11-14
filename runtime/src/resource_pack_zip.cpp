@@ -15,11 +15,6 @@ namespace ps2::resource_pack::zip
 {
 namespace
 {
-constexpr std::uint64_t k_max_archive = 512ull * 1024 * 1024;
-constexpr std::uint32_t k_max_file = 64u * 1024 * 1024;
-constexpr std::uint32_t k_max_entries = 4096;
-constexpr std::uint32_t k_max_central = 8u * 1024 * 1024;
-
 std::uint16_t u16(const std::uint8_t *p)
 {
     return static_cast<std::uint16_t>(p[0] | (p[1] << 8));
@@ -62,21 +57,22 @@ bool safe_name(const std::string &path)
     return true;
 }
 
-bool archive_size(const std::filesystem::path &path, std::uint64_t &size)
+bool archive_size(const std::filesystem::path &path, std::uint64_t &size,
+    const s_limits &limits)
 {
     std::error_code error;
     size = std::filesystem::file_size(path, error);
-    return !error && size >= 22 && size <= k_max_archive;
+    return !error && size >= 22 && size <= limits.m_max_archive;
 }
 
 } // namespace
 
 bool index(const std::filesystem::path &archive,
-    std::vector<s_zip_entry> &entries)
+    std::vector<s_zip_entry> &entries, const s_limits &limits)
 {
     entries.clear();
     std::uint64_t length = 0;
-    if (!archive_size(archive, length)) return false;
+    if (!archive_size(archive, length, limits)) return false;
     std::ifstream input(archive, std::ios::binary);
     if (!input) return false;
 
@@ -98,9 +94,9 @@ bool index(const std::filesystem::path &archive,
     const std::uint32_t central_size = u32(end + 12);
     const std::uint32_t central_offset = u32(end + 16);
     if (u16(end + 4) || u16(end + 6)
-        || u16(end + 8) != count || count > k_max_entries
+        || u16(end + 8) != count || count > limits.m_max_entries
         || count == 0 || count == 0xffffu
-        || central_size > k_max_central
+        || central_size > limits.m_max_central
         || central_size == 0xffffffffu
         || central_offset == 0xffffffffu
         || static_cast<std::uint64_t>(central_offset) + central_size > tail_at + eocd)
@@ -130,7 +126,7 @@ bool index(const std::filesystem::path &archive,
         if (next > table.size() || !name_length || name_length > 512
             || flags & ~static_cast<std::uint16_t>(0x0808u)
             || (method != 0 && method != 8)
-            || compressed > k_max_file || expanded > k_max_file
+            || compressed > limits.m_max_file || expanded > limits.m_max_file
             || offset == 0xffffffffu || u16(p + 34)
             || ((u16(p + 4) >> 8) == 3 && ((external >> 16) & 0170000u) == 0120000u))
             return false;
@@ -143,7 +139,7 @@ bool index(const std::filesystem::path &archive,
         if (!directory)
         {
             if (method == 0 && compressed != expanded) return false;
-            if (total_size + expanded > k_max_archive) return false;
+            if (total_size + expanded > limits.m_max_expanded) return false;
             total_size += expanded;
             std::string key = name;
             std::transform(key.begin(), key.end(), key.begin(),
@@ -165,12 +161,12 @@ bool index(const std::filesystem::path &archive,
 }
 
 bool read(const std::filesystem::path &archive, const s_zip_entry &entry,
-    std::vector<std::uint8_t> &output)
+    std::vector<std::uint8_t> &output, const s_limits &limits)
 {
     output.clear();
     std::uint64_t length = 0;
-    if (!archive_size(archive, length)
-        || entry.m_size > k_max_file || entry.m_compressed_size > k_max_file
+    if (!archive_size(archive, length, limits)
+        || entry.m_size > limits.m_max_file || entry.m_compressed_size > limits.m_max_file
         || !safe_name(entry.m_path)) return false;
     std::ifstream input(archive, std::ios::binary);
     std::array<std::uint8_t, 30> header{};
