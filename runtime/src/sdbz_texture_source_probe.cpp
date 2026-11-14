@@ -3,11 +3,13 @@
 #include "ps2/generated.hpp"
 #include "ps2/memory.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 
 namespace ps2
 {
@@ -19,6 +21,29 @@ constexpr std::uint32_t k_pix_initialize_eu_beta = 0x0019AA70u;
 constexpr std::uint32_t k_texture_initialize_eu_beta = 0x0019A670u;
 constexpr std::uint32_t k_pix_initialize_japan = 0x0019A860u;
 constexpr std::uint32_t k_texture_initialize_japan = 0x0019A460u;
+// The texture handle is the first parameter of the guest TEX0 builder.
+constexpr std::uint32_t k_bind_texture_eu_beta = 0x0010C3E0u;
+constexpr std::uint32_t k_bind_texture_japan = 0x0010C350u;
+constexpr std::uint32_t k_handle_table_eu_beta = 0x004FF8F0u;
+constexpr std::uint32_t k_handle_table_japan = 0x004FF8F0u;
+constexpr std::uint32_t k_handle_stride = 48u;
+constexpr std::size_t k_max_handles = 255;
+constexpr std::size_t k_max_observed_objects = 8192;
+
+struct s_source_object
+{
+    std::uint32_t address = 0;
+    std::string name;
+};
+std::unordered_map<std::uint32_t, std::string> g_source_objects;
+struct s_resolved_handle
+{
+    std::string name;
+    bool ambiguous = false;
+};
+std::array<s_resolved_handle, k_max_handles + 1> g_named_handles;
+std::uint64_t g_source_revision = 1;
+std::uint64_t g_resolved_revision = 0;
 constexpr std::size_t k_max_name = 80;
 
 const std::uint8_t *ee_bytes(std::uint32_t address, std::size_t size)
@@ -141,15 +166,97 @@ void inspect_texture(Cpu &cpu)
         return;
     }
 
-    // Provenance is the guest source address, not a hash of its bytes.
-    // Until the texture-handle / GS transfer correlation is established,
-    // do not assign this name to any GS base pointer.
+    // Store the guest object for later correlation with its assigned handle.
+    // We never modify guest RAM or infer a name from image bytes.
+    if (g_source_objects.size() < k_max_observed_objects
+        || g_source_objects.find(object) != g_source_objects.end())
+    {
+        g_source_objects[object] = name;
+        ++g_source_revision;
+    }
     std::fprintf(stderr,
         "[sdbz-name] texture=%s TIM2=%08X pixels=%08X bytes=%u"
         " PSM=%u size=%ux%u object=%08X\n",
         name.c_str(), tim2_address, pixel_address, image_bytes,
         image_type == 5 ? 19u : 20u, width, height, object);
 }
+}
+
+void rebuild_handles()
+{
+    if (g_resolved_revision == g_source_revision)
+    {
+        return;
+    }
+    for (auto &item : g_named_handles)
+    {
+        item = {};
+    }
+    for (const auto &[object, name] : g_source_objects)
+    {
+        const auto *handle_data = ee_bytes(object + 0x38u, 4);
+        std::string live_name;
+        if (!handle_data || !texture_name(object, live_name)
+            || live_name != name)
+        {
+            continue;
+        }
+        const std::uint32_t handle = u32(handle_data);
+        if (handle == 0 || handle > k_max_handles)
+        {
+            continue;
+        }
+        auto &entry = g_named_handles[handle];
+        if (!entry.name.empty() && entry.name != name)
+        {
+            entry.ambiguous = true;
+        }
+        else
+        {
+            entry.name = name;
+        }
+    }
+    g_resolved_revision = g_source_revision;
+}
+
+void inspect_binding(Cpu &cpu, std::uint32_t table_base)
+{
+    const std::uint32_t handle = cpu.r[4].w[0];
+    if (!handle || handle > k_max_handles)
+    {
+        return;
+    }
+    rebuild_handles();
+    const auto &identity = g_named_handles[handle];
+    if (identity.name.empty() || identity.ambiguous)
+    {
+        return;
+    }
+    const auto *slot = ee_bytes(table_base
+        + (handle - 1u) * k_handle_stride, k_handle_stride);
+    if (!slot)
+    {
+        return;
+    }
+    const std::uint32_t bp = u16(slot + 2);
+    const std::uint32_t bw = u16(slot + 4);
+    const std::uint32_t psm = u16(slot + 14);
+    const std::uint32_t width = u16(slot + 22);
+    const std::uint32_t height = u16(slot + 24);
+    if (!bw || bw > 63 || bp >= 0x4000u
+        || (psm != 0 && psm != 19 && psm != 20)
+        || !width || !height || width > 1024 || height > 1024)
+    {
+        return;
+    }
+
+    // A confirmed handle-to-name association plus the game's own table
+    // supplies GS metadata without hashing upload bytes.
+    // Until ordering relative to asynchronous GS DMA is verified, log only.
+    std::fprintf(stderr,
+        "[sdbz-name] bind name=%s handle=%u bp=%04X bw=%u"
+        " psm=%u size=%ux%u\n",
+        identity.name.c_str(), handle, bp, bw, psm, width, height);
 }
 
 void sdbz_texture_source_probe(Cpu &cpu, std::uint32_t pc)
@@ -163,6 +270,12 @@ void sdbz_texture_source_probe(Cpu &cpu, std::uint32_t pc)
     case k_texture_initialize_eu_beta:
     case k_texture_initialize_japan:
         inspect_texture(cpu);
+        break;
+    case k_bind_texture_eu_beta:
+        inspect_binding(cpu, k_handle_table_eu_beta);
+        break;
+    case k_bind_texture_japan:
+        inspect_binding(cpu, k_handle_table_japan);
         break;
     default:
         break;
