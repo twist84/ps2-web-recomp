@@ -23,6 +23,12 @@ namespace ps2
 std::uint8_t g_ram[kRamSize]{};
 }
 
+static void put_u16(std::uint8_t *p, std::uint16_t value)
+{
+    p[0] = static_cast<std::uint8_t>(value);
+    p[1] = static_cast<std::uint8_t>(value >> 8);
+}
+
 static void put_u32(std::uint8_t *p, std::uint32_t value)
 {
     for (int i = 0; i < 4; ++i)
@@ -50,6 +56,27 @@ int main()
     cpu.r[5].w[0] = 0x2000u;
     ps2::sdbz_texture_source_probe(cpu, 0x0019A670u);
     ps2::sdbz_texture_source_probe(cpu, 0x0019A460u);
+
+    // Guest CTexture::Initialize writes its handle at object +0x38.
+    put_u32(ps2::g_ram + 0x1038u, 1);
+    // Both builds have the same 48-byte texture entry layout but
+    // different global table addresses.
+    for (const std::uint32_t table : {0x004FF8F0u, 0x005007F0u})
+    {
+        auto *slot = ps2::g_ram + table;
+        put_u16(slot + 2, 0x0120u); // GS base block
+        put_u16(slot + 4, 4);       // GS buffer width
+        put_u16(slot + 14, 19);     // GS PSMT8
+        put_u16(slot + 22, 4);      // original width
+        put_u16(slot + 24, 4);      // original height
+    }
+    cpu.r[4].w[0] = 1;
+    ps2::sdbz_texture_source_probe(cpu, 0x0010C3E0u);
+    ps2::sdbz_texture_source_probe(cpu, 0x0010C350u);
+    // Invalid handles cannot be assigned a filename.
+    cpu.r[4].w[0] = 256;
+    ps2::sdbz_texture_source_probe(cpu, 0x0010C3E0u);
+    cpu.r[4].w[0] = 0x1000u;
 
     auto *fpix = ps2::g_ram + 0x3000u;
     std::memcpy(fpix, "FPIX", 4);
@@ -91,6 +118,8 @@ class NamedTextureProbeTests(unittest.TestCase):
                                   text=True, capture_output=True, check=True)
             self.assertEqual(done.stderr.count("[sdbz-name] texture="), 2)
             self.assertEqual(done.stderr.count("[sdbz-name] FPIX"), 2)
+            self.assertEqual(done.stderr.count("[sdbz-name] bind"), 2)
+            self.assertIn("bp=0120 bw=4 psm=19 size=4x4", done.stderr)
             self.assertIn("dis/main_menu.pix.001", done.stderr)
             self.assertIn("pixels=000020B0", done.stderr)
             self.assertIn("PSM=19 size=4x4", done.stderr)
