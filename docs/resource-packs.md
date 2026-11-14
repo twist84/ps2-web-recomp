@@ -142,14 +142,14 @@ The C++ dumper now writes `assets/sdbz/textures.registry` alongside exported PNG
 Each tab-separated registry record contains:
 
 ```text
-FNV64(hex)    PSM(decimal)    width    height    relative PNG basename
+FNV64(hex)    PSM(decimal)    width    height    logical texture name
 ```
 
 (Fields are separated by literal tab characters.) Registry fingerprints
 describe **original PS2 source pixel payloads**, not edited PNG contents.
 At runtime, completed GS texture uploads are matched by fingerprint,
 pixel format and dimensions, then resolved to their original logical
-asset name. All installed pack registries are read, including disabled packs,
+asset name (without the final `.png` suffix). All installed pack registries are read, including disabled packs,
 so enabling a pack later does not depend on another texture upload.
 
 The formerly compiled-in 13-entry main-menu hash table is removed.
