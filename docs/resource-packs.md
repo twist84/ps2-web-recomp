@@ -209,13 +209,37 @@ or TIM2 input it prints source addresses, logical names and dimensions.
 The observer does not replace game code, does not compute a pixel hash and
 does not assign any GS VRAM address based on timing.
 
-**Still required:** locate where the game turns an allocated texture handle
-into the GS base pointer for the upload/bind and carry that association to
-the GS render thread (which may be consuming queued commands). Until this
-provenance link is validated, the observer remains diagnostic only, the
-fingerprint fallback remains enabled, and the in-game texture replacement
-system is **not yet pure-name**. Do not merge the draft as a finished
-replacement pipeline.
+The second guest mapping is now identified: EU Beta `0x0010C3E0` and
+Japan `0x0010C350` construct TEX0 from their 48-byte handle records. Their
+handle tables are at `0x004FF8F0` and `0x005007F0` respectively.
+At this point the game itself provides a base block (BP), buffer width,
+pixel format and original dimensions for the filename-associated handle.
+
+### Experimental strict name-only replacement
+
+Set `PS2_SDBZ_NAME_ONLY=1` before starting SDBZ to enable the end-to-end
+experimental path. This mode:
+
+- Observes the game's verified texture constructors, preserving each original
+  `name -> CTexture object` association
+- Resolves the object's final handle and the regional handle table layout
+  when the game builds its TEX0
+- Publishes `name + BP + buffer width + PSM + dimensions` to the GS thread,
+  in the same queued order as the game's GIF commands
+- Associates that name with GS residency, and loads replacement PNGs from
+  `assets/sdbz/textures/<name>.png`
+- **Does not load native texture fingerprint registries or compute FNV hashes
+  for replacement selection**; unknown or ambiguous names fall back to the
+  original GS texture
+
+Set `PS2_TRACE_SDBZ_TEXTURE_NAMES=1` as well to log constructor and
+binding records for diagnosis.
+
+This mode is intentionally **opt-in and unmerged** pending in-game tests.
+Because GS uploads are asynchronous and guest handles can be recycled, validate
+rendered replacements (including reloads/VRAM overwrites) before choosing it
+as the default. The older fingerprint path remains the default while this
+draft is under review.
 
 ### Data-driven texture identities
 
