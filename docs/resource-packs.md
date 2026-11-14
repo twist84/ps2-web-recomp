@@ -167,6 +167,25 @@ game's upload pipeline, not simply another filename lookup.
 This adds no per-draw filesystem scans: the merged signature and name indices
 are constructed when the source registries are loaded.
 
+### Pure name-based texture identity (integration work)
+
+The GS residency layer now exposes
+`native_texture::register_named_upload(logical_name, bitbltbuf, trxreg, trxpos)`.
+A trusted asset decoder/loader integration can register a fully uploaded
+source image using its original logical filename (for example,
+`dis/main_menu.pix.001`). Named identities are interned directly without
+consulting `textures.registry` and survive resource-pack priority changes.
+A named entry is invalidated when the destination GS memory is overwritten.
+
+**This API is not yet hooked into the game's EE-side texture decoder.**
+ARKD's native file reader knows the archive filename, but the game decodes
+and uploads textures later via GS DMA, without carrying that filename into
+the existing host GS API. Associating an ARKD file read with arbitrary
+subsequent GS uploads would risk false texture replacements. Until a
+correct loader/decode hook is available, the existing fingerprint-based
+path remains in service. Do not remove the registry files or enable a
+strict name-only mode on this intermediate change.
+
 ### Data-driven texture identities
 
 The C++ dumper now writes `assets/sdbz/textures.registry` alongside exported PNGs.
