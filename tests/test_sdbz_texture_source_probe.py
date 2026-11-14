@@ -38,6 +38,15 @@ std::string resolve_texture_name(std::string_view name)
 namespace ps2::gs
 {
 int g_named_publishes = 0;
+int g_named_revokes = 0;
+void revoke_named_texture(const std::string &logical_name,
+    std::uint32_t bp)
+{
+    if (logical_name == "dis/main_menu.pix.001" && bp == 0x120u)
+    {
+        ++g_named_revokes;
+    }
+}
 void publish_named_texture(const std::string &logical_name,
     std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
     std::uint32_t width, std::uint32_t height,
@@ -137,6 +146,12 @@ int main()
     cpu.r[5].w[0] = 0x3000u;
     ps2::sdbz_texture_source_probe(cpu, 0x0019AA70u);
 
+    // The guest destructor releases the handle without clearing the
+    // object's old handle field. The cached name must nevertheless be
+    // retired, so a recycled slot cannot inherit the original PNG.
+    ps2::sdbz_texture_source_probe(cpu, 0x0019A5F0u);
+    ps2::sdbz_texture_source_tex0(tex0);
+
     // Switch to the Japanese executable. The EU addresses now contain
     // unrelated code and must no longer identify textures or handles.
     put_u32(ps2::g_ram + 0x19AA70u, 0);
@@ -151,6 +166,8 @@ int main()
     ps2::sdbz_texture_source_probe(cpu, 0x0010C350u);
     ps2::sdbz_texture_source_tex0(tex0);
     cpu.r[4].w[0] = 0x1000u;
+    ps2::sdbz_texture_source_probe(cpu, 0x0019A3E0u);
+    ps2::sdbz_texture_source_tex0(tex0);
     cpu.r[5].w[0] = 0x3000u;
     ps2::sdbz_texture_source_probe(cpu, 0x0019A860u);
 
@@ -158,7 +175,8 @@ int main()
     tim2[0] = 0;
     cpu.r[5].w[0] = 0x2000u;
     ps2::sdbz_texture_source_probe(cpu, 0x0019A460u);
-    return ps2::gs::g_named_publishes == 4 ? 0 : 1;
+    return ps2::gs::g_named_publishes == 4
+        && ps2::gs::g_named_revokes == 2 ? 0 : 1;
 }
 '''
 
