@@ -1,5 +1,6 @@
 #include "disc_folder.hpp"
 #include "ps2/disc.hpp"
+#include "resource_pack_zip.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -9,8 +10,10 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <list>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -45,6 +48,8 @@ struct s_direct_game_asset
     std::string name;
     fs::path path;
     std::uint32_t size = 0;
+    // Empty path means this asset is served from the mounted regional ZIP.
+    std::optional<resource_pack::s_zip_entry> zip_entry;
 };
 
 struct s_native_asset
@@ -59,6 +64,25 @@ std::vector<s_native_asset> g_native_assets;
 fs::path g_native_asset_root;
 std::vector<s_direct_game_asset> g_direct_game_assets;
 fs::path g_direct_game_root;
+fs::path g_direct_game_zip_path;
+
+struct s_cached_game_zip_file
+{
+    std::uint32_t id = 0;
+    std::vector<std::uint8_t> bytes;
+};
+std::list<s_cached_game_zip_file> g_direct_zip_cache;
+std::size_t g_direct_zip_cached_bytes = 0;
+std::mutex g_direct_zip_mutex;
+
+// Cache only the most recently used game assets. A ZIP is indexed at boot;
+// its members are decoded and CRC-checked once on first use. Never unpack
+// the full archive onto disk, and never make repeated ARKD reads re-inflate.
+constexpr std::size_t k_direct_zip_cache_limit = 128u * 1024 * 1024;
+const resource_pack::zip::s_limits k_game_zip_limits{
+    0xffffffffull, 0xffffffffull, 512u * 1024 * 1024,
+    8192u, 32u * 1024 * 1024
+};
 
 std::string upper(std::string text)
 {
