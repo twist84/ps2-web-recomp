@@ -29,4 +29,12 @@ struct s_named_texture_binding
 // publish the binding after the corresponding TEX0 qword reaches the GS.
 bool sdbz_texture_source_tex0(std::uint64_t tex0,
     s_named_texture_binding *result = nullptr);
+
+// A valid full-image GS upload can overwrite a named resident after the
+// game's last TEX0 register write. Recover its canonical identity only when
+// a unique, currently live CTexture handle owns the exact destination and
+// source image layout. Called on the emulation thread at TRXDIR=host->local.
+bool sdbz_texture_source_transfer(std::uint64_t bitbltbuf,
+    std::uint64_t trxreg, std::uint64_t trxpos,
+    s_named_texture_binding &result);
 }
