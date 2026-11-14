@@ -266,7 +266,7 @@ void out(int path, const std::uint8_t *data, std::uint32_t qwc) {
         }
         gs::publish_named_texture(event.bind.name, event.bind.bp,
             event.bind.bw, event.bind.psm, event.bind.width,
-            event.bind.height);
+            event.bind.height, event.bind.clut_bp);
     }
     if (emitted < qwc)
     {
