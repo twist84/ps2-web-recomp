@@ -399,7 +399,7 @@ void export_asset(const std::string &name, const std::vector<std::uint8_t> &data
             reason = "cannot write PNG";
         else
         {
-            register_image(result, name + ".000", image);
+            register_image(result, name + ".000.png", image);
             ++count;
             ++result.exported;
         }
