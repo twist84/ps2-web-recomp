@@ -3,6 +3,7 @@
 #include "ps2/generated.hpp"
 #include "ps2/memory.hpp"
 #include "gs/gs.hpp"
+#include "iop/arika_dvd.hpp"
 
 #include <algorithm>
 #include <array>
@@ -50,7 +51,12 @@ bool trace_enabled()
     return enabled;
 }
 
-std::unordered_map<std::uint32_t, std::string> g_source_objects;
+struct s_observed_texture
+{
+    std::string guest_name;
+    std::string canonical_name;
+};
+std::unordered_map<std::uint32_t, s_observed_texture> g_source_objects;
 struct s_resolved_handle
 {
     std::string name;
@@ -184,20 +190,23 @@ void inspect_texture(Cpu &cpu)
         return;
     }
 
-    // Store the guest object for later correlation with its assigned handle.
-    // We never modify guest RAM or infer a name from image bytes.
+    // Resolve the name using the original INFO/GAME index, not hashes.
+    // An unknown/ambiguous basename must never select an arbitrary pack.
+    const std::string canonical =
+        iop::arkd::resolve_texture_name(name);
     if (g_source_objects.size() < k_max_observed_objects
         || g_source_objects.find(object) != g_source_objects.end())
     {
-        g_source_objects[object] = name;
+        g_source_objects[object] = {name, canonical};
         ++g_source_revision;
     }
     if (trace_enabled())
     {
         std::fprintf(stderr,
-            "[sdbz-name] texture=%s TIM2=%08X pixels=%08X bytes=%u"
-            " PSM=%u size=%ux%u object=%08X\n",
-            name.c_str(), tim2_address, pixel_address, image_bytes,
+            "[sdbz-name] texture=%s canonical=%s TIM2=%08X pixels=%08X"
+            " bytes=%u PSM=%u size=%ux%u object=%08X\n",
+            name.c_str(), canonical.empty() ? "(unresolved)" : canonical.c_str(),
+            tim2_address, pixel_address, image_bytes,
             image_type == 5 ? 19u : 20u, width, height, object);
     }
 }
@@ -213,12 +222,16 @@ void rebuild_handles()
     {
         item = {};
     }
-    for (const auto &[object, name] : g_source_objects)
+    for (const auto &[object, observed] : g_source_objects)
     {
+        if (observed.canonical_name.empty())
+        {
+            continue;
+        }
         const auto *handle_data = ee_bytes(object + 0x38u, 4);
         std::string live_name;
         if (!handle_data || !texture_name(object, live_name)
-            || live_name != name)
+            || live_name != observed.guest_name)
         {
             continue;
         }
@@ -228,13 +241,14 @@ void rebuild_handles()
             continue;
         }
         auto &entry = g_named_handles[handle];
-        if (!entry.name.empty() && entry.name != name)
+        if (!entry.name.empty()
+            && entry.name != observed.canonical_name)
         {
             entry.ambiguous = true;
         }
         else
         {
-            entry.name = name;
+            entry.name = observed.canonical_name;
         }
     }
     g_resolved_revision = g_source_revision;
