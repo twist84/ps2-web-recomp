@@ -118,6 +118,30 @@ int main()
         | (19ull << 20) | (2ull << 26) | (2ull << 30)
         | (4ull << 37);
     ps2::sdbz_texture_source_tex0(tex0);
+
+    // A repeated, full-image GS upload invalidates residency when TRXDIR
+    // executes. With no subsequent TEX0 write, recover the same source name
+    // from the original live handle at the destination image address.
+    ps2::s_named_texture_binding restored{};
+    const std::uint64_t upload_buf = (0x120ull << 32)
+        | (1ull << 48) | (19ull << 56);
+    const std::uint64_t upload_reg = 4ull | (4ull << 32);
+    if (!ps2::sdbz_texture_source_transfer(upload_buf, upload_reg,
+            0, restored)
+        || restored.name != "dis/main_menu.pix.001"
+        || restored.bp != 0x120u || restored.clut_bp != 4u)
+    {
+        return 3;
+    }
+    if (ps2::sdbz_texture_source_transfer(upload_buf, upload_reg,
+            1ull << 32, restored)
+        || ps2::sdbz_texture_source_transfer(upload_buf,
+            8ull | (4ull << 32), 0, restored)
+        || ps2::sdbz_texture_source_transfer(upload_buf
+            ^ (1ull << 56), upload_reg, 0, restored))
+    {
+        return 4; // Never alias partial/mismatched source uploads.
+    }
     // An incorrectly matching pixel layout must never bind a name.
     ps2::sdbz_texture_source_tex0(tex0 ^ (1ull << 20));
     // Identical pixels with a different palette are *not* the same texture.
@@ -126,6 +150,11 @@ int main()
     // another guest constructor runs. Do not bind an orphaned name.
     put_u32(ps2::g_ram + 0x1038u, 0);
     ps2::sdbz_texture_source_tex0(tex0);
+    if (ps2::sdbz_texture_source_transfer(upload_buf,
+            upload_reg, 0, restored))
+    {
+        return 5; // Never restore a freed guest owner.
+    }
     cpu.r[4].w[0] = 1;
     ps2::sdbz_texture_source_probe(cpu, 0x0010C3E0u);
     put_u32(ps2::g_ram + 0x1038u, 1);
@@ -165,6 +194,12 @@ int main()
     ps2::sdbz_texture_source_probe(cpu, 0x0010C3E0u);
     ps2::sdbz_texture_source_probe(cpu, 0x0010C350u);
     ps2::sdbz_texture_source_tex0(tex0);
+    if (!ps2::sdbz_texture_source_transfer(upload_buf,
+            upload_reg, 0, restored)
+        || restored.name != "dis/main_menu.pix.001")
+    {
+        return 6; // Japan shares the name-only lifecycle.
+    }
     cpu.r[4].w[0] = 0x1000u;
     ps2::sdbz_texture_source_probe(cpu, 0x0019A3E0u);
     ps2::sdbz_texture_source_tex0(tex0);
