@@ -181,24 +181,13 @@ fs::path find_region_zip(const fs::path &root)
         return {};
     }
 
-    // Match the executable's region by default, but allow JPN game data
-    // with the EU beta executable through SDBZ_GAME_REGION=JPN.
-    std::wstring preferred;
-    if (fs::exists(root / "SLES_541.61"))
-    {
-        preferred = L"GAME_EU_BETA.ZIP";
-    }
-    else if (fs::exists(root / "SLUS_214.42"))
-    {
-        preferred = L"GAME_US.ZIP";
-    }
-    const auto it = choices.find(preferred);
-    if (it != choices.end())
-    {
-        return it->second;
-    }
+    // The retail EU and EU Beta releases both use SLES_541.61.
+    // Executable naming does not identify the asset region reliably.
+    // Never silently select the wrong full-game archive: require an
+    // explicit choice when multiple GAME_{REGION}.zip sources exist.
     throw std::runtime_error(
-        "multiple GAME regional ZIPs; set SDBZ_GAME_REGION explicitly");
+        "multiple GAME regional ZIPs; set SDBZ_GAME_REGION explicitly "
+        "(for example EU, EU_BETA, or JPN)");
 }
 
 std::uint64_t sectors(std::uint64_t size)
