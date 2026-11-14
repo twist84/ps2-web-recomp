@@ -120,23 +120,60 @@ bool intersects(std::uint32_t begin, std::uint32_t end,
     return begin < other_end && other_begin < end;
 }
 
-std::uint32_t transfer_blocks(std::uint64_t bitbltbuf, std::uint64_t trxreg)
+// GS textures occupy 8 KiB swizzled pages; they do not occupy a tightly
+// packed width*height*bpp byte interval. In particular, short sub-rectangle
+// uploads can touch later pages when DBW exceeds RRW or DSAY is nonzero.
+// Conservatively cover the bounding page interval using the same page
+// geometry as the GPU's pages()/region() logic.
+std::uint32_t transfer_blocks(std::uint64_t bitbltbuf,
+    std::uint64_t trxreg, std::uint64_t trxpos = 0)
 {
-    const std::uint32_t psm = static_cast<std::uint32_t>(bitbltbuf >> 56) & 0x3fu;
-    std::uint32_t bits = 0;
-    switch (psm)
-    {
-    case 0x00: case 0x30: bits = 32; break;
-    case 0x01: case 0x31: bits = 24; break;
-    case 0x02: case 0x0a: case 0x32: case 0x3a: bits = 16; break;
-    case 0x13: case 0x1b: bits = 8; break;
-    case 0x14: case 0x24: case 0x2c: bits = 4; break;
-    default: return k_gs_blocks;
-    }
+    const std::uint32_t psm =
+        static_cast<std::uint32_t>(bitbltbuf >> 56) & 0x3fu;
+    const std::uint64_t bw =
+        static_cast<std::uint32_t>(bitbltbuf >> 48) & 0x3fu;
     const std::uint64_t width = trxreg & 0xfffu;
     const std::uint64_t height = (trxreg >> 32) & 0xfffu;
-    const std::uint64_t bytes = (width * height * bits + 7) / 8;
-    return static_cast<std::uint32_t>((bytes + 255) / 256);
+    if (!bw || !width || !height)
+    {
+        return 0;
+    }
+
+    std::uint64_t page_width = 64;
+    std::uint64_t page_height = 32;
+    switch (psm)
+    {
+    case 0x02: case 0x0a: case 0x32: case 0x3a:
+        page_height = 64;
+        break;
+    case 0x13:
+        page_width = 128;
+        page_height = 64;
+        break;
+    case 0x14:
+        page_width = 128;
+        page_height = 128;
+        break;
+    case 0x00: case 0x01: case 0x30: case 0x31:
+    case 0x1b: case 0x24: case 0x2c:
+        break;
+    default:
+        // Unknown layouts must never leave a stale named source identity.
+        return k_gs_blocks;
+    }
+
+    const std::uint64_t dsax = (trxpos >> 32) & 0x7ffu;
+    const std::uint64_t dsay = (trxpos >> 48) & 0x7ffu;
+    const std::uint64_t pages_per_row =
+        std::max<std::uint64_t>(1, (bw * 64 + page_width - 1)
+            / page_width);
+    const std::uint64_t last_page =
+        (dsax + width - 1) / page_width
+        + ((dsay + height - 1) / page_height) * pages_per_row;
+    // Each GS page spans 32 x 256-byte blocks. Clamp to all VRAM if
+    // the region is larger than the available 4 MiB.
+    return static_cast<std::uint32_t>(std::min<std::uint64_t>(
+        k_gs_blocks, (last_page + 1) * 32));
 }
 
 bool valid_path(const std::string &name)
@@ -376,17 +413,44 @@ std::vector<int> resident_chunks()
     return chunks;
 }
 
-void invalidate_destination(std::uint64_t bitbltbuf, std::uint64_t trxreg)
+void invalidate_destination(std::uint64_t bitbltbuf,
+    std::uint64_t trxreg, std::uint64_t trxpos)
 {
-    const std::uint32_t start = static_cast<std::uint32_t>(bitbltbuf >> 32) & 0x3fffu;
-    const std::uint32_t blocks = transfer_blocks(bitbltbuf, trxreg);
-    if (!blocks) return;
-    const std::uint32_t end = std::min(k_gs_blocks, start + blocks);
+    const std::uint32_t start =
+        static_cast<std::uint32_t>(bitbltbuf >> 32) & 0x3fffu;
+    const std::uint32_t blocks =
+        transfer_blocks(bitbltbuf, trxreg, trxpos);
+    if (!blocks)
+    {
+        return;
+    }
+    const std::uint64_t last = static_cast<std::uint64_t>(start) + blocks;
+    const bool wraps = last > k_gs_blocks;
+    const std::uint32_t end = static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(k_gs_blocks, last));
     for (std::size_t i = 0; i < g_residents.size(); ++i)
     {
         auto &resident = g_residents[i];
-        if (resident.valid
-            && intersects(start, end, resident.bp, resident.end_bp))
+        if (!resident.valid)
+        {
+            continue;
+        }
+        // Indexed textures also depend on their CLUT. Uploading another
+        // palette at the same CBP invalidates any previously decoded PNG
+        // even when TEX0 and its pixel buffer have not changed.
+        const bool clut_hit = resident.named
+            && resident.clut_bp != 0xffffffffu
+            && (intersects(start, end, resident.clut_bp,
+                    std::min(k_gs_blocks, resident.clut_bp + 32u))
+                || (wraps && intersects(0,
+                    static_cast<std::uint32_t>(last - k_gs_blocks),
+                    resident.clut_bp,
+                    std::min(k_gs_blocks, resident.clut_bp + 32u))));
+        if (clut_hit || intersects(start, end,
+                resident.bp, resident.end_bp)
+            || (wraps && intersects(0,
+                    static_cast<std::uint32_t>(last - k_gs_blocks),
+                    resident.bp, resident.end_bp)))
         {
             if (g_resident_by_bp[resident.bp] == static_cast<int>(i))
             {
