@@ -71,6 +71,14 @@ struct s_resident
 std::vector<s_entry> g_entries;
 std::unordered_map<s_key, int, s_key_hash> g_lookup;
 std::array<s_resident, 256> g_residents{};
+// GS base pointers are 14-bit block addresses. Avoid scanning every
+// resident slot while preparing each textured draw.
+std::array<int, k_gs_blocks> g_resident_by_bp = []()
+{
+    std::array<int, k_gs_blocks> result{};
+    result.fill(-1);
+    return result;
+}();
 std::size_t g_next_resident = 0;
 bool g_registry_loaded = false;
 
@@ -236,6 +244,7 @@ bool replacements_available()
 void reset_residency()
 {
     g_residents = {};
+    g_resident_by_bp.fill(-1);
     g_next_resident = 0;
     g_entries.clear();
     g_lookup.clear();
@@ -272,11 +281,18 @@ void invalidate_destination(std::uint64_t bitbltbuf, std::uint64_t trxreg)
     const std::uint32_t blocks = transfer_blocks(bitbltbuf, trxreg);
     if (!blocks) return;
     const std::uint32_t end = std::min(k_gs_blocks, start + blocks);
-    for (auto &resident : g_residents)
+    for (std::size_t i = 0; i < g_residents.size(); ++i)
     {
+        auto &resident = g_residents[i];
         if (resident.valid
             && intersects(start, end, resident.bp, resident.end_bp))
+        {
+            if (g_resident_by_bp[resident.bp] == static_cast<int>(i))
+            {
+                g_resident_by_bp[resident.bp] = -1;
+            }
             resident.valid = false;
+        }
     }
 }
 
@@ -341,23 +357,46 @@ int complete_upload(const s_texture_upload_signature &upload)
     }
     if (!slot)
         slot = &g_residents[(g_next_resident++) % g_residents.size()];
+    // A reused slot must not leave a stale lookup at its previous address.
+    const std::size_t slot_index = static_cast<std::size_t>(slot - g_residents.data());
+    if (slot->valid && g_resident_by_bp[slot->bp] == static_cast<int>(slot_index))
+    {
+        g_resident_by_bp[slot->bp] = -1;
+    }
+    // Newest completed upload owns this base pointer. Any old resident
+    // at the same address is obsolete, even if its format differs.
+    const int previous = g_resident_by_bp[bp];
+    if (previous >= 0 && static_cast<std::size_t>(previous) != slot_index)
+    {
+        g_residents[static_cast<std::size_t>(previous)].valid = false;
+    }
     *slot = {bp, std::min(k_gs_blocks,
         bp + static_cast<std::uint32_t>((upload.expected_bytes + 255) / 256)),
         bw, width, height, psm, upload.fnv1a64, true};
+    g_resident_by_bp[bp] = static_cast<int>(slot_index);
     return index;
 }
 
 int resident_chunk(std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
     std::uint32_t width, std::uint32_t height)
 {
-    for (const auto &resident : g_residents)
+    if (bp >= k_gs_blocks)
     {
-        if (resident.valid && resident.bp == bp && resident.bw == bw
-            && resident.psm == psm && resident.width == width
-            && resident.height == height)
-            return find_identity(resident.fingerprint, resident.psm,
-                resident.width, resident.height);
+        return -1;
     }
-    return -1;
+    const int slot = g_resident_by_bp[bp];
+    if (slot < 0)
+    {
+        return -1;
+    }
+    const auto &resident = g_residents[static_cast<std::size_t>(slot)];
+    if (!resident.valid || resident.bp != bp || resident.bw != bw
+        || resident.psm != psm || resident.width != width
+        || resident.height != height)
+    {
+        return -1;
+    }
+    return find_identity(resident.fingerprint, resident.psm,
+        resident.width, resident.height);
 }
 }
