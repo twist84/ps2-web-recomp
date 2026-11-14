@@ -257,6 +257,31 @@ If the black rectangles disappear, investigate PNG sources or replacement
 alpha handling; if they remain, investigate GIF/GS rendering. Unset the
 variable for actual texture replacement.
 
+### 2026-11-14 EU Beta/Japan PNG dump audit
+
+Compared the complete user-supplied exported texture archives by canonical
+filename. EU Beta has 3,400 PNGs; the Japan pack has 3,362 active PNGs
+plus one disabled PNG (`dis/d03/d03t0202.pix.000.png.disabled`).
+Of the 3,362 shared active names, 3,254 are byte-identical, 102 have
+different pixel data at matching dimensions, and six use different
+dimensions. EU Beta has 38 additional active files (37 unrelated to the
+disabled Japanese file); 79 of the same-dimension differences modify alpha.
+
+The offending Sofdec/ADX logo image `dis/d03/d03t0202.pix.000.png` is
+**byte-for-byte identical** in the EU Beta dump and disabled Japan copy
+(SHA-256 `738242b92c15fb33e20c509b4cfdda62297638451f1ac5f5b72a5d7fc39b77df`).
+The black background is present in both exported files. Therefore simply
+re-exporting Japanese PNGs or rejecting this filename globally cannot fix
+the underlying runtime substitution. Source-name ownership must be revoked
+when guest texture handles are destroyed or reused, and GS texture/CLUT
+residency must be invalidated for uploads touching swizzled pages.
+
+The runtime includes conservative GS page-aware and palette invalidation
+and destructor-driven name revocation. Keep the source's `.png.disabled`
+extension until real-game testing confirms correct behavior after those
+changes. Neither the file contents nor a hardcoded filename special case
+is changed by this runtime fix.
+
 For finer isolation without disabling other PNG replacements, set
 `PS2_SDBZ_SKIP_PNG_NAMES` to a comma-separated list of canonical names.
 For example:
