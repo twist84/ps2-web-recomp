@@ -90,6 +90,117 @@ std::string upper(std::string text)
     return text;
 }
 
+// GAME_{REGION}.zip is a host-side archive of the extracted GAME/ tree.
+// It is not a PS2 disc file and must never be listed in the virtual ISO.
+bool regional_zip_name(const fs::path &filename)
+{
+    std::wstring name = filename.wstring();
+    for (wchar_t &c : name)
+    {
+        if (c >= L'a' && c <= L'z')
+        {
+            c = static_cast<wchar_t>(c - (L'a' - L'A'));
+        }
+    }
+    return name.size() > 9 && name.compare(0, 5, L"GAME_") == 0
+        && name.compare(name.size() - 4, 4, L".ZIP") == 0;
+}
+
+fs::path find_region_zip(const fs::path &root)
+{
+    std::map<std::wstring, fs::path> choices;
+    std::error_code error;
+    for (fs::directory_iterator it(root, error), end;
+        !error && it != end; it.increment(error))
+    {
+        if (!regional_zip_name(it->path().filename()))
+        {
+            continue;
+        }
+        if (it->is_symlink() || !it->is_regular_file())
+        {
+            throw std::runtime_error("regional GAME ZIP is not a regular file");
+        }
+        std::wstring filename = it->path().filename().wstring();
+        for (wchar_t &c : filename)
+        {
+            if (c >= L'a' && c <= L'z')
+            {
+                c = static_cast<wchar_t>(c - (L'a' - L'A'));
+            }
+        }
+        if (!choices.emplace(filename, it->path()).second)
+        {
+            throw std::runtime_error("duplicate regional GAME ZIP names");
+        }
+    }
+    if (error)
+    {
+        throw std::runtime_error("cannot enumerate regional GAME ZIP archives");
+    }
+
+    const char *region = std::getenv("SDBZ_GAME_REGION");
+    if (region && *region)
+    {
+        std::wstring key = L"GAME_";
+        for (const unsigned char c : std::string(region))
+        {
+            if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+                || c == '_')
+            {
+                key += static_cast<wchar_t>(c);
+            }
+            else if (c >= 'a' && c <= 'z')
+            {
+                key += static_cast<wchar_t>(c - ('a' - 'A'));
+            }
+            else if (c == '-' || c == ' ')
+            {
+                key += L'_';
+            }
+            else
+            {
+                throw std::runtime_error("invalid SDBZ_GAME_REGION value");
+            }
+        }
+        key += L".ZIP";
+        const auto it = choices.find(key);
+        if (it == choices.end())
+        {
+            throw std::runtime_error(
+                "requested GAME regional ZIP not found; check SDBZ_GAME_REGION");
+        }
+        return it->second;
+    }
+    if (choices.size() == 1)
+    {
+        return choices.begin()->second;
+    }
+    if (choices.empty())
+    {
+        return {};
+    }
+
+    // Match the executable's region by default, but allow JPN game data
+    // with the EU beta executable through SDBZ_GAME_REGION=JPN.
+    std::wstring preferred;
+    if (fs::exists(root / "SLES_541.61"))
+    {
+        preferred = L"GAME_EU_BETA.ZIP";
+    }
+    else if (fs::exists(root / "SLUS_214.42"))
+    {
+        preferred = L"GAME_US.ZIP";
+    }
+    const auto it = choices.find(preferred);
+    if (it != choices.end())
+    {
+        return it->second;
+    }
+    throw std::runtime_error(
+        "multiple GAME regional ZIPs; set SDBZ_GAME_REGION explicitly");
+}
+
 std::uint64_t sectors(std::uint64_t size)
 {
     return (size + kSector - 1) / kSector;
