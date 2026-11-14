@@ -389,6 +389,118 @@ void inspect_binding(Cpu &cpu, std::uint32_t table_base)
     }
 }
 
+bool sdbz_texture_source_transfer(std::uint64_t bitbltbuf,
+    std::uint64_t trxreg, std::uint64_t trxpos,
+    s_named_texture_binding &result)
+{
+    if (!name_only_enabled())
+    {
+        return false;
+    }
+
+    // The new source name is sometimes bound *before* the game uploads
+    // its original image again. TRXDIR invalidates that GS residency,
+    // and there may be no second TEX0 write before drawing. A matching,
+    // currently live CTexture handle identifies the upload without hashes.
+    // Partial transfers cannot establish an entire named source image.
+    if (((trxpos >> 32) & 0x07ff07ffull) != 0)
+    {
+        return false;
+    }
+    const std::uint32_t bp =
+        static_cast<std::uint32_t>(bitbltbuf >> 32) & 0x3fffu;
+    const std::uint32_t bw =
+        static_cast<std::uint32_t>(bitbltbuf >> 48) & 0x3fu;
+    const std::uint32_t psm =
+        static_cast<std::uint32_t>(bitbltbuf >> 56) & 0x3fu;
+    const std::uint32_t width =
+        static_cast<std::uint32_t>(trxreg) & 0xfffu;
+    const std::uint32_t height =
+        static_cast<std::uint32_t>(trxreg >> 32) & 0xfffu;
+    if (!bw || width == 0 || height == 0
+        || width > 1024 || height > 1024
+        || (psm != 0 && psm != 19 && psm != 20))
+    {
+        return false;
+    }
+
+    const auto *eu_pix = ee_bytes(k_pix_initialize_eu_beta, 4);
+    const auto *eu_bind = ee_bytes(k_bind_texture_eu_beta, 4);
+    const auto *jp_pix = ee_bytes(k_pix_initialize_japan, 4);
+    const auto *jp_bind = ee_bytes(k_bind_texture_japan, 4);
+    const bool is_eu_beta = eu_pix && eu_bind
+        && u32(eu_pix) == 0x27BDFF70u
+        && u32(eu_bind) == 0x27BDFF30u;
+    const bool is_japan = jp_pix && jp_bind
+        && u32(jp_pix) == 0x27BDFF70u
+        && u32(jp_bind) == 0x27BDFF30u;
+    if (is_eu_beta == is_japan)
+    {
+        return false;
+    }
+
+    rebuild_handles();
+    const std::uint32_t base =
+        is_eu_beta ? k_handle_table_eu_beta : k_handle_table_japan;
+    const std::string *match = nullptr;
+    std::uint32_t match_clut = 0;
+    for (std::uint32_t handle = 1; handle <= k_max_handles; ++handle)
+    {
+        const auto &identity = g_named_handles[handle];
+        if (identity.name.empty() || identity.ambiguous
+            || identity.psm != psm || identity.width != width
+            || identity.height != height
+            || !live_handle_owner(identity, handle))
+        {
+            continue;
+        }
+        const auto *slot =
+            ee_bytes(base + (handle - 1u) * k_handle_stride,
+                k_handle_stride);
+        if (!slot || slot[0] != 1 || u16(slot + 2) != bp
+            || u16(slot + 14) != psm
+            || u16(slot + 22) != width
+            || u16(slot + 24) != height)
+        {
+            continue;
+        }
+        const std::uint32_t expected_bw = std::max(1u, width / 64u);
+        if (bw != expected_bw)
+        {
+            continue;
+        }
+        if (match && *match != identity.name)
+        {
+            // Different original names can reuse the same GS address.
+            // Do not guess which one owns an ambiguous upload.
+            return false;
+        }
+        match = &identity.name;
+        match_clut = u16(slot + 4);
+    }
+    if (!match || match_clut >= 0x4000u)
+    {
+        return false;
+    }
+
+    result = {*match, bp, bw, psm, match_clut, width, height};
+    if (trace_enabled())
+    {
+        static std::unordered_set<std::string> reported;
+        const std::string key = result.name + ":"
+            + std::to_string(result.bp);
+        if (reported.size() < 512 && reported.insert(key).second)
+        {
+            std::fprintf(stderr,
+                "[sdbz-name] transfer-bind name=%s bp=%04X"
+                " size=%ux%u psm=%u cbp=%04X\n",
+                result.name.c_str(), bp, width, height, psm,
+                match_clut);
+        }
+    }
+    return true;
+}
+
 bool sdbz_texture_source_tex0(std::uint64_t tex0,
     s_named_texture_binding *result)
 {
