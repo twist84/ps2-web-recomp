@@ -251,6 +251,10 @@ void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc,
 }
 
 Path g_scan[4];
+// VIF shadow packets are inspected for SIGNALs but are never submitted to
+// the GS. Their GIF parser continuation state must not alter the stream
+// used for actual queued TEX0/name observations.
+Path g_shadow_scan[4];
 
 // PATH3 under VIF1's MSKPATH3: while the mask is up a real GIF leaves channel 2's data
 // waiting, and a mask that comes up while a packet is under way stops PATH3 at the packet's
@@ -371,6 +375,7 @@ void reset() {
     if (hold_here()) drop_held();
     if (gs::queue::active()) {
         for (Path &p : g_scan) p = Path{};
+        for (Path &p : g_shadow_scan) p = Path{};
         g_scanned_transfer = {};
         gs::queue::post(gs::queue::kGifReset, 0, 0, nullptr, 0);
         return;
@@ -412,7 +417,7 @@ void transfer(int path, const std::uint8_t *data, std::uint32_t qwc) {
     h.data.insert(h.data.end(), data, data + static_cast<std::size_t>(qwc) * 16);
 }
 
-void scan_signals(int path, const std::uint8_t *data, std::uint32_t qwc) { scan(g_scan[path], data, qwc); }
+void scan_signals(int path, const std::uint8_t *data, std::uint32_t qwc) { scan(g_shadow_scan[path], data, qwc); }
 
 bool busy(int path) { return g_paths[path].active; }
 
