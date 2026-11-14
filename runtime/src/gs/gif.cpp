@@ -94,6 +94,18 @@ struct s_named_scan_event
     ps2::s_named_texture_binding bind;
 };
 
+// GS transfer setup registers are shared between all GIF paths. The
+// emulation-thread scanner tracks them so it can reconstruct a canonical
+// filename from a *live* guest handle after TRXDIR overwrites a resident.
+// This is only metadata; the original GIF stream remains unchanged.
+struct s_scanned_transfer
+{
+    std::uint64_t bitbltbuf = 0;
+    std::uint64_t trxpos = 0;
+    std::uint64_t trxreg = 0;
+};
+s_scanned_transfer g_scanned_transfer{};
+
 void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc,
     std::vector<s_named_scan_event> *events = nullptr) {
     // The real game may call the TEX0 builder within a generated EE unit,
@@ -133,6 +145,47 @@ void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc,
                         std::memcpy(&value, at, 8);
                         if (at[8] >= 0x60) gs::signal(at[8], value);
                         else if (at[8] <= 0x53) gs::note_transfer(at[8], value);
+
+                        if (scan_names)
+                        {
+                            if (at[8] == 0x50)
+                            {
+                                g_scanned_transfer.bitbltbuf = value;
+                            }
+                            else if (at[8] == 0x51)
+                            {
+                                g_scanned_transfer.trxpos = value;
+                            }
+                            else if (at[8] == 0x52)
+                            {
+                                g_scanned_transfer.trxreg = value;
+                            }
+                            else if (at[8] == 0x53 && (value & 3u) == 0)
+                            {
+                                // The actual TRXDIR qword invalidates the
+                                // old resident. Restore only if the upload
+                                // has a unique verified original name.
+                                ps2::s_named_texture_binding bind;
+                                if (ps2::sdbz_texture_source_transfer(
+                                    g_scanned_transfer.bitbltbuf,
+                                    g_scanned_transfer.trxreg,
+                                    g_scanned_transfer.trxpos, bind))
+                                {
+                                    if (events)
+                                    {
+                                        events->push_back(
+                                            {i + 1, std::move(bind)});
+                                    }
+                                    else
+                                    {
+                                        gs::publish_named_texture(
+                                            bind.name, bind.bp, bind.bw,
+                                            bind.psm, bind.width,
+                                            bind.height, bind.clut_bp);
+                                    }
+                                }
+                            }
+                        }
                     }
                     if (scan_names && (at[8] == 0x06 || at[8] == 0x07)) {
                         std::uint64_t value;
@@ -335,6 +388,7 @@ void reset() {
     if (hold_here()) drop_held();
     if (gs::queue::active()) {
         for (Path &p : g_scan) p = Path{};
+        g_scanned_transfer = {};
         gs::queue::post(gs::queue::kGifReset, 0, 0, nullptr, 0);
         return;
     }
