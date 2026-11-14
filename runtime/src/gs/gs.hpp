@@ -89,6 +89,9 @@ void publish_named_texture(const std::string &logical_name,
     std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
     std::uint32_t width, std::uint32_t height,
     std::uint32_t clut_bp = 0xffffffffu);
+// Release a verified original guest texture's named GS mapping in queue order.
+void revoke_named_texture(const std::string &logical_name,
+    std::uint32_t bp);
 void flush_and_wait();
 void post_present();
 Rendered render_pending(const std::function<void(const DisplayRegs &)> &on_present, double budget_ms);
