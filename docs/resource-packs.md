@@ -239,9 +239,14 @@ experimental path. This mode:
   original GS texture
 
 Set `PS2_TRACE_SDBZ_TEXTURE_NAMES=1` as well to log constructor and
-binding records for diagnosis. Indexed GS textures also require the source
-CLUT base to match TEX0; changing the palette through TEX2 intentionally
-falls back to original GS pixels instead of showing an unrelated PNG.
+binding records for diagnosis. The GS texture name survives writes to
+palette-only CLUT memory: the original indexed pixel buffer is unchanged,
+so no new source filename or texture-handle binding is required. When TEX2
+selects a different palette address for the same verified indexed source,
+the renderer retains both palette addresses as valid aliases of that
+original named texture. Unknown palettes without a verified TEX2 transition,
+actual source-pixel overwrites and CTexture destruction still cause fallback
+to the original GS pixels.
 
 For malformed/black PNG troubleshooting, set `PS2_TRACE_NATIVE_TEXTURES=1`.
 Each attempted PNG logs its canonical name, supplying pack ID, dimensions,
@@ -276,11 +281,12 @@ the underlying runtime substitution. Source-name ownership must be revoked
 when guest texture handles are destroyed or reused, and GS texture/CLUT
 residency must be invalidated for uploads touching swizzled pages.
 
-The runtime includes conservative GS page-aware and palette invalidation
-and destructor-driven name revocation. Keep the source's `.png.disabled`
-extension until real-game testing confirms correct behavior after those
-changes. Neither the file contents nor a hardcoded filename special case
-is changed by this runtime fix.
+The runtime includes conservative GS page-aware invalidation for source
+pixel overwrites and destructor-driven name revocation, while retaining
+filename identity during palette-only updates. Keep the source's
+`.png.disabled` extension until real-game testing confirms correct
+behavior after those changes. Neither the file contents nor a hardcoded
+filename special case is changed by this runtime fix.
 
 For finer isolation without disabling other PNG replacements, set
 `PS2_SDBZ_SKIP_PNG_NAMES` to a comma-separated list of canonical names.
@@ -368,3 +374,23 @@ pack selections both use this same live reload path.
 - In-game pack list and order editor
 - More verified FPIX/TIM2 mappings
 - Shared resource resolver for audio and other asset formats
+
+### Main-menu selection label stability (2026-11-14)
+
+The user reported that Japanese main-menu selection-label PNGs sometimes
+fell back to the original English textures as menu options changed.
+The capture shows repeated named TEX0 writes as well as texture
+destruction and recreation during menu navigation.
+
+Name-only GS residency previously discarded the logical source name on
+**any CLUT write** to its original palette address. The game can update
+the CLUT without rewriting the indexed pixels or repeating TEX0, causing
+an English fallback even while `GAME JPN` remains enabled. It also refused
+the PNG when TEX2 switched the palette base address for the same source.
+This update keeps names alive across palette-only writes and accepts
+verified TEX2 palette aliases without changing the filename or using
+source-pixel hashes. It preserves pixel-write invalidation, original
+constructor/destructor ownership checks, and rejection of unknown CLUT
+addresses. Added a regression that repeatedly changes menu palettes
+without re-binding the original texture; verification in-game is pending.
+
