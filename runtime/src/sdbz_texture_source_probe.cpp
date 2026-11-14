@@ -55,11 +55,17 @@ struct s_observed_texture
 {
     std::string guest_name;
     std::string canonical_name;
+    std::uint32_t psm = 0;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
 };
 std::unordered_map<std::uint32_t, s_observed_texture> g_source_objects;
 struct s_resolved_handle
 {
     std::string name;
+    std::uint32_t psm = 0;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
     bool ambiguous = false;
 };
 std::array<s_resolved_handle, k_max_handles + 1> g_named_handles;
@@ -197,7 +203,8 @@ void inspect_texture(Cpu &cpu)
     if (g_source_objects.size() < k_max_observed_objects
         || g_source_objects.find(object) != g_source_objects.end())
     {
-        g_source_objects[object] = {name, canonical};
+        g_source_objects[object] = {name, canonical,
+            image_type == 5 ? 19u : 20u, width, height};
         ++g_source_revision;
     }
     if (trace_enabled())
@@ -242,13 +249,19 @@ void rebuild_handles()
         }
         auto &entry = g_named_handles[handle];
         if (!entry.name.empty()
-            && entry.name != observed.canonical_name)
+            && (entry.name != observed.canonical_name
+                || entry.psm != observed.psm
+                || entry.width != observed.width
+                || entry.height != observed.height))
         {
             entry.ambiguous = true;
         }
         else
         {
             entry.name = observed.canonical_name;
+            entry.psm = observed.psm;
+            entry.width = observed.width;
+            entry.height = observed.height;
         }
     }
     g_resolved_revision = g_source_revision;
@@ -284,6 +297,8 @@ void inspect_binding(Cpu &cpu, std::uint32_t table_base)
     const std::uint32_t bw = std::max(1u, width / 64u);
     if (!bw || bw > 63 || bp >= 0x4000u
         || (psm != 0 && psm != 19 && psm != 20)
+        || width != identity.width || height != identity.height
+        || psm != identity.psm
         || !width || !height || width > 1024 || height > 1024)
     {
         return;
@@ -358,7 +373,9 @@ bool sdbz_texture_source_tex0(std::uint64_t tex0,
     for (std::uint32_t handle = 1; handle <= k_max_handles; ++handle)
     {
         const auto &identity = g_named_handles[handle];
-        if (identity.ambiguous || identity.name.empty())
+        if (identity.ambiguous || identity.name.empty()
+            || identity.width != width || identity.height != height
+            || identity.psm != psm)
         {
             continue;
         }
