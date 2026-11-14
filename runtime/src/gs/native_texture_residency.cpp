@@ -859,6 +859,61 @@ bool register_named_upload(const std::string &logical_name,
     return true;
 }
 
+void local_copy_destination(std::uint64_t bitbltbuf,
+    std::uint64_t trxreg, std::uint64_t trxpos)
+{
+    // GS local-to-local copies carry their *source bytes* into another GS
+    // buffer. A complete copy from a verified named source carries its
+    // logical filename with it, without fingerprinting those bytes.
+    const std::uint32_t source_bp =
+        static_cast<std::uint32_t>(bitbltbuf) & 0x3fffu;
+    const std::uint32_t source_bw =
+        static_cast<std::uint32_t>(bitbltbuf >> 16) & 0x3fu;
+    const std::uint32_t source_psm =
+        static_cast<std::uint32_t>(bitbltbuf >> 24) & 0x3fu;
+    const std::uint32_t dest_bw =
+        static_cast<std::uint32_t>(bitbltbuf >> 48) & 0x3fu;
+    const std::uint32_t dest_psm =
+        static_cast<std::uint32_t>(bitbltbuf >> 56) & 0x3fu;
+    const std::uint32_t width =
+        static_cast<std::uint32_t>(trxreg) & 0xfffu;
+    const std::uint32_t height =
+        static_cast<std::uint32_t>(trxreg >> 32) & 0xfffu;
+
+    std::string copied_name;
+    if (trxpos == 0 && source_bp < k_gs_blocks
+        && source_bw && dest_bw && source_bw == dest_bw
+        && source_psm == dest_psm && width && height)
+    {
+        const int slot = g_resident_by_bp[source_bp];
+        if (slot >= 0)
+        {
+            const auto &resident = g_residents[
+                static_cast<std::size_t>(slot)];
+            if (resident.valid && resident.named
+                && resident.bp == source_bp
+                && resident.bw == source_bw
+                && resident.psm == source_psm
+                && resident.width == width && resident.height == height)
+            {
+                copied_name = resident.logical_name;
+            }
+        }
+    }
+
+    // All copies overwrite destination memory, including those where the
+    // source is unknown or a clipped image. Such copies must not carry an
+    // unrelated name left over at the destination BP.
+    invalidate_destination(bitbltbuf, trxreg, trxpos);
+    if (!copied_name.empty())
+    {
+        // Local copies only move indexed pixel bytes. Their destination
+        // CLUT is chosen separately through GS TEX0/TEX2, so no palette
+        // address is inferred or copied from the old source binding.
+        register_named_upload(copied_name, bitbltbuf, trxreg, 0);
+    }
+}
+
 bool revoke_named_upload(const std::string &logical_name,
     std::uint32_t bp)
 {
