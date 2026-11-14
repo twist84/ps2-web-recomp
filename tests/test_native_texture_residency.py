@@ -243,6 +243,45 @@ int main()
         {
             return 73;
         }
+
+        // A PS2 local-to-local transfer has source BP/PSM/BW in the low
+        // half and destination BP/PSM/BW in the high half of BITBLTBUF.
+        // A verified full-image copy should preserve the canonical name
+        // at the new BP, even if no TEX0 write follows the transfer.
+        const std::string source_name = "ply/name_only.pix.000";
+        const std::uint64_t source_buf = (0x3000ull << 32)
+            | (2ull << 48) | (0x13ull << 56);
+        const std::uint64_t copy_reg = 64ull | (64ull << 32);
+        if (!register_named_upload(source_name, source_buf,
+            copy_reg, 0, 0x123u)) return 74;
+        const std::uint64_t gs_copy =
+            (0x3000ull | (2ull << 16) | (0x13ull << 24))
+            | (0x3400ull << 32) | (2ull << 48) | (0x13ull << 56);
+        local_copy_destination(gs_copy, copy_reg, 0);
+        const int copied = resident_chunk(0x3400, 2, 0x13,
+            64, 64, 0x456u);
+        if (copied < 0 || texture_path(copied) != source_name)
+        {
+            return 75;
+        }
+        // A partial copy, an unknown source, or mismatched PSM cannot
+        // establish an image's canonical name.
+        const std::uint64_t partial_copy_reg = 32ull | (32ull << 32);
+        local_copy_destination(gs_copy, partial_copy_reg, 0);
+        if (resident_chunk(0x3400, 2, 0x13,
+            64, 64, 0x456u) != -1)
+        {
+            return 76;
+        }
+        const std::uint64_t unrelated_copy =
+            (0x3600ull | (2ull << 16) | (0x13ull << 24))
+            | (0x3400ull << 32) | (2ull << 48) | (0x13ull << 56);
+        local_copy_destination(unrelated_copy, copy_reg, 0);
+        if (resident_chunk(0x3400, 2, 0x13,
+            64, 64, 0x456u) != -1)
+        {
+            return 77;
+        }
         return 0;
     }
     if (!replacements_available() || registered_texture_count() != 4) return 1;
