@@ -12,6 +12,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace ps2::gs::native_texture
@@ -431,8 +432,46 @@ const s_image *chunk_image(int index)
         return nullptr;
     }
     load_registry();
-    if (index < 0 || index >= static_cast<int>(g_entries.size())) return nullptr;
+    if (index < 0 || index >= static_cast<int>(g_entries.size()))
+    {
+        return nullptr;
+    }
     auto &entry = g_entries[static_cast<std::size_t>(index)];
+
+    // Targeted source-image A/B testing without removing the entire pack.
+    // Resolve this once at startup: there is no parsing or filesystem work
+    // on the draw path, only a lookup by the already-interned logical name.
+    static const std::unordered_set<std::string> skipped_names = []()
+    {
+        std::unordered_set<std::string> result;
+        const char *value = std::getenv("PS2_SDBZ_SKIP_PNG_NAMES");
+        if (!value || !*value)
+        {
+            return result;
+        }
+        std::string source(value);
+        std::size_t first = 0;
+        while (first < source.size())
+        {
+            const std::size_t end = source.find_first_of(",;", first);
+            const std::string name = source.substr(first,
+                end == std::string::npos ? end : end - first);
+            if (valid_path(name))
+            {
+                result.insert(name);
+            }
+            if (end == std::string::npos)
+            {
+                break;
+            }
+            first = end + 1;
+        }
+        return result;
+    }();
+    if (skipped_names.find(entry.path) != skipped_names.end())
+    {
+        return nullptr;
+    }
     if (!entry.attempted)
     {
         entry.attempted = true;
