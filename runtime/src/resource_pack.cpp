@@ -7,6 +7,7 @@
 #include <fstream>
 #include <limits>
 #include <mutex>
+#include <iterator>
 #include <map>
 #include <set>
 #include <string>
@@ -482,6 +483,66 @@ bool save_selection(const std::vector<std::string> &enabled_ids)
     return true;
 }
 
+
+std::vector<std::string> texture_registries()
+{
+    std::vector<std::string> result;
+    std::lock_guard<std::mutex> lock(g_selection_mutex);
+    // The built-in registry is a data file, not a compiled fingerprint table.
+    // It remains available even if every resource pack is disabled.
+    if (!g_pack_directory.empty())
+    {
+        const auto base = g_pack_directory.parent_path()
+            / "native_textures.registry";
+        std::error_code error;
+        const auto size = fs::file_size(base, error);
+        if (!error && size && size <= k_max_resource)
+        {
+            std::ifstream input(base, std::ios::binary);
+            if (input)
+                result.emplace_back(std::istreambuf_iterator<char>(input),
+                    std::istreambuf_iterator<char>());
+        }
+    }
+    // Scan discovered, not only enabled, packs: a source identity must
+    // remain known when a replacement pack is disabled and re-enabled.
+    for (const auto &pack : g_discovered)
+    {
+        std::vector<std::uint8_t> bytes;
+        if (pack.m_archive)
+        {
+            const auto it = std::find_if(pack.m_entries.begin(),
+                pack.m_entries.end(), [](const s_zip_entry &entry)
+                {
+                    return entry.m_path == "assets/sdbz/textures.registry";
+                });
+            if (it == pack.m_entries.end() || it->m_size > k_max_resource
+                || !zip::read(pack.m_root, *it, bytes))
+                continue;
+        }
+        else
+        {
+            const fs::path file = pack.m_root / "assets"
+                / "sdbz" / "textures.registry";
+            std::error_code error;
+            if (fs::is_symlink(file, error) || error
+                || !fs::is_regular_file(file, error) || error)
+                continue;
+            const auto canonical = fs::canonical(file, error);
+            if (error || !contained(pack.m_root, canonical))
+                continue;
+            const auto size = fs::file_size(canonical, error);
+            if (error || !size || size > k_max_resource)
+                continue;
+            std::ifstream input(canonical, std::ios::binary);
+            if (!input) continue;
+            bytes.assign(std::istreambuf_iterator<char>(input),
+                std::istreambuf_iterator<char>());
+        }
+        result.emplace_back(bytes.begin(), bytes.end());
+    }
+    return result;
+}
 
 bool find_resource(const std::string &logical_path, s_resource &resource)
 {
