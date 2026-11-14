@@ -488,7 +488,8 @@ bool register_named_upload(const std::string &logical_name,
     const auto height = static_cast<std::uint32_t>(trxreg >> 32) & 0xfffu;
     const auto bw = static_cast<std::uint32_t>(bitbltbuf >> 48) & 0x3fu;
     const auto bp = static_cast<std::uint32_t>(bitbltbuf >> 32) & 0x3fffu;
-    if (!bw || bp >= k_gs_blocks || clut_bp > 0x3fffu
+    if (!bw || bp >= k_gs_blocks
+        || (clut_bp > 0x3fffu && clut_bp != 0xffffffffu)
         || find_named_identity(logical_name, psm, width, height) < 0)
     {
         return false;
