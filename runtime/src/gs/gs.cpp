@@ -1351,6 +1351,33 @@ void apply_named_texture(const s_named_texture_bind &bind)
 #endif
 }
 
+void revoke_named_texture(const std::string &logical_name,
+    std::uint32_t bp)
+{
+#ifdef PS2_NATIVE_PNG
+    if (!native_texture::name_only_mode() || logical_name.empty()
+        || logical_name.size() >= 96 || bp >= 0x4000u)
+    {
+        return;
+    }
+    s_named_texture_bind bind{};
+    bind.bp = bp;
+    std::memcpy(bind.name, logical_name.c_str(), logical_name.size());
+    if (queue::active())
+    {
+        queue::post(queue::kNamedTextureUnbind, 0, 0, &bind,
+            sizeof bind);
+    }
+    else if (native_texture::revoke_named_upload(logical_name, bp))
+    {
+        ++g_setup_generation;
+    }
+#else
+    (void)logical_name;
+    (void)bp;
+#endif
+}
+
 void publish_named_texture(const std::string &logical_name,
     std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
     std::uint32_t width, std::uint32_t height,
@@ -1444,6 +1471,22 @@ Rendered render_pending(const std::function<void(const DisplayRegs &)> &on_prese
                 bind.name[sizeof(bind.name) - 1] = 0;
                 apply_named_texture(bind);
             }
+            break;
+        }
+        case queue::kNamedTextureUnbind:
+        {
+#ifdef PS2_NATIVE_PNG
+            if (h.bytes == sizeof(s_named_texture_bind))
+            {
+                s_named_texture_bind bind{};
+                std::memcpy(&bind, payload, sizeof bind);
+                bind.name[sizeof(bind.name) - 1] = 0;
+                if (native_texture::revoke_named_upload(bind.name, bind.bp))
+                {
+                    ++g_setup_generation;
+                }
+            }
+#endif
             break;
         }
         case queue::kGifReset: gif::render_reset(); break;
