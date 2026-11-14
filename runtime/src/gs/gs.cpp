@@ -1318,6 +1318,7 @@ struct s_named_texture_bind
     std::uint32_t bp = 0;
     std::uint32_t bw = 0;
     std::uint32_t psm = 0;
+    std::uint32_t clut_bp = 0xffffffffu;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     char name[96]{};
@@ -1338,7 +1339,7 @@ void apply_named_texture(const s_named_texture_bind &bind)
         static_cast<std::uint64_t>(bind.width)
         | (static_cast<std::uint64_t>(bind.height) << 32);
     if (native_texture::register_named_upload(
-        bind.name, bitbltbuf, trxreg, 0))
+        bind.name, bitbltbuf, trxreg, 0, bind.clut_bp))
     {
         // The currently bound TEX0 may be unchanged. Re-evaluate its
         // native texture selector after a new named residency arrives.
@@ -1351,12 +1352,14 @@ void apply_named_texture(const s_named_texture_bind &bind)
 
 void publish_named_texture(const std::string &logical_name,
     std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
-    std::uint32_t width, std::uint32_t height)
+    std::uint32_t width, std::uint32_t height,
+    std::uint32_t clut_bp)
 {
 #ifdef PS2_NATIVE_PNG
     if (!native_texture::name_only_mode()
         || logical_name.empty() || logical_name.size() >= 96
         || bp >= 0x4000u || !bw || bw > 63
+        || clut_bp > 0x3fffu
         || !width || !height || width > 1024 || height > 1024)
     {
         return;
@@ -1365,6 +1368,7 @@ void publish_named_texture(const std::string &logical_name,
     bind.bp = bp;
     bind.bw = bw;
     bind.psm = psm;
+    bind.clut_bp = clut_bp;
     bind.width = width;
     bind.height = height;
     std::memcpy(bind.name, logical_name.c_str(), logical_name.size());
@@ -1384,6 +1388,7 @@ void publish_named_texture(const std::string &logical_name,
     (void)psm;
     (void)width;
     (void)height;
+    (void)clut_bp;
 #endif
 }
 
