@@ -67,9 +67,9 @@ int main()
         std::ofstream manifest(root / "resourcepacks" / "Extra Pack" / "pack.json");
         manifest << "{\"pack\":{\"format\":1,\"game\":\"sdbz\"}}";
         std::ofstream registry(extra / "textures.registry");
-        registry << "5555666677778888\\t19\\t128\\t128\\tply/extra.pix.000\\n";
+        registry << "5555666677778888\t19\t128\t128\tply/extra.pix.000\n";
         std::ofstream order(root / "resourcepacks" / "load_order.txt");
-        order << "-Extra Pack\\n";
+        order << "-Extra Pack\n";
     }
     ps2::resource_pack::mount(root, root);
     reset_residency();
