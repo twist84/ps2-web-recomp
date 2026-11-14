@@ -441,19 +441,16 @@ void invalidate_destination(std::uint64_t bitbltbuf,
         {
             continue;
         }
-        // Indexed textures also depend on their CLUT. Uploading another
-        // palette at the same CBP invalidates any previously decoded PNG
-        // even when TEX0 and its pixel buffer have not changed.
-        const bool clut_hit = resident.named
-            && resident.clut_bp != 0xffffffffu
-            && (intersects(start, end, resident.clut_bp,
-                    std::min(k_gs_blocks, resident.clut_bp + 32u))
-                || (wraps && intersects(0,
-                    static_cast<std::uint32_t>(last - k_gs_blocks),
-                    resident.clut_bp,
-                    std::min(k_gs_blocks, resident.clut_bp + 32u))));
-        if (clut_hit || intersects(start, end,
-                resident.bp, resident.end_bp)
+        // A name-only PNG replaces the *logical source image*, not its
+        // mutable GS palette. The original game can rewrite that CLUT when
+        // highlighting a menu choice without changing any indexed pixels.
+        // Revoking the filename here makes those draws fall back to the
+        // original (English) GS image until a fresh named TEX0 arrives.
+        //
+        // Invalidate only when an upload really overlaps source pixel
+        // memory. The guest texture destructor and verified TEX0 rebinding
+        // handle name/ownership changes independently of CLUT updates.
+        if (intersects(start, end, resident.bp, resident.end_bp)
             || (wraps && intersects(0,
                     static_cast<std::uint32_t>(last - k_gs_blocks),
                     resident.bp, resident.end_bp)))
