@@ -40,9 +40,11 @@ namespace ps2::gs
 int g_named_publishes = 0;
 void publish_named_texture(const std::string &logical_name,
     std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
-    std::uint32_t width, std::uint32_t height)
+    std::uint32_t width, std::uint32_t height,
+    std::uint32_t clut_bp)
 {
     if (logical_name == "dis/main_menu.pix.001" && bp == 0x120u
+        && clut_bp == 4u
         && bw == 1 && psm == 19 && width == 4 && height == 4)
     {
         ++g_named_publishes;
@@ -104,10 +106,13 @@ int main()
     ps2::sdbz_texture_source_probe(cpu, 0x0010C3E0u);
     // TEX0 fallback works without the guest TEX0-builder entry hook.
     const std::uint64_t tex0 = 0x120ull | (1ull << 14)
-        | (19ull << 20) | (2ull << 26) | (2ull << 30);
+        | (19ull << 20) | (2ull << 26) | (2ull << 30)
+        | (4ull << 37);
     ps2::sdbz_texture_source_tex0(tex0);
     // An incorrectly matching pixel layout must never bind a name.
     ps2::sdbz_texture_source_tex0(tex0 ^ (1ull << 20));
+    // Identical pixels with a different palette are *not* the same texture.
+    ps2::sdbz_texture_source_tex0(tex0 ^ (1ull << 37));
     // Invalid handles cannot be assigned a filename.
     cpu.r[4].w[0] = 256;
     ps2::sdbz_texture_source_probe(cpu, 0x0010C3E0u);
@@ -175,7 +180,7 @@ class NamedTextureProbeTests(unittest.TestCase):
             self.assertEqual(done.stderr.count("[sdbz-name] bind"), 2)
             self.assertEqual(done.stderr.count("[sdbz-name] tex0-bind"), 2)
             self.assertIn("canonical=dis/main_menu.pix.001", done.stderr)
-            self.assertIn("bp=0120 bw=1 psm=19 size=4x4", done.stderr)
+            self.assertIn("bp=0120 bw=1 psm=19 cbp=0004 size=4x4", done.stderr)
             self.assertIn("dis/main_menu.pix.001", done.stderr)
             self.assertIn("pixels=000020B0", done.stderr)
             self.assertIn("PSM=19 size=4x4", done.stderr)
