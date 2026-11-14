@@ -65,6 +65,10 @@ struct s_resident
     std::uint32_t height = 0;
     std::uint32_t psm = 0;
     std::uint64_t fingerprint = 0;
+    // Named uploads originate from a loader/decode hook rather than a
+    // fingerprint. Their source identity remains stable across reloads.
+    std::string logical_name;
+    bool named = false;
     bool valid = false;
 };
 
@@ -297,14 +301,26 @@ void reload_replacements()
     load_registry();
 }
 
+// Resolve a canonical filename only when its source layout is unambiguous.
+int find_named_identity(const std::string &name, std::uint32_t psm,
+    std::uint32_t width, std::uint32_t height)
+{
+    load_registry();
+    const auto it = g_by_name.find({name, width, height, psm});
+    return it == g_by_name.end() ? -1 : it->second;
+}
+
 std::vector<int> resident_chunks()
 {
     std::vector<int> chunks;
     for (const auto &resident : g_residents)
     {
         if (!resident.valid) continue;
-        const int index = find_identity(resident.fingerprint, resident.psm,
-            resident.width, resident.height);
+        const int index = resident.named
+            ? find_named_identity(resident.logical_name, resident.psm,
+                resident.width, resident.height)
+            : find_identity(resident.fingerprint, resident.psm,
+                resident.width, resident.height);
         if (index >= 0
             && std::find(chunks.begin(), chunks.end(), index) == chunks.end())
             chunks.push_back(index);
@@ -407,9 +423,60 @@ int complete_upload(const s_texture_upload_signature &upload)
     }
     *slot = {bp, std::min(k_gs_blocks,
         bp + static_cast<std::uint32_t>((upload.expected_bytes + 255) / 256)),
-        bw, width, height, psm, upload.fnv1a64, true};
+        bw, width, height, psm, upload.fnv1a64, {}, false, true};
     g_resident_by_bp[bp] = static_cast<int>(slot_index);
     return index;
+}
+
+bool register_named_upload(const std::string &logical_name,
+    std::uint64_t bitbltbuf, std::uint64_t trxreg,
+    std::uint64_t trxpos)
+{
+    if (trxpos != 0)
+    {
+        return false;
+    }
+    const auto psm = static_cast<std::uint32_t>(bitbltbuf >> 56) & 0x3fu;
+    const auto width = static_cast<std::uint32_t>(trxreg & 0xfffu);
+    const auto height = static_cast<std::uint32_t>(trxreg >> 32) & 0xfffu;
+    const auto bw = static_cast<std::uint32_t>(bitbltbuf >> 48) & 0x3fu;
+    const auto bp = static_cast<std::uint32_t>(bitbltbuf >> 32) & 0x3fffu;
+    if (!bw || bp >= k_gs_blocks
+        || find_named_identity(logical_name, psm, width, height) < 0)
+    {
+        return false;
+    }
+    // Called by a future asset decoder hook on the GS render thread,
+    // after a complete upload. Do not infer a name from matching pixels.
+    s_resident *slot = nullptr;
+    for (auto &resident : g_residents)
+    {
+        if (!resident.valid)
+        {
+            slot = &resident;
+            break;
+        }
+    }
+    if (!slot)
+    {
+        slot = &g_residents[(g_next_resident++) % g_residents.size()];
+    }
+    const std::size_t slot_index =
+        static_cast<std::size_t>(slot - g_residents.data());
+    if (slot->valid && g_resident_by_bp[slot->bp] == static_cast<int>(slot_index))
+    {
+        g_resident_by_bp[slot->bp] = -1;
+    }
+    const int previous = g_resident_by_bp[bp];
+    if (previous >= 0 && static_cast<std::size_t>(previous) != slot_index)
+    {
+        g_residents[static_cast<std::size_t>(previous)].valid = false;
+    }
+    *slot = {bp, std::min(k_gs_blocks,
+        bp + transfer_blocks(bitbltbuf, trxreg)),
+        bw, width, height, psm, 0, logical_name, true, true};
+    g_resident_by_bp[bp] = static_cast<int>(slot_index);
+    return true;
 }
 
 int resident_chunk(std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
@@ -431,7 +498,10 @@ int resident_chunk(std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
     {
         return -1;
     }
-    return find_identity(resident.fingerprint, resident.psm,
-        resident.width, resident.height);
+    return resident.named
+        ? find_named_identity(resident.logical_name, resident.psm,
+            resident.width, resident.height)
+        : find_identity(resident.fingerprint, resident.psm,
+            resident.width, resident.height);
 }
 }
