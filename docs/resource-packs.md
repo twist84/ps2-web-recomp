@@ -422,3 +422,34 @@ regional filename exceptions or heuristics.
 For further diagnostics, set `PS2_TRACE_NATIVE_TEXTURES=1` alongside
 `PS2_TRACE_SDBZ_TEXTURE_NAMES=1` to log actual named source-overwrite
 events (capped to avoid flooding). In-game behavior still requires validation.
+
+### Verified name restoration after GS texture uploads (2026-11-14)
+
+The next EU Beta log still showed menu labels reverting to English with
+`GAME JPN` enabled despite precise GS block invalidation. It contained many
+`[gs-native] source-overwrite` events for known textures, including genuine
+writes at the *same* BP as an already named image. Those writes must invalidate
+their previous residency, but an original CTexture may still own the new
+upload when the game doesn't issue another TEX0 before drawing.
+
+The GIF metadata scanner now tracks BITBLTBUF, TRXPOS and TRXREG and, at
+`TRXDIR=0`, searches for a **unique, live, non-ambiguous original guest
+CTexture handle** whose BP/BW/PSM/dimensions exactly match a full image
+upload. If found, it queues the canonical filename **after the TRXDIR
+qword**, restoring the replacement only after the GS processes the
+invalidation. This is version-aware for EU Beta and Japan, does not hash
+image bytes, and rejects partial/offset uploads or ambiguous owners.
+
+The GS can also copy textures from one VRAM location to another using
+`TRXDIR=2`. The runtime now preserves a filename when a **complete,
+layout-identical copy** comes from an existing verified named resident.
+Unknown, partial and mismatched local copies continue to invalidate the
+destination and use original GS rendering.
+
+For remaining failures, enable `PS2_TRACE_SDBZ_TEXTURE_NAMES=1` and
+`PS2_TRACE_NATIVE_TEXTURES=1`. Newly recognized full-image reuploads
+report `[sdbz-name] transfer-bind`; source-overwrite diagnostics now
+report up to four cases per filename, including whether the write came
+from a host upload or a GS local copy. The actual rendering result
+still requires testing in-game; neither a hash fallback nor a special
+case for main-menu filenames is introduced.
