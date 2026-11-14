@@ -27,7 +27,7 @@ std::string texture_path(int index);
 std::vector<int> resident_chunks();
 bool replacements_available();
 void invalidate_destination(std::uint64_t bitbltbuf, std::uint64_t trxreg,
-    std::uint64_t trxpos = 0);
+    std::uint64_t trxpos = 0, bool local_copy = false);
 // Preserve canonical source identity when a verified complete indexed
 // image is copied within GS VRAM. Unknown/partial copies only invalidate.
 void local_copy_destination(std::uint64_t bitbltbuf,
