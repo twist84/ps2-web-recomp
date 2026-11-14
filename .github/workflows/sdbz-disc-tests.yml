@@ -139,6 +139,9 @@ jobs:
             -I host -I runtime/include -I runtime/src \
             $(sdl2-config --cflags) host/window.cpp host/texture_dump_job.cpp
       - name: Compile full PS2 runtime including named GS bindings
+        # The runtime uses Clang-specific VU vector builtins; GCC remains
+        # covered by the independent host and resource-pack harnesses.
+        if: matrix.compiler == 'clang++'
         env:
           CXX: ${{ matrix.compiler }}
         run: |
