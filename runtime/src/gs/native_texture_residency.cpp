@@ -195,6 +195,12 @@ void load_registry()
     g_entries.clear();
     g_lookup.clear();
     g_by_name.clear();
+    // Strict name-only mode never loads fingerprint files. Names are
+    // supplied by the game's own texture constructor and handle binder.
+    if (name_only_mode())
+    {
+        return;
+    }
     for (const auto &source : resource_pack::texture_registries())
     {
         std::istringstream lines(source);
@@ -250,6 +256,16 @@ int find_identity(std::uint64_t hash, std::uint32_t psm,
 }
 }
 
+bool name_only_mode()
+{
+    static const bool enabled = []()
+    {
+        const char *value = std::getenv("PS2_SDBZ_NAME_ONLY");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
 bool trace_native_textures()
 {
     static const bool enabled = []()
@@ -275,6 +291,10 @@ std::string texture_path(int index)
 
 bool replacements_available()
 {
+    if (name_only_mode())
+    {
+        return false;
+    }
     // Even disabled packs must not prevent identifying an original upload.
     // Its source fingerprint is independent of the replacement PNG.
     return registered_texture_count() != 0;
@@ -470,8 +490,22 @@ bool register_named_upload(const std::string &logical_name,
     {
         return false;
     }
-    // Called by an asset decoder hook on the GS render thread,
-    // after a complete upload. Do not infer a name from matching pixels.
+    // Published by the verified EE guest texture handle binder and consumed
+    // on the GS render thread, in queue order relative to GIF transfers.
+    // Do not infer the name from matching pixel bytes.
+    const int current = g_resident_by_bp[bp];
+    if (current >= 0)
+    {
+        const auto &existing = g_residents[static_cast<std::size_t>(current)];
+        if (existing.valid && existing.named
+            && existing.bp == bp && existing.bw == bw
+            && existing.psm == psm && existing.width == width
+            && existing.height == height
+            && existing.logical_name == logical_name)
+        {
+            return false; // No new residency: avoid invalidating setup.
+        }
+    }
     s_resident *slot = nullptr;
     for (auto &resident : g_residents)
     {
