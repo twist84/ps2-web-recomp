@@ -845,8 +845,35 @@ void write(std::uint32_t reg, std::uint64_t value) {
     case 0x14: case 0x15: s.ctx[reg - 0x14].tex1 = value; break;
     case 0x16: case 0x17: {
         Context &c = s.ctx[reg - 0x16];
+        const std::uint64_t old_tex0 = c.tex0;
         const std::uint64_t mask = 0xFFFFFFE0'03F00000ull;
         c.tex0 = (c.tex0 & ~mask) | (value & mask);
+#ifdef PS2_NATIVE_PNG
+        // TEX2 can select a different CLUT for the *same* indexed pixel
+        // buffer (for example the highlighted menu selection). A named PNG
+        // identifies the source sprite, not the transient CLUT contents.
+        // Extend that source's verified palette aliases only if all pixel
+        // layout fields are unchanged, never by guessing from a hash.
+        if (native_texture::name_only_mode()
+            && ((old_tex0 >> 20) & 0x3fu) == ((c.tex0 >> 20) & 0x3fu))
+        {
+            const std::uint32_t previous_clut =
+                static_cast<std::uint32_t>(old_tex0 >> 37) & 0x3fffu;
+            const std::uint32_t next_clut =
+                static_cast<std::uint32_t>(c.tex0 >> 37) & 0x3fffu;
+            if (previous_clut != next_clut
+                && native_texture::allow_named_palette_change(
+                    static_cast<std::uint32_t>(old_tex0) & 0x3fffu,
+                    static_cast<std::uint32_t>(old_tex0 >> 14) & 0x3fu,
+                    static_cast<std::uint32_t>(old_tex0 >> 20) & 0x3fu,
+                    1u << ((old_tex0 >> 26) & 0xfu),
+                    1u << ((old_tex0 >> 30) & 0xfu),
+                    previous_clut, next_clut))
+            {
+                ++g_setup_generation;
+            }
+        }
+#endif
         load_clut(c.tex0);
         break;
     }
