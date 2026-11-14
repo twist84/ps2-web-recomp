@@ -2,11 +2,13 @@
 
 #include "ps2/generated.hpp"
 #include "ps2/memory.hpp"
+#include "gs/gs.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -29,6 +31,23 @@ constexpr std::uint32_t k_handle_table_japan = 0x005007F0u;
 constexpr std::uint32_t k_handle_stride = 48u;
 constexpr std::size_t k_max_handles = 255;
 constexpr std::size_t k_max_observed_objects = 8192;
+
+bool name_only_enabled()
+{
+    static const bool enabled = []()
+    {
+        const char *value = std::getenv("PS2_SDBZ_NAME_ONLY");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+bool trace_enabled()
+{
+    static const bool enabled =
+        std::getenv("PS2_TRACE_SDBZ_TEXTURE_NAMES") != nullptr;
+    return enabled;
+}
 
 std::unordered_map<std::uint32_t, std::string> g_source_objects;
 struct s_resolved_handle
@@ -120,9 +139,12 @@ void inspect_pix(Cpu &cpu)
     {
         return;
     }
-    std::fprintf(stderr,
-        "[sdbz-name] FPIX name=%s source=%08X chunks=%u bytes=%u\n",
-        name.c_str(), source, count, size);
+    if (trace_enabled())
+    {
+        std::fprintf(stderr,
+            "[sdbz-name] FPIX name=%s source=%08X chunks=%u bytes=%u\n",
+            name.c_str(), source, count, size);
+    }
 }
 
 void inspect_texture(Cpu &cpu)
@@ -169,11 +191,14 @@ void inspect_texture(Cpu &cpu)
         g_source_objects[object] = name;
         ++g_source_revision;
     }
-    std::fprintf(stderr,
-        "[sdbz-name] texture=%s TIM2=%08X pixels=%08X bytes=%u"
-        " PSM=%u size=%ux%u object=%08X\n",
-        name.c_str(), tim2_address, pixel_address, image_bytes,
-        image_type == 5 ? 19u : 20u, width, height, object);
+    if (trace_enabled())
+    {
+        std::fprintf(stderr,
+            "[sdbz-name] texture=%s TIM2=%08X pixels=%08X bytes=%u"
+            " PSM=%u size=%ux%u object=%08X\n",
+            name.c_str(), tim2_address, pixel_address, image_bytes,
+            image_type == 5 ? 19u : 20u, width, height, object);
+    }
 }
 }
 
@@ -245,13 +270,20 @@ void inspect_binding(Cpu &cpu, std::uint32_t table_base)
         return;
     }
 
-    // A confirmed handle-to-name association plus the game's own table
-    // supplies GS metadata without hashing upload bytes.
-    // Until ordering relative to asynchronous GS DMA is verified, log only.
-    std::fprintf(stderr,
-        "[sdbz-name] bind name=%s handle=%u bp=%04X bw=%u"
-        " psm=%u size=%ux%u\n",
-        identity.name.c_str(), handle, bp, bw, psm, width, height);
+    // The game's handle lookup provides GS residency independently of
+    // upload bytes; the GS queue preserves the event's relative order.
+    if (name_only_enabled())
+    {
+        gs::publish_named_texture(identity.name, bp, bw, psm,
+            width, height);
+    }
+    if (trace_enabled())
+    {
+        std::fprintf(stderr,
+            "[sdbz-name] bind name=%s handle=%u bp=%04X bw=%u"
+            " psm=%u size=%ux%u\n",
+            identity.name.c_str(), handle, bp, bw, psm, width, height);
+    }
 }
 
 void sdbz_texture_source_probe(Cpu &cpu, std::uint32_t pc)
