@@ -322,6 +322,14 @@ void inspect_destroy(Cpu &cpu, std::uint32_t table_base)
                 u16(slot + 2));
         }
     }
+    if (trace_enabled())
+    {
+        std::fprintf(stderr,
+            "[sdbz-name] destroy object=%08X handle=%u name=%s\\n",
+            object, handle,
+            at->second.canonical_name.empty() ? "(unresolved)"
+                : at->second.canonical_name.c_str());
+    }
     g_source_objects.erase(at);
     ++g_source_revision;
 }
