@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <vector>
 #include <utility>
 
@@ -105,9 +106,14 @@ struct s_scanned_transfer
     std::uint64_t trxreg = 0;
 };
 s_scanned_transfer g_scanned_transfer{};
+// GIF PATH2 is emitted by the VU worker while PATH3 can originate on the
+// emulation thread. Protect their shared GS transfer-register provenance,
+// but never hold this lock while posting to either worker's queue.
+std::mutex g_real_scan_mutex;
 
 void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc,
-    std::vector<s_named_scan_event> *events = nullptr) {
+    std::vector<s_named_scan_event> *events = nullptr,
+    bool early_signal_side_effects = true) {
     // The real game may call the TEX0 builder within a generated EE unit,
     // bypassing the dispatcher entry probe. Observe GIF texture binds
     // during the existing emulation-thread scan, before queuing this GIF.
@@ -143,8 +149,15 @@ void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc,
                     if (at[8] >= 0x50 && at[8] <= 0x62) {
                         std::uint64_t value;
                         std::memcpy(&value, at, 8);
-                        if (at[8] >= 0x60) gs::signal(at[8], value);
-                        else if (at[8] <= 0x53) gs::note_transfer(at[8], value);
+                        // The VU worker is handling an actual queued GIF,
+                        // not VIF's emulation-thread shadow pass. Its GS
+                        // SIGNAL and transfer registers must be processed
+                        // by the render worker in queue order, not early.
+                        if (early_signal_side_effects)
+                        {
+                            if (at[8] >= 0x60) gs::signal(at[8], value);
+                            else if (at[8] <= 0x53) gs::note_transfer(at[8], value);
+                        }
 
                         if (scan_names && events)
                         {
@@ -288,9 +301,15 @@ void out(int path, const std::uint8_t *data, std::uint32_t qwc) {
         return value && *value && *value != '0';
     }();
     std::vector<s_named_scan_event> events;
-    if (gs::queue::role() != gs::queue::Role::Vu)
+    const bool vu_output = gs::queue::role() == gs::queue::Role::Vu;
+    // The actual menu GIF arrives on the VU worker (PATH2). Omitting it
+    // used to work accidentally because VIF shadow scans emitted names;
+    // after shadow isolation, no names reached the renderer at all.
+    if (name_only || !vu_output)
     {
-        scan(g_scan[path], data, qwc, name_only ? &events : nullptr);
+        std::lock_guard<std::mutex> lock(g_real_scan_mutex);
+        scan(g_scan[path], data, qwc, name_only ? &events : nullptr,
+            !vu_output);
     }
     std::uint32_t emitted = 0;
     for (const auto &event : events)
@@ -374,9 +393,12 @@ void reset() {
     g_stat = 0;
     if (hold_here()) drop_held();
     if (gs::queue::active()) {
-        for (Path &p : g_scan) p = Path{};
+        {
+            std::lock_guard<std::mutex> lock(g_real_scan_mutex);
+            for (Path &p : g_scan) p = Path{};
+            g_scanned_transfer = {};
+        }
         for (Path &p : g_shadow_scan) p = Path{};
-        g_scanned_transfer = {};
         gs::queue::post(gs::queue::kGifReset, 0, 0, nullptr, 0);
         return;
     }
