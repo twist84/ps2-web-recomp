@@ -39,6 +39,10 @@ on:
       - "docs/sdbz-main-menu-verified-fingerprints.csv"
       - "runtime/src/gs/native_texture_residency.cpp"
       - "runtime/src/gs/native_texture_residency.hpp"
+      - "runtime/src/sdbz_texture_source_probe.cpp"
+      - "runtime/src/sdbz_texture_source_probe.hpp"
+      - "runtime/src/dispatch.cpp"
+      - "tests/test_sdbz_texture_source_probe.py"
       - "runtime/src/gs/raster.cpp"
       - "runtime/src/gs/gpu/gpu.cpp"
       - "runtime/src/gs/gpu/gpu.hpp"
@@ -91,6 +95,10 @@ on:
       - "docs/sdbz-main-menu-verified-fingerprints.csv"
       - "runtime/src/gs/native_texture_residency.cpp"
       - "runtime/src/gs/native_texture_residency.hpp"
+      - "runtime/src/sdbz_texture_source_probe.cpp"
+      - "runtime/src/sdbz_texture_source_probe.hpp"
+      - "runtime/src/dispatch.cpp"
+      - "tests/test_sdbz_texture_source_probe.py"
       - "runtime/src/gs/raster.cpp"
       - "runtime/src/gs/gpu/gpu.cpp"
       - "runtime/src/gs/gpu/gpu.hpp"
@@ -151,5 +159,6 @@ jobs:
             -lz -o /tmp/sdbz-native-texture-dump-test
           /tmp/sdbz-native-texture-dump-test
           python3 -m unittest discover -s tests -p 'test_native_texture_residency.py' -v
+          python3 -m unittest discover -s tests -p 'test_sdbz_texture_source_probe.py' -v
           python3 -m unittest discover -s tests -p 'test_gs_shader_setup_stride.py' -v
           test -s runtime/data/native_textures.registry
