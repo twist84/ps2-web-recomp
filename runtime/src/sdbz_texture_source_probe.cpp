@@ -25,16 +25,11 @@ constexpr std::uint32_t k_texture_initialize_japan = 0x0019A460u;
 constexpr std::uint32_t k_bind_texture_eu_beta = 0x0010C3E0u;
 constexpr std::uint32_t k_bind_texture_japan = 0x0010C350u;
 constexpr std::uint32_t k_handle_table_eu_beta = 0x004FF8F0u;
-constexpr std::uint32_t k_handle_table_japan = 0x004FF8F0u;
+constexpr std::uint32_t k_handle_table_japan = 0x005007F0u;
 constexpr std::uint32_t k_handle_stride = 48u;
 constexpr std::size_t k_max_handles = 255;
 constexpr std::size_t k_max_observed_objects = 8192;
 
-struct s_source_object
-{
-    std::uint32_t address = 0;
-    std::string name;
-};
 std::unordered_map<std::uint32_t, std::string> g_source_objects;
 struct s_resolved_handle
 {
