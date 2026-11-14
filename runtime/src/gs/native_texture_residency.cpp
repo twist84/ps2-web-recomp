@@ -580,7 +580,7 @@ void invalidate_destination(std::uint64_t bitbltbuf,
                 {
                     std::fprintf(stderr,
                         "[gs-native] source-overwrite name=%s bp=%04X"
-                        " transfer-bp=%04X psm=%u\\n",
+                        " transfer-bp=%04X psm=%u\n",
                         resident.named ? resident.logical_name.c_str()
                             : "(fingerprint)",
                         resident.bp,
