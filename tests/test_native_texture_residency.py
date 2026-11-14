@@ -148,8 +148,23 @@ int main()
     upload.fnv1a64 ^= 0x1234;
     --upload.received_bytes;
     if (complete_upload(upload) != -1) return 13;
+    // A new upload reusing the same GS base pointer replaces the old
+    // mapping; changing dimensions must not leave a stale hit behind.
+    upload.received_bytes = upload.expected_bytes;
+    upload.bitbltbuf = (0x3200ull << 32) | (4ull << 48)
+        | (0x13ull << 56);
+    upload.fnv1a64 = 0x825F7B0566C19109ull;
+    if (complete_upload(upload) != 0) return 29;
+    if (resident_chunk(0x3200, 4, 0x13, 256, 256) != 0) return 30;
+    character.bitbltbuf = (0x3200ull << 32) | (1ull << 48)
+        | (0x14ull << 56);
+    if (complete_upload(character) != 2) return 31;
+    if (resident_chunk(0x3200, 4, 0x13, 256, 256) != -1) return 32;
+    if (resident_chunk(0x3200, 1, 0x14, 64, 64) != 2) return 33;
+    if (resident_chunk(0x4000, 1, 0x14, 64, 64) != -1) return 34;
     reset_residency();
     if (resident_chunk(0x3200, 4, 0x13, 256, 256) != -1) return 14;
+    if (resident_chunk(0x3200, 1, 0x14, 64, 64) != -1) return 35;
     return 0;
 }
 '''
