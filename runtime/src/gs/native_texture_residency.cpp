@@ -74,6 +74,10 @@ struct s_resident
     // Original CLUT address is part of indexed texture identity.
     // UINT32_MAX is retained for legacy fingerprint entries.
     std::uint32_t clut_bp = 0xffffffffu;
+    // Verified palette-only TEX2 switches are still the *same* named image.
+    // Keep both old and new CLUT addresses, as GS contexts can alternate.
+    std::array<std::uint32_t, 16> clut_aliases{};
+    std::uint32_t clut_alias_count = 0;
 };
 
 std::vector<s_entry> g_entries;
@@ -113,6 +117,28 @@ std::array<int, k_gs_blocks> g_resident_by_bp = []()
 }();
 std::size_t g_next_resident = 0;
 bool g_registry_loaded = false;
+
+bool accepts_clut(const s_resident &resident, std::uint32_t clut_bp)
+{
+    if (resident.clut_bp == clut_bp)
+    {
+        return true;
+    }
+    return std::find(resident.clut_aliases.begin(),
+        resident.clut_aliases.begin() + resident.clut_alias_count,
+        clut_bp) != resident.clut_aliases.begin() + resident.clut_alias_count;
+}
+
+bool remember_clut(s_resident &resident, std::uint32_t clut_bp)
+{
+    if (accepts_clut(resident, clut_bp)
+        || resident.clut_alias_count >= resident.clut_aliases.size())
+    {
+        return false;
+    }
+    resident.clut_aliases[resident.clut_alias_count++] = clut_bp;
+    return true;
+}
 
 bool intersects(std::uint32_t begin, std::uint32_t end,
     std::uint32_t other_begin, std::uint32_t other_end)
@@ -624,6 +650,31 @@ int complete_upload(const s_texture_upload_signature &upload)
     return index;
 }
 
+bool allow_named_palette_change(std::uint32_t bp, std::uint32_t bw,
+    std::uint32_t psm, std::uint32_t width, std::uint32_t height,
+    std::uint32_t previous_clut_bp, std::uint32_t next_clut_bp)
+{
+    if (bp >= k_gs_blocks || !bw || previous_clut_bp >= k_gs_blocks
+        || next_clut_bp >= k_gs_blocks)
+    {
+        return false;
+    }
+    const int index = g_resident_by_bp[bp];
+    if (index < 0)
+    {
+        return false;
+    }
+    auto &resident = g_residents[static_cast<std::size_t>(index)];
+    if (!resident.valid || !resident.named || resident.bp != bp
+        || resident.bw != bw || resident.psm != psm
+        || resident.width != width || resident.height != height
+        || !accepts_clut(resident, previous_clut_bp))
+    {
+        return false;
+    }
+    return remember_clut(resident, next_clut_bp);
+}
+
 bool register_named_upload(const std::string &logical_name,
     std::uint64_t bitbltbuf, std::uint64_t trxreg,
     std::uint64_t trxpos, std::uint32_t clut_bp)
@@ -649,15 +700,24 @@ bool register_named_upload(const std::string &logical_name,
     const int current = g_resident_by_bp[bp];
     if (current >= 0)
     {
-        const auto &existing = g_residents[static_cast<std::size_t>(current)];
+        auto &existing = g_residents[static_cast<std::size_t>(current)];
         if (existing.valid && existing.named
             && existing.bp == bp && existing.bw == bw
             && existing.psm == psm && existing.width == width
             && existing.height == height
-            && existing.clut_bp == clut_bp
             && existing.logical_name == logical_name)
         {
-            return false; // No new residency: avoid invalidating setup.
+            // The same verified game filename may bind with a different
+            // palette for selection/highlight effects. No pixels changed.
+            if (clut_bp == 0xffffffffu
+                || accepts_clut(existing, clut_bp))
+            {
+                return false; // Avoid redundant setup invalidations.
+            }
+            if (clut_bp < k_gs_blocks && remember_clut(existing, clut_bp))
+            {
+                return true;
+            }
         }
     }
     s_resident *slot = nullptr;
@@ -733,7 +793,7 @@ int resident_chunk(std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
         || resident.height != height
         || (resident.named && resident.clut_bp != 0xffffffffu
             && clut_bp != 0xffffffffu
-            && resident.clut_bp != clut_bp))
+            && !accepts_clut(resident, clut_bp)))
     {
         return -1;
     }
