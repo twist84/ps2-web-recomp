@@ -112,6 +112,12 @@ int main()
         return 0;
     }
     if (!replacements_available() || registered_texture_count() != 4) return 1;
+    if (std::getenv("PS2_SDBZ_SKIP_PNG"))
+    {
+        // Keep registry recognition active while deliberately suppressing
+        // PNG substitution for the black-rectangle A/B diagnostic.
+        return chunk_image(0) ? 51 : 0;
+    }
     if (texture_path(3) != "ply/extra.pix.000") return 28;
     // Alias must resolve to the same canonical filename/index.
     s_texture_upload_signature japan_upload{};
@@ -257,6 +263,9 @@ class NativeResidencyTests(unittest.TestCase):
             pure_name_env = dict(os.environ)
             pure_name_env["PS2_SDBZ_NAME_ONLY"] = "1"
             subprocess.run([str(exe)], env=pure_name_env, check=True)
+            skip_png_env = dict(os.environ)
+            skip_png_env["PS2_SDBZ_SKIP_PNG"] = "1"
+            subprocess.run([str(exe)], env=skip_png_env, check=True)
 
 if __name__ == "__main__":
     unittest.main()
