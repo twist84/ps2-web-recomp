@@ -17,10 +17,25 @@ HARNESS = r'''
 
 #include <cstdint>
 #include <cstring>
+#include <string>
 
 namespace ps2
 {
 std::uint8_t g_ram[kRamSize]{};
+}
+namespace ps2::gs
+{
+int g_named_publishes = 0;
+void publish_named_texture(const std::string &logical_name,
+    std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
+    std::uint32_t width, std::uint32_t height)
+{
+    if (logical_name == "dis/main_menu.pix.001" && bp == 0x120u
+        && bw == 4 && psm == 19 && width == 4 && height == 4)
+    {
+        ++g_named_publishes;
+    }
+}
 }
 
 static void put_u16(std::uint8_t *p, std::uint16_t value)
@@ -90,7 +105,7 @@ int main()
     tim2[0] = 0;
     cpu.r[5].w[0] = 0x2000u;
     ps2::sdbz_texture_source_probe(cpu, 0x0019A670u);
-    return 0;
+    return ps2::gs::g_named_publishes == 2 ? 0 : 1;
 }
 '''
 
@@ -114,7 +129,10 @@ class NamedTextureProbeTests(unittest.TestCase):
                 str(ROOT / "runtime/src/sdbz_texture_source_probe.cpp"),
                 "-o", str(executable)
             ], check=True)
-            done = subprocess.run([str(executable)],
+            env = dict(os.environ)
+            env["PS2_SDBZ_NAME_ONLY"] = "1"
+            env["PS2_TRACE_SDBZ_TEXTURE_NAMES"] = "1"
+            done = subprocess.run([str(executable)], env=env,
                                   text=True, capture_output=True, check=True)
             self.assertEqual(done.stderr.count("[sdbz-name] texture="), 2)
             self.assertEqual(done.stderr.count("[sdbz-name] FPIX"), 2)
