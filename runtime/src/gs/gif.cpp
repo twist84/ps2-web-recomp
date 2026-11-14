@@ -3,6 +3,7 @@
 
 #include "gs.hpp"
 #include "queue.hpp"
+#include "../sdbz_texture_source_probe.hpp"
 
 #include "ps2/state.hpp"
 
@@ -87,6 +88,15 @@ struct GsSink {
 };
 
 void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc) {
+    // The real game may call the TEX0 builder within a generated EE unit,
+    // bypassing the dispatcher entry probe. Observe GIF texture binds
+    // during the existing emulation-thread scan, before queuing this GIF.
+    static const bool scan_names = []()
+    {
+        const char *value = std::getenv("PS2_SDBZ_NAME_ONLY");
+        return (value && *value && *value != '0')
+            || std::getenv("PS2_TRACE_SDBZ_TEXTURE_NAMES") != nullptr;
+    }();
     std::uint32_t i = 0;
     while (i < qwc) {
         Reg128 q;
@@ -109,15 +119,45 @@ void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc) {
         if (p.flg == 0 && p.address_data) {
             for (; i < qwc && p.active; ++i) {
                 const std::uint8_t *at = data + static_cast<std::size_t>(i) * 16;
-                if (((p.regs >> (p.reg * 4)) & 0xFu) == 0xEu && at[8] >= 0x50 && at[8] <= 0x62) {
-                    std::uint64_t value;
-                    std::memcpy(&value, at, 8);
-                    if (at[8] >= 0x60) gs::signal(at[8], value);
-                    else if (at[8] <= 0x53) gs::note_transfer(at[8], value);
+                if (((p.regs >> (p.reg * 4)) & 0xFu) == 0xEu) {
+                    if (at[8] >= 0x50 && at[8] <= 0x62) {
+                        std::uint64_t value;
+                        std::memcpy(&value, at, 8);
+                        if (at[8] >= 0x60) gs::signal(at[8], value);
+                        else if (at[8] <= 0x53) gs::note_transfer(at[8], value);
+                    }
+                    if (scan_names && (at[8] == 0x06 || at[8] == 0x07)) {
+                        std::uint64_t value;
+                        std::memcpy(&value, at, 8);
+                        ps2::sdbz_texture_source_tex0(value);
+                    }
                 }
                 if (++p.reg >= p.nreg) {
                     p.reg = 0;
                     if (++p.loop >= p.nloop) p.active = false;
+                }
+            }
+            continue;
+        }
+        // PACKED direct TEX0 and REGLIST TEX0 do not use A+D. Handle
+        // both without changing packet progression or GS register values.
+        if (scan_names && (p.flg == 0 || p.flg == 1)) {
+            for (; i < qwc && p.active; ++i) {
+                const std::uint8_t *at = data
+                    + static_cast<std::size_t>(i) * 16;
+                const int halves = p.flg == 1 ? 2 : 1;
+                for (int half = 0; half < halves && p.active; ++half) {
+                    const std::uint32_t reg = static_cast<std::uint32_t>(
+                        p.regs >> (p.reg * 4)) & 0xFu;
+                    if (reg == 0x06 || reg == 0x07) {
+                        std::uint64_t tex0;
+                        std::memcpy(&tex0, at + half * 8, 8);
+                        ps2::sdbz_texture_source_tex0(tex0);
+                    }
+                    if (++p.reg >= p.nreg) {
+                        p.reg = 0;
+                        if (++p.loop >= p.nloop) p.active = false;
+                    }
                 }
             }
             continue;
