@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Host-only original-name constructor probe tests (no game assets)."""
+import os
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+
+HARNESS = r'''
+#include "ps2/generated.hpp"
+#include "ps2/memory.hpp"
+#include "sdbz_texture_source_probe.hpp"
+
+#include <cstdint>
+#include <cstring>
+
+namespace ps2
+{
+std::uint8_t g_ram[kRamSize]{};
+}
+
+static void put_u32(std::uint8_t *p, std::uint32_t value)
+{
+    for (int i = 0; i < 4; ++i)
+    {
+        p[i] = static_cast<std::uint8_t>(value >> (i * 8));
+    }
+}
+
+int main()
+{
+    ps2::Cpu cpu{};
+    std::uint8_t *name = ps2::g_ram + 0x1010u;
+    std::strcpy(reinterpret_cast<char *>(name), "dis/main_menu.pix.001");
+
+    auto *tim2 = ps2::g_ram + 0x2000u;
+    std::memcpy(tim2, "TIM2", 4);
+    std::uint8_t *picture = tim2 + 128u;
+    put_u32(picture, 64);
+    put_u32(picture + 8, 16);
+    picture[12] = 48; // picture header length
+    picture[19] = 5;  // 8-bit indexed source
+    picture[20] = 4;  // width
+    picture[22] = 4;  // height
+    cpu.r[4].w[0] = 0x1000u;
+    cpu.r[5].w[0] = 0x2000u;
+    ps2::sdbz_texture_source_probe(cpu, 0x0019A670u);
+    ps2::sdbz_texture_source_probe(cpu, 0x0019A460u);
+
+    auto *fpix = ps2::g_ram + 0x3000u;
+    std::memcpy(fpix, "FPIX", 4);
+    put_u32(fpix + 4, 64);
+    put_u32(fpix + 8, 1);
+    cpu.r[5].w[0] = 0x3000u;
+    ps2::sdbz_texture_source_probe(cpu, 0x0019AA70u);
+    ps2::sdbz_texture_source_probe(cpu, 0x0019A860u);
+
+    // An invalid TIM2 source must not generate a named identity.
+    tim2[0] = 0;
+    cpu.r[5].w[0] = 0x2000u;
+    ps2::sdbz_texture_source_probe(cpu, 0x0019A670u);
+    return 0;
+}
+'''
+
+class NamedTextureProbeTests(unittest.TestCase):
+    def test_guest_constructor_names(self):
+        setting = os.environ.get("CXX")
+        compiler = shlex.split(setting, posix=(os.name != "nt")) if setting else [
+            shutil.which("clang++") or shutil.which("g++") or shutil.which("c++")]
+        if not compiler or not compiler[0]:
+            raise unittest.SkipTest("no C++ compiler")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            main = root / "main.cpp"
+            executable = root / ("probe.exe" if os.name == "nt" else "probe")
+            main.write_text(HARNESS, encoding="utf-8")
+            subprocess.run(compiler + [
+                "-std=c++20", "-Wall", "-Wextra",
+                "-I", str(ROOT / "runtime/include"),
+                "-I", str(ROOT / "runtime/src"),
+                str(main),
+                str(ROOT / "runtime/src/sdbz_texture_source_probe.cpp"),
+                "-o", str(executable)
+            ], check=True)
+            done = subprocess.run([str(executable)],
+                                  text=True, capture_output=True, check=True)
+            self.assertEqual(done.stderr.count("[sdbz-name] texture="), 2)
+            self.assertEqual(done.stderr.count("[sdbz-name] FPIX"), 2)
+            self.assertIn("dis/main_menu.pix.001", done.stderr)
+            self.assertIn("pixels=000020B0", done.stderr)
+            self.assertIn("PSM=19 size=4x4", done.stderr)
+
+if __name__ == "__main__":
+    unittest.main()
