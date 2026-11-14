@@ -55,6 +55,11 @@ static void put_u32(std::uint8_t *p, std::uint32_t value)
 int main()
 {
     ps2::Cpu cpu{};
+    // Verified first words of CPixTexture::Initialize and TEX0 builder.
+    put_u32(ps2::g_ram + 0x19AA70u, 0x27BDFF70u);
+    put_u32(ps2::g_ram + 0x10C3E0u, 0x27BDFF30u);
+    put_u32(ps2::g_ram + 0x19A860u, 0x27BDFF70u);
+    put_u32(ps2::g_ram + 0x10C350u, 0x27BDFF30u);
     std::uint8_t *name = ps2::g_ram + 0x1010u;
     std::strcpy(reinterpret_cast<char *>(name), "dis/main_menu.pix.001");
 
