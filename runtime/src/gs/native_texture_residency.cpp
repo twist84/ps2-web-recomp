@@ -301,13 +301,37 @@ void reload_replacements()
     load_registry();
 }
 
-// Resolve a canonical filename only when its source layout is unambiguous.
+// Named asset identities come from the loader, not from a source
+// fingerprint or registry file. Intern once; use an integer at draw time.
 int find_named_identity(const std::string &name, std::uint32_t psm,
     std::uint32_t width, std::uint32_t height)
 {
     load_registry();
-    const auto it = g_by_name.find({name, width, height, psm});
-    return it == g_by_name.end() ? -1 : it->second;
+    if (!valid_path(name) || !width || !height
+        || width > k_max_native_side || height > k_max_native_side
+        || (psm != 0x00 && psm != 0x13 && psm != 0x14))
+    {
+        return -1;
+    }
+    const s_name_key key{name, width, height, psm};
+    const auto it = g_by_name.find(key);
+    if (it != g_by_name.end())
+    {
+        return it->second;
+    }
+    if (g_entries.size() >= k_max_registry_entries)
+    {
+        return -1;
+    }
+    const int index = static_cast<int>(g_entries.size());
+    s_entry entry{};
+    entry.psm = psm;
+    entry.width = width;
+    entry.height = height;
+    entry.path = name;
+    g_entries.push_back(std::move(entry));
+    g_by_name.emplace(key, index);
+    return index;
 }
 
 std::vector<int> resident_chunks()
@@ -446,7 +470,7 @@ bool register_named_upload(const std::string &logical_name,
     {
         return false;
     }
-    // Called by a future asset decoder hook on the GS render thread,
+    // Called by an asset decoder hook on the GS render thread,
     // after a complete upload. Do not infer a name from matching pixels.
     s_resident *slot = nullptr;
     for (auto &resident : g_residents)
