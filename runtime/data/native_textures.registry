@@ -1,0 +1,15 @@
+# SDBZ native source texture registry v1
+# FNV64 hex\tPSM decimal\twidth\theight\tlogical PNG basename
+825F7B0566C19109	19	256	256	dis/main_menu.pix.000
+B51AF81B5A15B2A7	19	512	512	dis/main_menu.pix.001
+DFD3DFF097489FA5	19	512	512	dis/main_menu.pix.002
+D307C2ED0BE864BD	19	512	512	dis/main_menu.pix.003
+A5A58F8B1540184F	19	512	512	dis/main_menu.pix.004
+307DBE18E48C1E8B	19	512	512	dis/main_menu.pix.005
+12060A392E8C6231	19	512	512	dis/main_menu.pix.006
+11359618DED2A3F6	19	512	512	dis/main_menu.pix.007
+7B54AC6672C00390	19	512	512	dis/main_menu.pix.008
+50E1EDC598A80DD3	19	512	512	dis/main_menu.pix.009
+5B0B861DA2F05F13	19	512	512	dis/main_menu.pix.010
+5141C17CB77119C4	19	512	512	dis/main_menu.pix.011
+89A12DC009425F4D	19	512	512	dis/main_menu.pix.012
