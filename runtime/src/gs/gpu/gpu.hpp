@@ -26,8 +26,11 @@ struct SurfaceTarget {
 Mode mode();
 bool init(Mode m);
 void draw(const State &s, const Vertex *v, int count);
-void upload_native_atlas(std::uint32_t index, std::uint32_t width,
+// Bounded GPU atlas cache: registry index is mapped to a reusable physical
+// slot; old slots are evicted only after submitting pending draws.
+int native_slot(std::uint32_t index, std::uint32_t width,
     std::uint32_t height, const std::uint8_t *rgba);
+void invalidate_native_atlases();
 void image_begin(const State &s);
 void image_data(const std::uint8_t *data, std::size_t bytes);
 void local_copy(const State &s);

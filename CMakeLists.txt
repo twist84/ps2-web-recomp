@@ -232,6 +232,13 @@ if(PS2_GENERATED)
             add_executable(SDBZ host/game_main.cpp host/window.cpp host/texture_dump_job.cpp)
             target_compile_definitions(SDBZ PRIVATE PS2_WINDOW)
             target_link_libraries(SDBZ PRIVATE ps2game ps2runtime SDL2::SDL2 psapi user32 ${PS2_ZLIB_TARGET})
+            # Data-driven fallback identities for existing Red Menu packs.
+            # New dump packs supply their own complete textures.registry.
+            add_custom_command(TARGET SDBZ POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${CMAKE_SOURCE_DIR}/runtime/data/native_textures.registry"
+                    "$<TARGET_FILE_DIR:SDBZ>/native_textures.registry"
+                VERBATIM)
             set(PS2_GAME_OUTPUT_DIR "" CACHE PATH "Output directory for the direct SDBZ.exe target")
             if(PS2_GAME_OUTPUT_DIR)
                 set_target_properties(SDBZ PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PS2_GAME_OUTPUT_DIR}")

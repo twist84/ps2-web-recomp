@@ -61,6 +61,10 @@ bool apply_pending_selection();
 // Thread-safe snapshot for the SDL pack manager.
 std::vector<s_pack_info> active_packs_snapshot();
 
+// Read each enabled pack's source texture registry, highest priority first.
+// Registry data is kept separate from replacement PNG selection.
+std::vector<std::string> texture_registries();
+
 // Logical keys are relative to assets/sdbz, e.g.
 // "textures/dis/main_menu.pix.001.png". Never accepts absolute/traversal paths.
 bool read_resource(const std::string &logical_path,

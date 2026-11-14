@@ -5,6 +5,8 @@
 
 #include <cstdint>
 #include <vector>
+#include <string>
+#include <cstddef>
 
 namespace ps2::gs::native_texture
 {
@@ -17,6 +19,9 @@ void reset_residency();
 // Preserve verified GS upload identities across pack changes. Only decoded
 // replacement images and catalog availability are invalidated.
 void reload_replacements();
+// Registered source identities are loaded from external data files.
+std::size_t registered_texture_count();
+std::string texture_path(int index);
 std::vector<int> resident_chunks();
 bool replacements_available();
 void invalidate_destination(std::uint64_t bitbltbuf, std::uint64_t trxreg);

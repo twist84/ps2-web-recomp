@@ -9,6 +9,8 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -41,6 +43,8 @@ struct s_texture
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     std::vector<std::uint8_t> rgba;
+    std::uint64_t fingerprint = 0;
+    std::uint32_t psm = 0;
 };
 
 struct s_result
@@ -49,6 +53,7 @@ struct s_result
     unsigned failures = 0;
     unsigned candidates = 0;
     std::vector<std::string> entries;
+    std::vector<std::string> registry;
 };
 
 std::uint16_t read_u16(const std::uint8_t *data)
@@ -62,6 +67,17 @@ std::uint32_t read_u32(const std::uint8_t *data)
         | (static_cast<std::uint32_t>(data[1]) << 8)
         | (static_cast<std::uint32_t>(data[2]) << 16)
         | (static_cast<std::uint32_t>(data[3]) << 24);
+}
+
+std::uint64_t fingerprint_pixels(const std::uint8_t *data, std::size_t size)
+{
+    std::uint64_t hash = 0xcbf29ce484222325ull;
+    for (std::size_t i = 0; i < size; ++i)
+    {
+        hash ^= data[i];
+        hash *= 0x100000001b3ull;
+    }
+    return hash;
 }
 
 void append_be32(std::vector<std::uint8_t> &data, std::uint32_t number)
@@ -247,6 +263,9 @@ bool decode_tim2(const std::uint8_t *data, std::size_t size,
     const auto *image = data + at + header_size;
     const auto *palette = image + image_size;
     texture.rgba.resize(static_cast<std::size_t>(pixels) * 4);
+    texture.fingerprint = fingerprint_pixels(image, image_size);
+    texture.psm = image_type == 3 ? 0x00u
+        : image_type == 4 ? 0x14u : image_type == 5 ? 0x13u : 0xffu;
     if (image_type == 3 && image_size == pixels * 4)
     {
         std::memcpy(texture.rgba.data(), image, texture.rgba.size());
@@ -281,6 +300,18 @@ bool decode_tim2(const std::uint8_t *data, std::size_t size,
             std::min(255u, static_cast<unsigned>(palette[src + 3]) * 2));
     }
     return true;
+}
+
+void register_image(s_result &result, const std::string &filename,
+    const s_texture &texture)
+{
+    std::ostringstream line;
+    line << std::uppercase << std::hex << std::setfill('0')
+        << std::setw(16) << texture.fingerprint
+        << std::dec << '\t' << texture.psm
+        << '\t' << texture.width << '\t' << texture.height
+        << '\t' << filename;
+    result.registry.push_back(line.str());
 }
 
 void note_result(s_result &result, const std::string &name,
@@ -345,6 +376,9 @@ void export_asset(const std::string &name, const std::vector<std::uint8_t> &data
                         reason = "cannot write PNG";
                         break;
                     }
+                    register_image(result, name
+                        + std::string(number).substr(0, std::strlen(number) - 4),
+                        image);
                     ++count;
                     ++result.exported;
                 }
@@ -367,6 +401,7 @@ void export_asset(const std::string &name, const std::vector<std::uint8_t> &data
             reason = "cannot write PNG";
         else
         {
+            register_image(result, name + ".000", image);
             ++count;
             ++result.exported;
         }
@@ -516,6 +551,19 @@ bool read_loose(const fs::path &root, const fs::path &output,
     return true;
 }
 
+void write_registry(const fs::path &output, const s_result &result)
+{
+    const fs::path name = output / "assets" / "sdbz" / "textures.registry";
+    std::error_code error;
+    fs::create_directories(name.parent_path(), error);
+    if (error) return;
+    std::ofstream stream(name, std::ios::binary | std::ios::trunc);
+    stream << "# SDBZ source texture registry v1\n";
+    stream << "# FNV64 hex\\tPSM decimal\\twidth\\theight\\tlogical PNG basename\n";
+    for (const auto &entry : result.registry)
+        stream << entry << '\n';
+}
+
 void write_report(const fs::path &output, const s_result &result,
     const std::string &source)
 {
@@ -539,6 +587,7 @@ void run_dump(const fs::path &disc, const fs::path &output, bool archive)
         success = archive
             ? read_archive(disc / "INFO.DAT", disc / "GAME.DAT", output, result, reason)
             : read_loose(disc / "GAME", output, result, reason);
+        write_registry(output, result);
         write_report(output, result, archive ? "INFO.DAT+GAME.DAT" : "GAME/");
     }
     catch (const std::exception &error)

@@ -52,7 +52,11 @@ constexpr std::uint32_t kPrimWords = 28;
 constexpr std::uint32_t kSetupWords = 26;
 constexpr std::uint32_t kNativeAtlasSide = 1024u;
 constexpr std::uint32_t kNativeAtlasPixels = kNativeAtlasSide * kNativeAtlasSide;
-constexpr std::uint32_t kNativeAtlasCount = 13;
+constexpr std::uint32_t kMaxNativeSlots = 16;
+std::uint32_t g_native_slot_count = 0;
+std::uint32_t g_native_next_slot = 0;
+std::unordered_map<std::uint32_t, std::uint32_t> g_native_slot_by_texture;
+std::vector<int> g_native_slot_owner;
 constexpr std::uint32_t kDecodedWords = 4u << 20;
 constexpr std::uint32_t kDecodePrims = 64;
 
@@ -1169,23 +1173,16 @@ std::uint32_t make_setup(const State &st, std::uint64_t attr, std::uint32_t *w) 
         {
             if (const auto *image = native_texture::chunk_image(chunk))
             {
-                const std::uint32_t scale = image->width / (1u << (w[15] & 0xffu));
-                w[25] = (scale << 16) | static_cast<std::uint32_t>(chunk);
+                const int slot = native_slot(static_cast<std::uint32_t>(chunk),
+                    image->width, image->height, image->rgba.data());
+                if (slot >= 0)
+                {
+                    const std::uint32_t scale = image->width / (1u << (w[15] & 0xffu));
+                    w[25] = (scale << 16) | static_cast<std::uint32_t>(slot);
+                }
             }
         }
-        // Limit logging to menu-atlas draws; avoid dumping the game's
-        // thousands of unrelated GS texture bindings per frame.
-        if (native_texture::trace_native_textures()
-            && w[12] == 0x2a00 && w[14] == 0x13
-            && (1u << (w[15] & 0xffu)) == 512)
-        {
-            static unsigned samples = 0;
-            if (samples++ < 16)
-                std::fprintf(stderr,
-                    "[gs-native] gpu draw BP=%04X BW=%u size=%ux%u selector=%d\n",
-                    w[12], w[13], 1u << (w[15] & 0xffu),
-                    1u << (w[15] >> 8), chunk);
-        }
+
     }
 #endif
     return flags;
@@ -1384,7 +1381,22 @@ bool init(Mode m) {
     g_scratch = make_buffer((static_cast<std::uint64_t>(g_copy_words) + 2ull * g_field_words) * 4, WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc);
     g_cache = make_buffer(static_cast<std::uint64_t>(kCacheWords) * 4, WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
     g_decoded = make_buffer(static_cast<std::uint64_t>(kDecodedWords) * 4, WGPUBufferUsage_Storage);
-    g_native_atlases = make_buffer(static_cast<std::uint64_t>(kNativeAtlasCount) * kNativeAtlasPixels * 4, WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
+    const std::uint64_t native_slot_bytes = static_cast<std::uint64_t>(kNativeAtlasPixels) * 4;
+    const std::uint64_t native_limit = std::min(supported.maxBufferSize,
+        supported.maxStorageBufferBindingSize);
+    g_native_slot_count = static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(kMaxNativeSlots, native_limit / native_slot_bytes));
+    if (!g_native_slot_count)
+    {
+        std::fprintf(stderr, "[gpu] native atlas cache unavailable: storage limit too small\n");
+        return false;
+    }
+    g_native_slot_owner.assign(g_native_slot_count, -1);
+    g_native_slot_by_texture.clear();
+    g_native_next_slot = 0;
+    g_native_atlases = make_buffer(
+        static_cast<std::uint64_t>(g_native_slot_count) * native_slot_bytes,
+        WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
     if (const char *decode = std::getenv("PS2_DECODE")) g_decode = std::atoi(decode) != 0;
     g_cache_copy.assign(kCacheWords, 0);
     g_readback = make_buffer(static_cast<std::uint64_t>(g_copy_words) * 4, WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst);
@@ -1424,13 +1436,29 @@ bool init(Mode m) {
     return true;
 }
 
-void upload_native_atlas(std::uint32_t index, std::uint32_t width,
+int native_slot(std::uint32_t index, std::uint32_t width,
     std::uint32_t height, const std::uint8_t *rgba)
 {
-    if (!g_native_atlases || !rgba || index >= kNativeAtlasCount
+    if (!g_native_atlases || !rgba
         || !native_texture::valid_atlas_size(index, width, height))
-        return;
-    // Each atlas has a fixed 512x512 slot. PNGs contain conventional
+        return -1;
+    const auto existing = g_native_slot_by_texture.find(index);
+    if (existing != g_native_slot_by_texture.end())
+        return static_cast<int>(existing->second);
+
+    // Reusing a physical slot must not mutate the memory used by any
+    // queued primitives. Flush and submit first, then write its replacement.
+    const std::uint32_t slot = g_native_next_slot++ % g_native_slot_count;
+    if (g_native_slot_owner[slot] >= 0)
+    {
+        flush();
+        g_native_slot_by_texture.erase(
+            static_cast<std::uint32_t>(g_native_slot_owner[slot]));
+        ++g_setup_generation;
+    }
+    g_native_slot_owner[slot] = static_cast<int>(index);
+    g_native_slot_by_texture[index] = slot;
+    // Each physical atlas slot has a 1024x1024 RGBA capacity. PNGs contain conventional
     // 0..255 alpha; PS2 texture arithmetic uses 0..128 alpha.
     std::vector<std::uint32_t> converted(static_cast<std::size_t>(width) * height);
     for (std::size_t i = 0; i < converted.size(); ++i)
@@ -1449,8 +1477,18 @@ void upload_native_atlas(std::uint32_t index, std::uint32_t width,
         std::copy_n(converted.data() + static_cast<std::size_t>(y) * width,
             width, padded.data() + static_cast<std::size_t>(y) * kNativeAtlasSide);
     wgpuQueueWriteBuffer(g_queue, g_native_atlases,
-        static_cast<std::uint64_t>(index) * kNativeAtlasPixels * 4,
+        static_cast<std::uint64_t>(slot) * kNativeAtlasPixels * 4,
         padded.data(), padded.size() * 4);
+    return static_cast<int>(slot);
+}
+
+void invalidate_native_atlases()
+{
+    // Call only after a GS-side flush. Old storage remains allocated; new
+    // PNGs are uploaded lazily as the game draws resident textures.
+    g_native_slot_by_texture.clear();
+    std::fill(g_native_slot_owner.begin(), g_native_slot_owner.end(), -1);
+    g_native_next_slot = 0;
 }
 
 void draw(const State &st, const Vertex *v, int count) {

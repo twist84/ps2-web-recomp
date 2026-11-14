@@ -136,6 +136,35 @@ Controller-only controls:
 - D-pad Down past the last pack selects **Dump All Textures to Pack**;
   press A to export textures to a new folder pack without leaving the game
 
+### Data-driven texture identities
+
+The C++ dumper now writes `assets/sdbz/textures.registry` alongside exported PNGs.
+Each tab-separated registry record contains:
+
+```text
+FNV64(hex)    PSM(decimal)    width    height    logical texture name
+```
+
+(Fields are separated by literal tab characters.) Registry fingerprints
+describe **original PS2 source pixel payloads**, not edited PNG contents.
+At runtime, completed GS texture uploads are matched by fingerprint,
+pixel format and dimensions, then resolved to their original logical
+asset name (without the final `.png` suffix). All installed pack registries are read, including disabled packs,
+so enabling a pack later does not depend on another texture upload.
+
+The formerly compiled-in 13-entry main-menu hash table is removed.
+`runtime/data/native_textures.registry` is copied beside `SDBZ.exe` as a
+compatibility dataset for older packs that do not contain a registry.
+Changing pack order or disabling a pack retains verified GS residency.
+
+WebGPU maintains an adapter-limited pool of physical native texture slots;
+logical registry entries are uploaded on demand and old slots are evicted
+only after pending draws have been submitted. Supported native images must
+fit within 1024x1024 and be 1x or uniformly 2x the game's original
+dimensions; unsupported images fall back to the original GS texture.
+Identical signatures assigned to different asset names are treated as
+ambiguous and not substituted.
+
 The dump action uses native C++ to read both loose `GAME/` and indexed
 `INFO.DAT` + `GAME.DAT` directly (preferring the archive when both are
 available). It writes an editable `GAME Texture Dump` folder under the
