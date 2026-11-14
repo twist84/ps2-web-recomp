@@ -59,9 +59,22 @@ int main()
             << "B51AF81B5A15B2A7\t19\t512\t512\tdis/main_menu.pix.001\n"
             << "1111222233334444\t20\t64\t64\tply/character.pix.000\n";
     }
+    // Registry entries are discovered from pack assets even when disabled.
+    const auto extra = root / "resourcepacks" / "Extra Pack"
+        / "assets" / "sdbz";
+    std::filesystem::create_directories(extra);
+    {
+        std::ofstream manifest(root / "resourcepacks" / "Extra Pack" / "pack.json");
+        manifest << "{\"pack\":{\"format\":1,\"game\":\"sdbz\"}}";
+        std::ofstream registry(extra / "textures.registry");
+        registry << "5555666677778888\\t19\\t128\\t128\\tply/extra.pix.000\\n";
+        std::ofstream order(root / "resourcepacks" / "load_order.txt");
+        order << "-Extra Pack\\n";
+    }
     ps2::resource_pack::mount(root, root);
     reset_residency();
-    if (!replacements_available() || registered_texture_count() != 3) return 1;
+    if (!replacements_available() || registered_texture_count() != 4) return 1;
+    if (texture_path(3) != "ply/extra.pix.000") return 28;
     if (atlas_scale(0, 256, 256) != 1
         || atlas_scale(0, 512, 512) != 2
         || atlas_scale(1, 512, 512) != 1
