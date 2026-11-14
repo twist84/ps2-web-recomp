@@ -1313,6 +1313,80 @@ void flush_and_wait() {
 #endif
 }
 
+struct s_named_texture_bind
+{
+    std::uint32_t bp = 0;
+    std::uint32_t bw = 0;
+    std::uint32_t psm = 0;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    char name[96]{};
+};
+
+void apply_named_texture(const s_named_texture_bind &bind)
+{
+#ifdef PS2_NATIVE_PNG
+    if (!native_texture::name_only_mode())
+    {
+        return;
+    }
+    const std::uint64_t bitbltbuf =
+        (static_cast<std::uint64_t>(bind.bp) << 32)
+        | (static_cast<std::uint64_t>(bind.bw) << 48)
+        | (static_cast<std::uint64_t>(bind.psm) << 56);
+    const std::uint64_t trxreg =
+        static_cast<std::uint64_t>(bind.width)
+        | (static_cast<std::uint64_t>(bind.height) << 32);
+    if (native_texture::register_named_upload(
+        bind.name, bitbltbuf, trxreg, 0))
+    {
+        // The currently bound TEX0 may be unchanged. Re-evaluate its
+        // native texture selector after a new named residency arrives.
+        ++g_setup_generation;
+    }
+#else
+    (void)bind;
+#endif
+}
+
+void publish_named_texture(const std::string &logical_name,
+    std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
+    std::uint32_t width, std::uint32_t height)
+{
+#ifdef PS2_NATIVE_PNG
+    if (!native_texture::name_only_mode()
+        || logical_name.empty() || logical_name.size() >= 96
+        || bp >= 0x4000u || !bw || bw > 63
+        || !width || !height || width > 1024 || height > 1024)
+    {
+        return;
+    }
+    s_named_texture_bind bind{};
+    bind.bp = bp;
+    bind.bw = bw;
+    bind.psm = psm;
+    bind.width = width;
+    bind.height = height;
+    std::memcpy(bind.name, logical_name.c_str(), logical_name.size());
+    if (queue::active())
+    {
+        // Emulation -> VU -> GS ordering is identical to queued GIF data.
+        queue::post(queue::kNamedTextureBind, 0, 0, &bind, sizeof bind);
+    }
+    else
+    {
+        apply_named_texture(bind);
+    }
+#else
+    (void)logical_name;
+    (void)bp;
+    (void)bw;
+    (void)psm;
+    (void)width;
+    (void)height;
+#endif
+}
+
 void start_thread() { queue::render().start(32u << 20); }
 
 void post_present() {
@@ -1355,6 +1429,17 @@ Rendered render_pending(const std::function<void(const DisplayRegs &)> &on_prese
         bool presented = false;
         switch (h.type) {
         case queue::kGif: gif::render(static_cast<int>(h.arg0), payload, h.arg1); break;
+        case queue::kNamedTextureBind:
+        {
+            if (h.bytes == sizeof(s_named_texture_bind))
+            {
+                s_named_texture_bind bind{};
+                std::memcpy(&bind, payload, sizeof bind);
+                bind.name[sizeof(bind.name) - 1] = 0;
+                apply_named_texture(bind);
+            }
+            break;
+        }
         case queue::kGifReset: gif::render_reset(); break;
         case queue::kReset: render_reset(); break;
         case queue::kSoftReset: soft_reset(); break;
