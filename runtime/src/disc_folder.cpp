@@ -1052,6 +1052,13 @@ void synthetic_layout(const fs::path &root, s_folder &folder, std::vector<s_layo
     {
         const auto relative = it->path().lexically_relative(root);
         if (relative.empty()) continue;
+        // ZIP-backed GAME/ is a host-only data source and cannot consume
+        // guest ISO sectors or appear in the ISO9660 root directory.
+        if (relative == relative.filename()
+            && regional_zip_name(relative.filename()))
+        {
+            continue;
+        }
         // Avoid path::string() — throws on Windows when glyphs are outside the ANSI code page.
         std::wstring top = relative.begin()->wstring();
         for (auto &c : top)
