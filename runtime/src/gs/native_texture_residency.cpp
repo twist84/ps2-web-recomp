@@ -146,66 +146,159 @@ bool intersects(std::uint32_t begin, std::uint32_t end,
     return begin < other_end && other_begin < end;
 }
 
-// GS textures occupy 8 KiB swizzled pages; they do not occupy a tightly
-// packed width*height*bpp byte interval. In particular, short sub-rectangle
-// uploads can touch later pages when DBW exceeds RRW or DSAY is nonzero.
-// Conservatively cover the bounding page interval using the same page
-// geometry as the GPU's pages()/region() logic.
-std::uint32_t transfer_blocks(std::uint64_t bitbltbuf,
-    std::uint64_t trxreg, std::uint64_t trxpos = 0)
+// Actual PS2 GS 256-byte block layouts, shared with the tables generated
+// by gs.cpp::build_tables(). Page-wide invalidation is too coarse for
+// 16x16 CLUT uploads: a 1 KiB palette can share an 8 KiB page with a
+// different image without overwriting any of its pixel blocks.
+constexpr std::uint8_t kBlock32[4][8] = {{0, 1, 4, 5, 16, 17, 20, 21}, {2, 3, 6, 7, 18, 19, 22, 23}, {8, 9, 12, 13, 24, 25, 28, 29}, {10, 11, 14, 15, 26, 27, 30, 31}};
+constexpr std::uint8_t kBlockZ32[4][8] = {{24, 25, 28, 29, 8, 9, 12, 13}, {26, 27, 30, 31, 10, 11, 14, 15}, {16, 17, 20, 21, 0, 1, 4, 5}, {18, 19, 22, 23, 2, 3, 6, 7}};
+constexpr std::uint8_t kBlock16[8][4] = {{0, 2, 8, 10}, {1, 3, 9, 11}, {4, 6, 12, 14}, {5, 7, 13, 15}, {16, 18, 24, 26}, {17, 19, 25, 27}, {20, 22, 28, 30}, {21, 23, 29, 31}};
+constexpr std::uint8_t kBlock16S[8][4] = {{0, 2, 16, 18}, {1, 3, 17, 19}, {8, 10, 24, 26}, {9, 11, 25, 27}, {4, 6, 20, 22}, {5, 7, 21, 23}, {12, 14, 28, 30}, {13, 15, 29, 31}};
+constexpr std::uint8_t kBlockZ16[8][4] = {{24, 26, 16, 18}, {25, 27, 17, 19}, {28, 30, 20, 22}, {29, 31, 21, 23}, {8, 10, 0, 2}, {9, 11, 1, 3}, {12, 14, 4, 6}, {13, 15, 5, 7}};
+constexpr std::uint8_t kBlockZ16S[8][4] = {{24, 26, 8, 10}, {25, 27, 9, 11}, {16, 18, 0, 2}, {17, 19, 1, 3}, {28, 30, 12, 14}, {29, 31, 13, 15}, {20, 22, 4, 6}, {21, 23, 5, 7}};
+
+using s_transfer_bits = std::array<std::uint64_t, k_gs_blocks / 64u>;
+
+// Mark precisely the blocks touched by a host->local GS image transfer.
+// False means unknown/unsafe layout; callers must conservatively assume
+// that all GS memory was touched.
+bool mark_transfer_blocks(std::uint64_t bitbltbuf,
+    std::uint64_t trxreg, std::uint64_t trxpos,
+    s_transfer_bits &bits, std::uint32_t &last_offset)
 {
-    const std::uint32_t psm =
-        static_cast<std::uint32_t>(bitbltbuf >> 56) & 0x3fu;
-    const std::uint64_t bw =
-        static_cast<std::uint32_t>(bitbltbuf >> 48) & 0x3fu;
-    const std::uint64_t width = trxreg & 0xfffu;
-    const std::uint64_t height = (trxreg >> 32) & 0xfffu;
+    const auto psm = static_cast<std::uint32_t>(bitbltbuf >> 56) & 0x3fu;
+    const auto bw = static_cast<std::uint32_t>(bitbltbuf >> 48) & 0x3fu;
+    const auto width = static_cast<std::uint32_t>(trxreg) & 0xfffu;
+    const auto height = static_cast<std::uint32_t>(trxreg >> 32) & 0xfffu;
     if (!width || !height)
     {
-        return 0;
+        return true;
     }
     if (!bw)
     {
-        // A zero/unknown DBW cannot define a trustworthy GS page range.
-        // Do not silently preserve a stale resident identity.
-        return k_gs_blocks;
+        return false;
     }
 
-    std::uint64_t page_width = 64;
-    std::uint64_t page_height = 32;
+    std::uint32_t page_width = 64;
+    std::uint32_t page_height = 32;
+    std::uint32_t tile_width = 8;
+    std::uint32_t tile_height = 8;
+    std::uint32_t tile_columns = 8;
+    const std::uint8_t *table = &kBlock32[0][0];
+
     switch (psm)
     {
+    case 0x00: case 0x01: case 0x1b: case 0x24: case 0x2c:
+        break;
+    case 0x30: case 0x31:
+        table = &kBlockZ32[0][0];
+        break;
     case 0x02: case 0x0a: case 0x32: case 0x3a:
         page_height = 64;
+        tile_width = 16;
+        tile_columns = 4;
+        switch (psm)
+        {
+        case 0x02: table = &kBlock16[0][0]; break;
+        case 0x0a: table = &kBlock16S[0][0]; break;
+        case 0x32: table = &kBlockZ16[0][0]; break;
+        default:   table = &kBlockZ16S[0][0]; break;
+        }
         break;
     case 0x13:
         page_width = 128;
         page_height = 64;
+        tile_width = 16;
+        tile_height = 16;
         break;
     case 0x14:
         page_width = 128;
         page_height = 128;
-        break;
-    case 0x00: case 0x01: case 0x30: case 0x31:
-    case 0x1b: case 0x24: case 0x2c:
+        tile_width = 32;
+        tile_height = 16;
+        tile_columns = 4;
+        table = &kBlock16[0][0];
         break;
     default:
-        // Unknown layouts must never leave a stale named source identity.
-        return k_gs_blocks;
+        return false;
     }
 
-    const std::uint64_t dsax = (trxpos >> 32) & 0x7ffu;
-    const std::uint64_t dsay = (trxpos >> 48) & 0x7ffu;
-    const std::uint64_t pages_per_row =
-        std::max<std::uint64_t>(1, (bw * 64 + page_width - 1)
-            / page_width);
-    const std::uint64_t last_page =
-        (dsax + width - 1) / page_width
-        + ((dsay + height - 1) / page_height) * pages_per_row;
-    // Each GS page spans 32 x 256-byte blocks. Clamp to all VRAM if
-    // the region is larger than the available 4 MiB.
-    return static_cast<std::uint32_t>(std::min<std::uint64_t>(
-        k_gs_blocks, (last_page + 1) * 32));
+    const auto bp = static_cast<std::uint32_t>(bitbltbuf >> 32) & 0x3fffu;
+    const auto dsax = static_cast<std::uint32_t>(trxpos >> 32) & 0x7ffu;
+    const auto dsay = static_cast<std::uint32_t>(trxpos >> 48) & 0x7ffu;
+    const std::uint32_t columns_per_page = page_width / tile_width;
+    const std::uint32_t rows_per_page = page_height / tile_height;
+    const std::uint32_t pages_per_row =
+        std::max(1u, bw * 64u / page_width);
+    const auto first_x = dsax / tile_width;
+    const auto last_x = (dsax + width - 1) / tile_width;
+    const auto first_y = dsay / tile_height;
+    const auto last_y = (dsay + height - 1) / tile_height;
+
+    const auto tiles = static_cast<std::uint64_t>(last_x - first_x + 1)
+        * (last_y - first_y + 1);
+    if (tiles > 4u * k_gs_blocks)
+    {
+        return false;
+    }
+
+    for (std::uint32_t y = first_y; y <= last_y; ++y)
+    {
+        const std::uint32_t page_y = y / rows_per_page;
+        const std::uint32_t block_y = y % rows_per_page;
+        for (std::uint32_t x = first_x; x <= last_x; ++x)
+        {
+            const std::uint32_t page_x = x / columns_per_page;
+            const std::uint32_t block_x = x % columns_per_page;
+            const std::uint32_t block =
+                table[block_y * tile_columns + block_x];
+            const std::uint64_t offset =
+                (static_cast<std::uint64_t>(page_y) * pages_per_row
+                    + page_x) * 32u + block;
+            last_offset = std::max(last_offset, static_cast<std::uint32_t>(
+                std::min<std::uint64_t>(k_gs_blocks, offset + 1)));
+            // GS local VRAM wraps at 4 MiB. Track the wrapped physical
+            // address, not only an enclosing page or byte-count estimate.
+            const std::uint32_t physical = static_cast<std::uint32_t>(
+                (static_cast<std::uint64_t>(bp) + offset)
+                    & (k_gs_blocks - 1u));
+            bits[physical / 64u] |=
+                std::uint64_t{1} << (physical % 64u);
+        }
+    }
+    return true;
+}
+
+bool dirty_resident(const s_transfer_bits &bits,
+    std::uint32_t begin, std::uint32_t end)
+{
+    for (std::uint32_t pos = begin; pos < end;)
+    {
+        const std::uint32_t word = pos / 64u;
+        const std::uint32_t limit = std::min(end, (word + 1u) * 64u);
+        const std::uint64_t low = ~std::uint64_t{0} << (pos % 64u);
+        const std::uint64_t high = (limit % 64u) == 0
+            ? ~std::uint64_t{0}
+            : ((std::uint64_t{1} << (limit % 64u)) - 1u);
+        if ((bits[word] & low & high) != 0)
+        {
+            return true;
+        }
+        pos = limit;
+    }
+    return false;
+}
+
+// Source residency still needs a compact extent for its GS BP index.
+// Unlike the previous page-wide estimate, the final used block is derived
+// from actual GS swizzle tiles (64x64 PSMT8 uses 16, not 32, blocks).
+std::uint32_t transfer_blocks(std::uint64_t bitbltbuf,
+    std::uint64_t trxreg, std::uint64_t trxpos = 0)
+{
+    s_transfer_bits ignored{};
+    std::uint32_t last = 0;
+    return mark_transfer_blocks(bitbltbuf, trxreg, trxpos, ignored, last)
+        ? last : k_gs_blocks;
 }
 
 bool valid_path(const std::string &name)
@@ -448,18 +541,26 @@ std::vector<int> resident_chunks()
 void invalidate_destination(std::uint64_t bitbltbuf,
     std::uint64_t trxreg, std::uint64_t trxpos)
 {
-    const std::uint32_t start =
-        static_cast<std::uint32_t>(bitbltbuf >> 32) & 0x3fffu;
-    const std::uint32_t blocks =
-        transfer_blocks(bitbltbuf, trxreg, trxpos);
-    if (!blocks)
+    // There is no source identity to invalidate before the first named
+    // upload. Avoid building swizzle masks for every boot-time GIF upload.
+    bool any_resident = false;
+    for (const auto &resident : g_residents)
+    {
+        if (resident.valid)
+        {
+            any_resident = true;
+            break;
+        }
+    }
+    if (!any_resident)
     {
         return;
     }
-    const std::uint64_t last = static_cast<std::uint64_t>(start) + blocks;
-    const bool wraps = last > k_gs_blocks;
-    const std::uint32_t end = static_cast<std::uint32_t>(
-        std::min<std::uint64_t>(k_gs_blocks, last));
+
+    s_transfer_bits dirty{};
+    std::uint32_t ignored = 0;
+    const bool known = mark_transfer_blocks(
+        bitbltbuf, trxreg, trxpos, dirty, ignored);
     for (std::size_t i = 0; i < g_residents.size(); ++i)
     {
         auto &resident = g_residents[i];
@@ -467,20 +568,26 @@ void invalidate_destination(std::uint64_t bitbltbuf,
         {
             continue;
         }
-        // A name-only PNG replaces the *logical source image*, not its
-        // mutable GS palette. The original game can rewrite that CLUT when
-        // highlighting a menu choice without changing any indexed pixels.
-        // Revoking the filename here makes those draws fall back to the
-        // original (English) GS image until a fresh named TEX0 arrives.
-        //
-        // Invalidate only when an upload really overlaps source pixel
-        // memory. The guest texture destructor and verified TEX0 rebinding
-        // handle name/ownership changes independently of CLUT updates.
-        if (intersects(start, end, resident.bp, resident.end_bp)
-            || (wraps && intersects(0,
-                    static_cast<std::uint32_t>(last - k_gs_blocks),
-                    resident.bp, resident.end_bp)))
+        // A CLUT upload should *not* evict a texture just because a
+        // page-wide approximation extends into the next texture's BP.
+        // Test only GS blocks the upload actually writes.
+        if (!known || dirty_resident(dirty, resident.bp, resident.end_bp))
         {
+            if (trace_native_textures())
+            {
+                static unsigned reports = 0;
+                if (reports++ < 100)
+                {
+                    std::fprintf(stderr,
+                        "[gs-native] source-overwrite name=%s bp=%04X"
+                        " transfer-bp=%04X psm=%u\\n",
+                        resident.named ? resident.logical_name.c_str()
+                            : "(fingerprint)",
+                        resident.bp,
+                        static_cast<unsigned>(bitbltbuf >> 32) & 0x3fffu,
+                        static_cast<unsigned>(bitbltbuf >> 56) & 0x3fu);
+                }
+            }
             if (g_resident_by_bp[resident.bp] == static_cast<int>(i))
             {
                 g_resident_by_bp[resident.bp] = -1;
