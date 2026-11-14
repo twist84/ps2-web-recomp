@@ -177,14 +177,10 @@ source image using its original logical filename (for example,
 consulting `textures.registry` and survive resource-pack priority changes.
 A named entry is invalidated when the destination GS memory is overwritten.
 
-**This API is not yet hooked into the game's EE-side texture decoder.**
-ARKD's native file reader knows the archive filename, but the game decodes
-and uploads textures later via GS DMA, without carrying that filename into
-the existing host GS API. Associating an ARKD file read with arbitrary
-subsequent GS uploads would risk false texture replacements. Until a
-correct loader/decode hook is available, the existing fingerprint-based
-path remains in service. Do not remove the registry files or enable a
-strict name-only mode on this intermediate change.
+The experimental filename path uses EE texture-constructor and handle
+binding observations to call this API on the GS thread. This avoids guessing
+which upload belongs to an ARKD file read. Fingerprint-based matching remains
+the default until the new path is tested in-game.
 
 ### Name capture from the actual EE texture constructors (research)
 
@@ -212,8 +208,11 @@ does not assign any GS VRAM address based on timing.
 The second guest mapping is now identified: EU Beta `0x0010C3E0` and
 Japan `0x0010C350` construct TEX0 from their 48-byte handle records. Their
 handle tables are at `0x004FF8F0` and `0x005007F0` respectively.
-At this point the game itself provides a base block (BP), buffer width,
-pixel format and original dimensions for the filename-associated handle.
+At this point the game itself provides a base block (BP), pixel format
+and original dimensions for the filename-associated handle. The guest TEX0
+builder computes texture buffer width (TBW) from original image width
+(`max(1, width / 64)`); the handle field at `+0x04` is the **CLUT base
+pointer**, not TBW.
 
 ### Experimental strict name-only replacement
 
@@ -224,7 +223,7 @@ experimental path. This mode:
   `name -> CTexture object` association
 - Resolves the object's final handle and the regional handle table layout
   when the game builds its TEX0
-- Publishes `name + BP + buffer width + PSM + dimensions` to the GS thread,
+- Publishes `name + BP + calculated TBW + PSM + dimensions` to the GS thread,
   in the same queued order as the game's GIF commands
 - Associates that name with GS residency, and loads replacement PNGs from
   `assets/sdbz/textures/<name>.png`
