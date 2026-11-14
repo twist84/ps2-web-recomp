@@ -154,6 +154,20 @@ int main()
             || texture_path(restored) != "ply/name_only.pix.000") return 48;
         invalidate_destination(bitbltbuf, trxreg);
         if (resident_chunk(0x3800, 2, 0x13, 64, 64) != -1) return 49;
+        if (!register_named_upload("ply/name_only.pix.000",
+            bitbltbuf, trxreg, 0, 0x123u)) return 62;
+        if (revoke_named_upload("ply/another.pix.000", 0x3800))
+        {
+            return 63; // Cannot release another owner's new BP mapping.
+        }
+        if (!revoke_named_upload("ply/name_only.pix.000", 0x3800))
+        {
+            return 64;
+        }
+        if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u) != -1)
+        {
+            return 65;
+        }
         return 0;
     }
     if (!replacements_available() || registered_texture_count() != 4) return 1;
