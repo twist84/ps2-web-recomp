@@ -35,6 +35,12 @@ int complete_upload(const s_texture_upload_signature &upload);
 bool register_named_upload(const std::string &logical_name,
     std::uint64_t bitbltbuf, std::uint64_t trxreg, std::uint64_t trxpos,
     std::uint32_t clut_bp = 0xffffffffu);
+// TEX2 may change only the palette for the same original indexed image.
+// Accept the new CLUT address only when an existing verified named upload
+// owns the pixel buffer and recognized the previous palette.
+bool allow_named_palette_change(std::uint32_t bp, std::uint32_t bw,
+    std::uint32_t psm, std::uint32_t width, std::uint32_t height,
+    std::uint32_t previous_clut_bp, std::uint32_t next_clut_bp);
 // Retire a named residency when its guest CTexture owner is destroyed.
 // Will not touch another texture that has since reused the same GS BP.
 bool revoke_named_upload(const std::string &logical_name,
