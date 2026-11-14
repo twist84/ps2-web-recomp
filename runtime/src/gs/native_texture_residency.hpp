@@ -35,6 +35,10 @@ int complete_upload(const s_texture_upload_signature &upload);
 bool register_named_upload(const std::string &logical_name,
     std::uint64_t bitbltbuf, std::uint64_t trxreg, std::uint64_t trxpos,
     std::uint32_t clut_bp = 0xffffffffu);
+// Retire a named residency when its guest CTexture owner is destroyed.
+// Will not touch another texture that has since reused the same GS BP.
+bool revoke_named_upload(const std::string &logical_name,
+    std::uint32_t bp);
 
 // Returns an index only when both the current residency and TEX0 layout agree.
 // A GS base pointer alone is deliberately not sufficient.
