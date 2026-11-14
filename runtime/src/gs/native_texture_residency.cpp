@@ -134,9 +134,15 @@ std::uint32_t transfer_blocks(std::uint64_t bitbltbuf,
         static_cast<std::uint32_t>(bitbltbuf >> 48) & 0x3fu;
     const std::uint64_t width = trxreg & 0xfffu;
     const std::uint64_t height = (trxreg >> 32) & 0xfffu;
-    if (!bw || !width || !height)
+    if (!width || !height)
     {
         return 0;
+    }
+    if (!bw)
+    {
+        // A zero/unknown DBW cannot define a trustworthy GS page range.
+        // Do not silently preserve a stale resident identity.
+        return k_gs_blocks;
     }
 
     std::uint64_t page_width = 64;
