@@ -539,7 +539,7 @@ std::vector<int> resident_chunks()
 }
 
 void invalidate_destination(std::uint64_t bitbltbuf,
-    std::uint64_t trxreg, std::uint64_t trxpos)
+    std::uint64_t trxreg, std::uint64_t trxpos, bool local_copy)
 {
     // There is no source identity to invalidate before the first named
     // upload. Avoid building swizzle masks for every boot-time GIF upload.
@@ -575,17 +575,35 @@ void invalidate_destination(std::uint64_t bitbltbuf,
         {
             if (trace_native_textures())
             {
-                static unsigned reports = 0;
-                if (reports++ < 100)
+                // Report each source's first few overwrites independently;
+                // an early looping background upload must not consume the
+                // entire diagnostic budget before main-menu sprites load.
+                static std::unordered_map<std::string, unsigned> reported;
+                const std::string &name = resident.named
+                    ? resident.logical_name : std::string("(fingerprint)");
+                auto it = reported.find(name);
+                if (it != reported.end() || reported.size() < 512)
                 {
-                    std::fprintf(stderr,
-                        "[gs-native] source-overwrite name=%s bp=%04X"
-                        " transfer-bp=%04X psm=%u\n",
-                        resident.named ? resident.logical_name.c_str()
-                            : "(fingerprint)",
-                        resident.bp,
-                        static_cast<unsigned>(bitbltbuf >> 32) & 0x3fffu,
-                        static_cast<unsigned>(bitbltbuf >> 56) & 0x3fu);
+                    if (it == reported.end())
+                    {
+                        it = reported.emplace(name, 0).first;
+                    }
+                    if (it->second++ < 4)
+                    {
+                        std::fprintf(stderr,
+                            "[gs-native] source-overwrite name=%s bp=%04X"
+                            " transfer-bp=%04X psm=%u dir=%s"
+                            " region=%ux%u\n",
+                            name.c_str(), resident.bp,
+                            static_cast<unsigned>(bitbltbuf >> 32)
+                                & 0x3fffu,
+                            static_cast<unsigned>(bitbltbuf >> 56)
+                                & 0x3fu,
+                            local_copy ? "local" : "host",
+                            static_cast<unsigned>(trxreg) & 0xfffu,
+                            static_cast<unsigned>(trxreg >> 32)
+                                & 0xfffu);
+                    }
                 }
             }
             if (g_resident_by_bp[resident.bp] == static_cast<int>(i))
@@ -904,7 +922,7 @@ void local_copy_destination(std::uint64_t bitbltbuf,
     // All copies overwrite destination memory, including those where the
     // source is unknown or a clipped image. Such copies must not carry an
     // unrelated name left over at the destination BP.
-    invalidate_destination(bitbltbuf, trxreg, trxpos);
+    invalidate_destination(bitbltbuf, trxreg, trxpos, true);
     if (!copied_name.empty())
     {
         // Local copies only move indexed pixel bytes. Their destination
