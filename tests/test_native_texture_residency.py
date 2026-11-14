@@ -103,6 +103,51 @@ int main()
         {
             return 50;
         }
+        // A partial PSMT8 transfer begins *before* the old texture BP.
+        // Its raw 64*64 bytes fit in 16 GS blocks, but its swizzled page
+        // occupies 32 blocks and overwrites the old texture's first page.
+        const std::uint64_t partial_buf = (0x37f0ull << 32)
+            | (8ull << 48) | (0x13ull << 56);
+        invalidate_destination(partial_buf, trxreg);
+        if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u) != -1)
+        {
+            return 55;
+        }
+        if (!register_named_upload("ply/name_only.pix.000",
+            bitbltbuf, trxreg, 0, 0x123u)) return 56;
+        // TRXPOS destination Y adds multiple GS pages of row padding;
+        // assuming a tightly-packed transfer leaves a stale source name.
+        const std::uint64_t offset_reg = 64ull | (128ull << 32);
+        const std::uint64_t offset_pos = 64ull << 48;
+        const std::uint64_t offset_buf = (0x3700ull << 32)
+            | (8ull << 48) | (0x13ull << 56);
+        invalidate_destination(offset_buf, offset_reg, offset_pos);
+        if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u) != -1)
+        {
+            return 57;
+        }
+        if (!register_named_upload("ply/name_only.pix.000",
+            bitbltbuf, trxreg, 0, 0x123u)) return 58;
+        // Changing the CLUT bytes at the same CBP also invalidates a
+        // decoded PNG, even when TEX0's palette address never changes.
+        const std::uint64_t clut_buf = (0x123ull << 32)
+            | (1ull << 48) | (0x00ull << 56);
+        const std::uint64_t clut_reg = 16ull | (16ull << 32);
+        invalidate_destination(clut_buf, clut_reg);
+        if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u) != -1)
+        {
+            return 59;
+        }
+        if (!register_named_upload("ply/name_only.pix.000",
+            bitbltbuf, trxreg, 0, 0x123u)) return 60;
+        // Unrelated writes must not discard an otherwise live image.
+        const std::uint64_t unrelated = (0x3000ull << 32)
+            | (1ull << 48) | (0x13ull << 56);
+        invalidate_destination(unrelated, trxreg);
+        if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u) < 0)
+        {
+            return 61;
+        }
         reload_replacements();
         const int restored = resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u);
         if (restored < 0
