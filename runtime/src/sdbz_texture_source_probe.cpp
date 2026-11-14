@@ -25,6 +25,10 @@ constexpr std::uint32_t k_pix_initialize_eu_beta = 0x0019AA70u;
 constexpr std::uint32_t k_texture_initialize_eu_beta = 0x0019A670u;
 constexpr std::uint32_t k_pix_initialize_japan = 0x0019A860u;
 constexpr std::uint32_t k_texture_initialize_japan = 0x0019A460u;
+// Verified EU Beta/Japan CTexture destructors call the respective 0x10E420
+// / 0x10E390 guest handle release helpers without clearing object+0x38.
+constexpr std::uint32_t k_texture_destroy_eu_beta = 0x0019A5F0u;
+constexpr std::uint32_t k_texture_destroy_japan = 0x0019A3E0u;
 // The texture handle is the first parameter of the guest TEX0 builder.
 constexpr std::uint32_t k_bind_texture_eu_beta = 0x0010C3E0u;
 constexpr std::uint32_t k_bind_texture_japan = 0x0010C350u;
@@ -292,6 +296,36 @@ void rebuild_handles()
     g_resolved_revision = g_source_revision;
 }
 
+void inspect_destroy(Cpu &cpu, std::uint32_t table_base)
+{
+    const std::uint32_t object = cpu.r[4].w[0];
+    const auto at = g_source_objects.find(object);
+    if (at == g_source_objects.end())
+    {
+        return;
+    }
+    // The destructor's handle field retains its previous value even after
+    // release. Remove the host identity *before* guest handle recycling.
+    const auto *owner_handle = ee_bytes(object + 0x38u, 4);
+    const std::uint32_t handle = owner_handle ? u32(owner_handle) : 0;
+    if (name_only_enabled() && !at->second.canonical_name.empty()
+        && handle > 0 && handle <= k_max_handles)
+    {
+        const auto *slot = ee_bytes(table_base
+            + (handle - 1u) * k_handle_stride, k_handle_stride);
+        if (slot && slot[0] == 1
+            && u16(slot + 14) == at->second.psm
+            && u16(slot + 22) == at->second.width
+            && u16(slot + 24) == at->second.height)
+        {
+            gs::revoke_named_texture(at->second.canonical_name,
+                u16(slot + 2));
+        }
+    }
+    g_source_objects.erase(at);
+    ++g_source_revision;
+}
+
 void inspect_binding(Cpu &cpu, std::uint32_t table_base)
 {
     const std::uint32_t handle = cpu.r[4].w[0];
@@ -471,6 +505,7 @@ void sdbz_texture_source_probe(Cpu &cpu, std::uint32_t pc)
     if (is_eu_beta
         && pc != k_pix_initialize_eu_beta
         && pc != k_texture_initialize_eu_beta
+        && pc != k_texture_destroy_eu_beta
         && pc != k_bind_texture_eu_beta)
     {
         return;
@@ -478,6 +513,7 @@ void sdbz_texture_source_probe(Cpu &cpu, std::uint32_t pc)
     if (is_japan
         && pc != k_pix_initialize_japan
         && pc != k_texture_initialize_japan
+        && pc != k_texture_destroy_japan
         && pc != k_bind_texture_japan)
     {
         return;
@@ -491,6 +527,12 @@ void sdbz_texture_source_probe(Cpu &cpu, std::uint32_t pc)
     case k_texture_initialize_eu_beta:
     case k_texture_initialize_japan:
         inspect_texture(cpu);
+        break;
+    case k_texture_destroy_eu_beta:
+        inspect_destroy(cpu, k_handle_table_eu_beta);
+        break;
+    case k_texture_destroy_japan:
+        inspect_destroy(cpu, k_handle_table_japan);
         break;
     case k_bind_texture_eu_beta:
         inspect_binding(cpu, k_handle_table_eu_beta);
