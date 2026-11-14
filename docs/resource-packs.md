@@ -394,3 +394,31 @@ constructor/destructor ownership checks, and rejection of unknown CLUT
 addresses. Added a regression that repeatedly changes menu palettes
 without re-binding the original texture; verification in-game is pending.
 
+
+### Precise GS block invalidation for menu labels (2026-11-14)
+
+The user's third main-menu navigation trace confirmed that selection names still
+reverted to English after handling CLUT-only updates and TEX2 palette aliases.
+The source-name resolver correctly reported multiple original menu texture
+names being bound to the same GS base pointer, and palette locations immediately
+preceding indexed pixel buffers (`CBP=0x2E04`, `TBP=0x2E20`).
+
+The remaining bug was in the **overwrite footprint**, not name matching.
+Previously, every transfer was rounded up to its entire 8 KiB swizzled GS
+page. A 16x16 PSMCT32 palette at `0x2E1C` actually writes 4
+256-byte GS blocks (`0x2E1C..0x2E1F`), but the page-wide approximation
+incorrectly marked `0x2E20` as overwritten. The next draw lost its verified
+Japanese PNG name until another TEX0 binding was observed.
+
+GS upload invalidation now marks the exact 256-byte swizzled blocks selected
+by the game's PSM32/PSM16/PSMT8/PSMT4 block tables, including destination
+XY offsets and GS VRAM wrapping. Named source extents are also derived
+from actually used blocks. Unknown transfer layouts still invalidate
+conservatively. Regression tests cover adjacent palette/image blocks at
+the exact menu addresses as well as a real PSMT8 page overwrite that
+must still retire the source name. The fix does not depend on hashes,
+regional filename exceptions or heuristics.
+
+For further diagnostics, set `PS2_TRACE_NATIVE_TEXTURES=1` alongside
+`PS2_TRACE_SDBZ_TEXTURE_NAMES=1` to log actual named source-overwrite
+events (capped to avoid flooding). In-game behavior still requires validation.
