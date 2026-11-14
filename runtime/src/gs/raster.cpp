@@ -433,7 +433,8 @@ Setup make_setup(const State &st) {
     if (s.tme)
     {
         const int chunk = native_texture::resident_chunk(s.tbp, s.tbw,
-            s.tpsm, 1u << s.tw, 1u << s.th);
+            s.tpsm, 1u << s.tw, 1u << s.th,
+            static_cast<std::uint32_t>(c.tex0 >> 37) & 0x3fffu);
         s.native_image = native_texture::chunk_image(chunk);
     }
 #endif

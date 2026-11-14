@@ -39,6 +39,10 @@ on:
       - "docs/sdbz-main-menu-verified-fingerprints.csv"
       - "runtime/src/gs/native_texture_residency.cpp"
       - "runtime/src/gs/native_texture_residency.hpp"
+      - "runtime/src/sdbz_texture_source_probe.cpp"
+      - "runtime/src/sdbz_texture_source_probe.hpp"
+      - "runtime/src/dispatch.cpp"
+      - "tests/test_sdbz_texture_source_probe.py"
       - "runtime/src/gs/raster.cpp"
       - "runtime/src/gs/gpu/gpu.cpp"
       - "runtime/src/gs/gpu/gpu.hpp"
@@ -91,6 +95,10 @@ on:
       - "docs/sdbz-main-menu-verified-fingerprints.csv"
       - "runtime/src/gs/native_texture_residency.cpp"
       - "runtime/src/gs/native_texture_residency.hpp"
+      - "runtime/src/sdbz_texture_source_probe.cpp"
+      - "runtime/src/sdbz_texture_source_probe.hpp"
+      - "runtime/src/dispatch.cpp"
+      - "tests/test_sdbz_texture_source_probe.py"
       - "runtime/src/gs/raster.cpp"
       - "runtime/src/gs/gpu/gpu.cpp"
       - "runtime/src/gs/gpu/gpu.hpp"
@@ -130,6 +138,17 @@ jobs:
           $CXX -std=c++20 -Wall -Wextra -fsyntax-only \
             -I host -I runtime/include -I runtime/src \
             $(sdl2-config --cflags) host/window.cpp host/texture_dump_job.cpp
+      - name: Compile full PS2 runtime including named GS bindings
+        # The runtime uses Clang-specific VU vector builtins; GCC remains
+        # covered by the independent host and resource-pack harnesses.
+        if: matrix.compiler == 'clang++'
+        env:
+          CXX: ${{ matrix.compiler }}
+        run: |
+          cmake -S . -B /tmp/sdbz-texture-compiler-check \
+            -DCMAKE_CXX_COMPILER="$CXX" -DPS2_FETCH_ZLIB=OFF
+          cmake --build /tmp/sdbz-texture-compiler-check \
+            --target ps2runtime --parallel 2
       - name: Run archive and ISO regression harnesses
         env:
           CXX: ${{ matrix.compiler }}
@@ -151,5 +170,6 @@ jobs:
             -lz -o /tmp/sdbz-native-texture-dump-test
           /tmp/sdbz-native-texture-dump-test
           python3 -m unittest discover -s tests -p 'test_native_texture_residency.py' -v
+          python3 -m unittest discover -s tests -p 'test_sdbz_texture_source_probe.py' -v
           python3 -m unittest discover -s tests -p 'test_gs_shader_setup_stride.py' -v
           test -s runtime/data/native_textures.registry

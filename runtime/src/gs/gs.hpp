@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <vector>
 
 namespace ps2::state {
@@ -83,6 +84,14 @@ void resize_window(std::uint32_t width, std::uint32_t height);
 bool present();
 bool present(const DisplayRegs &regs);
 void start_thread();
+// Transfer a verified game texture handle/name to the GS render thread.
+void publish_named_texture(const std::string &logical_name,
+    std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
+    std::uint32_t width, std::uint32_t height,
+    std::uint32_t clut_bp = 0xffffffffu);
+// Release a verified original guest texture's named GS mapping in queue order.
+void revoke_named_texture(const std::string &logical_name,
+    std::uint32_t bp);
 void flush_and_wait();
 void post_present();
 Rendered render_pending(const std::function<void(const DisplayRegs &)> &on_present, double budget_ms);

@@ -1168,7 +1168,8 @@ std::uint32_t make_setup(const State &st, std::uint64_t attr, std::uint32_t *w) 
     if (flags & 2u)
     {
         const int chunk = native_texture::resident_chunk(w[12], w[13],
-            w[14], 1u << (w[15] & 0xffu), 1u << (w[15] >> 8));
+            w[14], 1u << (w[15] & 0xffu), 1u << (w[15] >> 8),
+            static_cast<std::uint32_t>(c.tex0 >> 37) & 0x3fffu);
         if (chunk >= 0)
         {
             if (const auto *image = native_texture::chunk_image(chunk))

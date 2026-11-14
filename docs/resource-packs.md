@@ -167,6 +167,148 @@ game's upload pipeline, not simply another filename lookup.
 This adds no per-draw filesystem scans: the merged signature and name indices
 are constructed when the source registries are loaded.
 
+### Pure name-based texture identity (integration work)
+
+The GS residency layer now exposes
+`native_texture::register_named_upload(logical_name, bitbltbuf, trxreg, trxpos)`.
+A trusted asset decoder/loader integration can register a fully uploaded
+source image using its original logical filename (for example,
+`dis/main_menu.pix.001`). Named identities are interned directly without
+consulting `textures.registry` and survive resource-pack priority changes.
+A named entry is invalidated when the destination GS memory is overwritten.
+
+The experimental filename path uses EE texture-constructor and handle
+binding observations to call this API on the GS thread. This avoids guessing
+which upload belongs to an ARKD file read. Fingerprint-based matching remains
+the default until the new path is tested in-game.
+
+### Name capture from the actual EE texture constructors (research)
+
+Disassembly of the user-provided PS2 executables establishes the following
+name-preserving call chain:
+
+| Operation | EU Beta SLES_541.61 | Japan SLPS_256.42 |
+|---|---|---|
+| CPixTexture::Initialize | 0x0019AA70 | 0x0019A860 |
+| CTexture::Initialize | 0x0019A670 | 0x0019A460 |
+| Texture-handle allocator | 0x0010E700 | 0x0010E670 |
+
+The CPixTexture function calls the FPIX validator/chunk enumerator, formats a
+per-chunk name with `%s%03d`, and creates the individual texture object.
+The CTexture function has the inline texture name at `this + 0x10`, its
+TIM2 source pointer in its second argument and stores the returned texture
+handle at `this + 0x38`.
+
+`PS2_TRACE_SDBZ_TEXTURE_NAMES=1` now enables **read-only** observation of
+these constructor entries in the generated EE dispatcher. For a valid FPIX
+or TIM2 input it prints source addresses, logical names and dimensions.
+The observer does not replace game code, does not compute a pixel hash and
+does not assign any GS VRAM address based on timing.
+
+The second guest mapping is now identified: EU Beta `0x0010C3E0` and
+Japan `0x0010C350` construct TEX0 from their 48-byte handle records. Their
+handle tables are at `0x004FF8F0` and `0x005007F0` respectively.
+At this point the game itself provides a base block (BP), pixel format
+and original dimensions for the filename-associated handle. The guest TEX0
+builder computes texture buffer width (TBW) from original image width
+(`max(1, width / 64)`); the handle field at `+0x04` is the **CLUT base
+pointer**, not TBW.
+
+### Experimental strict name-only replacement
+
+Set `PS2_SDBZ_NAME_ONLY=1` before starting SDBZ to enable the end-to-end
+experimental path. This mode:
+
+- Observes the game's verified texture constructors, preserving each original
+  `name -> CTexture object` association
+- Resolves the object's final handle and the regional handle table layout
+  when the game builds its TEX0
+- Resolves the game's compact constructor names through the INFO/GAME archive
+  index: `main_menu001` becomes `dis/main_menu.pix.001`, with no hashes.
+  Duplicate archive basenames are rejected as ambiguous rather than guessed.
+- Observes actual GIF TEX0 writes (PACKED, A+D and REGLIST) as a fallback
+  when generated EE code bypasses the original texture-builder entry hook.
+  It splits a GIF batch only at resolved name bindings so queued GS drawing
+  sees the correct texture identity after each TEX0 write.
+- Publishes `name + BP + calculated TBW + PSM + dimensions` to the GS thread,
+  in GIF register order without changing the game's original pixel uploads
+- Associates that name with GS residency, and loads replacement PNGs from
+  `assets/sdbz/textures/<name>.png`
+- **Does not load native texture fingerprint registries or compute FNV hashes
+  for replacement selection**; unknown or ambiguous names fall back to the
+  original GS texture
+
+Set `PS2_TRACE_SDBZ_TEXTURE_NAMES=1` as well to log constructor and
+binding records for diagnosis. The GS texture name survives writes to
+palette-only CLUT memory: the original indexed pixel buffer is unchanged,
+so no new source filename or texture-handle binding is required. When TEX2
+selects a different palette address for the same verified indexed source,
+the renderer retains both palette addresses as valid aliases of that
+original named texture. Unknown palettes without a verified TEX2 transition,
+actual source-pixel overwrites and CTexture destruction still cause fallback
+to the original GS pixels.
+
+For malformed/black PNG troubleshooting, set `PS2_TRACE_NATIVE_TEXTURES=1`.
+Each attempted PNG logs its canonical name, supplying pack ID, dimensions,
+the number of fully transparent pixels, and opaque-black pixels. The entry is
+only printed once per texture cache generation. If a pack-supplied PNG is
+itself black, re-export its alpha/CLUT correctly instead of changing
+fingerprint/name matching.
+
+For an A/B comparison with the same game and resource-pack state, set
+`PS2_SDBZ_SKIP_PNG=1`. This keeps named GS tracking and resource packs
+enabled but renders original GS textures instead of any replacement PNG.
+If the black rectangles disappear, investigate PNG sources or replacement
+alpha handling; if they remain, investigate GIF/GS rendering. Unset the
+variable for actual texture replacement.
+
+### 2026-11-14 EU Beta/Japan PNG dump audit
+
+Compared the complete user-supplied exported texture archives by canonical
+filename. EU Beta has 3,400 PNGs; the Japan pack has 3,362 active PNGs
+plus one disabled PNG (`dis/d03/d03t0202.pix.000.png.disabled`).
+Of the 3,362 shared active names, 3,254 are byte-identical, 102 have
+different pixel data at matching dimensions, and six use different
+dimensions. EU Beta has 38 additional active files (37 unrelated to the
+disabled Japanese file); 79 of the same-dimension differences modify alpha.
+
+The offending Sofdec/ADX logo image `dis/d03/d03t0202.pix.000.png` is
+**byte-for-byte identical** in the EU Beta dump and disabled Japan copy
+(SHA-256 `738242b92c15fb33e20c509b4cfdda62297638451f1ac5f5b72a5d7fc39b77df`).
+The black background is present in both exported files. Therefore simply
+re-exporting Japanese PNGs or rejecting this filename globally cannot fix
+the underlying runtime substitution. Source-name ownership must be revoked
+when guest texture handles are destroyed or reused, and GS texture/CLUT
+residency must be invalidated for uploads touching swizzled pages.
+
+The runtime includes conservative GS page-aware invalidation for source
+pixel overwrites and destructor-driven name revocation, while retaining
+filename identity during palette-only updates. Keep the source's
+`.png.disabled` extension until real-game testing confirms correct
+behavior after those changes. Neither the file contents nor a hardcoded
+filename special case is changed by this runtime fix.
+
+For finer isolation without disabling other PNG replacements, set
+`PS2_SDBZ_SKIP_PNG_NAMES` to a comma-separated list of canonical names.
+For example:
+
+```bat
+set PS2_SDBZ_SKIP_PNG=
+set PS2_SDBZ_SKIP_PNG_NAMES=dis/main_menu.pix.002,dis/main_menu.pix.003
+SDBZ.exe
+```
+
+The named entries use the original GS pixels; all other enabled pack PNGs
+still load normally. Reset `PS2_SDBZ_SKIP_PNG_NAMES=` after testing. This
+is intentionally an exact-path diagnostic, not a runtime hash or heuristic
+black-pixel filter.
+
+This mode is intentionally **opt-in and unmerged** pending in-game tests.
+Because GS uploads are asynchronous and guest handles can be recycled, validate
+rendered replacements (including reloads/VRAM overwrites) before choosing it
+as the default. The older fingerprint path remains the default while this
+draft is under review.
+
 ### Data-driven texture identities
 
 The C++ dumper now writes `assets/sdbz/textures.registry` alongside exported PNGs.
@@ -232,3 +374,94 @@ pack selections both use this same live reload path.
 - In-game pack list and order editor
 - More verified FPIX/TIM2 mappings
 - Shared resource resolver for audio and other asset formats
+
+### Main-menu selection label stability (2026-11-14)
+
+The user reported that Japanese main-menu selection-label PNGs sometimes
+fell back to the original English textures as menu options changed.
+The capture shows repeated named TEX0 writes as well as texture
+destruction and recreation during menu navigation.
+
+Name-only GS residency previously discarded the logical source name on
+**any CLUT write** to its original palette address. The game can update
+the CLUT without rewriting the indexed pixels or repeating TEX0, causing
+an English fallback even while `GAME JPN` remains enabled. It also refused
+the PNG when TEX2 switched the palette base address for the same source.
+This update keeps names alive across palette-only writes and accepts
+verified TEX2 palette aliases without changing the filename or using
+source-pixel hashes. It preserves pixel-write invalidation, original
+constructor/destructor ownership checks, and rejection of unknown CLUT
+addresses. Added a regression that repeatedly changes menu palettes
+without re-binding the original texture; verification in-game is pending.
+
+
+### Precise GS block invalidation for menu labels (2026-11-14)
+
+The user's third main-menu navigation trace confirmed that selection names still
+reverted to English after handling CLUT-only updates and TEX2 palette aliases.
+The source-name resolver correctly reported multiple original menu texture
+names being bound to the same GS base pointer, and palette locations immediately
+preceding indexed pixel buffers (`CBP=0x2E04`, `TBP=0x2E20`).
+
+The remaining bug was in the **overwrite footprint**, not name matching.
+Previously, every transfer was rounded up to its entire 8 KiB swizzled GS
+page. A 16x16 PSMCT32 palette at `0x2E1C` actually writes 4
+256-byte GS blocks (`0x2E1C..0x2E1F`), but the page-wide approximation
+incorrectly marked `0x2E20` as overwritten. The next draw lost its verified
+Japanese PNG name until another TEX0 binding was observed.
+
+GS upload invalidation now marks the exact 256-byte swizzled blocks selected
+by the game's PSM32/PSM16/PSMT8/PSMT4 block tables, including destination
+XY offsets and GS VRAM wrapping. Named source extents are also derived
+from actually used blocks. Unknown transfer layouts still invalidate
+conservatively. Regression tests cover adjacent palette/image blocks at
+the exact menu addresses as well as a real PSMT8 page overwrite that
+must still retire the source name. The fix does not depend on hashes,
+regional filename exceptions or heuristics.
+
+For further diagnostics, set `PS2_TRACE_NATIVE_TEXTURES=1` alongside
+`PS2_TRACE_SDBZ_TEXTURE_NAMES=1` to log actual named source-overwrite
+events (capped to avoid flooding). In-game behavior still requires validation.
+
+### Verified name restoration after GS texture uploads (2026-11-14)
+
+The next EU Beta log still showed menu labels reverting to English with
+`GAME JPN` enabled despite precise GS block invalidation. It contained many
+`[gs-native] source-overwrite` events for known textures, including genuine
+writes at the *same* BP as an already named image. Those writes must invalidate
+their previous residency, but an original CTexture may still own the new
+upload when the game doesn't issue another TEX0 before drawing.
+
+The GIF metadata scanner now tracks BITBLTBUF, TRXPOS and TRXREG and, at
+`TRXDIR=0`, searches for a **unique, live, non-ambiguous original guest
+CTexture handle** whose BP/BW/PSM/dimensions exactly match a full image
+upload. If found, it queues the canonical filename **after the TRXDIR
+qword**, restoring the replacement only after the GS processes the
+invalidation. This is version-aware for EU Beta and Japan, does not hash
+image bytes, and rejects partial/offset uploads or ambiguous owners.
+
+The GS can also copy textures from one VRAM location to another using
+`TRXDIR=2`. The runtime now preserves a filename when a **complete,
+layout-identical copy** comes from an existing verified named resident.
+Unknown, partial and mismatched local copies continue to invalidate the
+destination and use original GS rendering.
+
+For remaining failures, enable `PS2_TRACE_SDBZ_TEXTURE_NAMES=1` and
+`PS2_TRACE_NATIVE_TEXTURES=1`. Newly recognized full-image reuploads
+report `[sdbz-name] transfer-bind`; source-overwrite diagnostics now
+report up to four cases per filename, including whether the write came
+from a host upload or a GS local copy. The actual rendering result
+still requires testing in-game; neither a hash fallback nor a special
+case for main-menu filenames is introduced.
+
+### VIF1 shadow-only GIF scans and original texture name ordering
+
+VIF1 performs a shadow pass on the emulation thread while the VU thread
+executes actual GIF packets. The shadow pass exists for signal and
+transfer-state observation, not GS rendering. Previously, this pass
+could publish a canonical TEX0 name despite not submitting any draw,
+and it advanced the *same* name-scanner GIF parser state as the real stream.
+That could give later real packets an incorrect register/halfword position.
+Shadow scans now have independent parser state and never publish
+native-name bindings or upload-provenance updates. Only actual
+queue-submitted GIF packets can change the renderer's source identity.

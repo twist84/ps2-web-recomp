@@ -16,6 +16,7 @@ HARNESS = r'''
 #include <filesystem>
 #include <fstream>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <vector>
@@ -79,7 +80,224 @@ int main()
     }
     ps2::resource_pack::mount(root, root);
     reset_residency();
+    if (name_only_mode())
+    {
+        // Pure-name residency requires no fingerprint registry or upload
+        // hashing, and retains a named texture across pack reloads.
+        if (replacements_available() || registered_texture_count()) return 44;
+        const std::uint64_t bitbltbuf = (0x3800ull << 32)
+            | (2ull << 48) | (0x13ull << 56);
+        const std::uint64_t trxreg = 64ull | (64ull << 32);
+        if (!register_named_upload("ply/name_only.pix.000",
+            bitbltbuf, trxreg, 0, 0x123u)) return 45;
+        if (register_named_upload("ply/name_only.pix.000",
+            bitbltbuf, trxreg, 0, 0x123u)) return 46; // already registered
+        const int index = resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u);
+        if (index < 0 || texture_path(index) != "ply/name_only.pix.000")
+        {
+            return 47;
+        }
+        // TEX2 can change the palette without changing the pixel buffer.
+        // Do not paint a PNG decoded for the previous CLUT over this draw.
+        if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x124u) != -1)
+        {
+            return 50;
+        }
+        // TEX2 changes the palette of this particular verified named
+        // texture while keeping its original indexed pixels. Either GS
+        // context may subsequently draw with either palette address.
+        if (!allow_named_palette_change(0x3800, 2, 0x13, 64, 64,
+            0x123u, 0x124u)) return 66;
+        if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x124u) != index
+            || resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u) != index)
+        {
+            return 67;
+        }
+        // A different PSM or unknown previous palette cannot acquire the
+        // source name through TEX2.
+        if (allow_named_palette_change(0x3800, 2, 0x14, 64, 64,
+                0x123u, 0x125u)
+            || allow_named_palette_change(0x3800, 2, 0x13, 64, 64,
+                0x130u, 0x125u))
+        {
+            return 68;
+        }
+        if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x125u) != -1)
+        {
+            return 69;
+        }
+        // A full PSMT8 page (128x64) begins 16 blocks before the source
+        // and really does overwrite its first 16 GS blocks. A 64x64 half
+        // page would NOT reach that BP: the old page-wide approximation
+        // incorrectly invalidated the source in that case.
+        const std::uint64_t partial_buf = (0x37f0ull << 32)
+            | (8ull << 48) | (0x13ull << 56);
+        const std::uint64_t partial_reg = 128ull | (64ull << 32);
+        invalidate_destination(partial_buf, partial_reg);
+        if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u) != -1)
+        {
+            return 55;
+        }
+        if (!register_named_upload("ply/name_only.pix.000",
+            bitbltbuf, trxreg, 0, 0x123u)) return 56;
+        // TRXPOS destination Y adds multiple GS pages of row padding;
+        // assuming a tightly-packed transfer leaves a stale source name.
+        const std::uint64_t offset_reg = 64ull | (128ull << 32);
+        const std::uint64_t offset_pos = 64ull << 48;
+        const std::uint64_t offset_buf = (0x3700ull << 32)
+            | (8ull << 48) | (0x13ull << 56);
+        invalidate_destination(offset_buf, offset_reg, offset_pos);
+        if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u) != -1)
+        {
+            return 57;
+        }
+        if (!register_named_upload("ply/name_only.pix.000",
+            bitbltbuf, trxreg, 0, 0x123u)) return 58;
+        // The game frequently animates a menu selection by rewriting
+        // only its CLUT, without re-uploading the original indexed pixels
+        // or repeating the texture-handle bind. The native PNG identity
+        // must survive these writes, or the text flashes back to English.
+        const std::uint64_t clut_buf = (0x123ull << 32)
+            | (1ull << 48) | (0x00ull << 56);
+        const std::uint64_t clut_reg = 16ull | (16ull << 32);
+        for (int n = 0; n < 8; ++n)
+        {
+            invalidate_destination(clut_buf, clut_reg);
+            const int selection = resident_chunk(0x3800, 2,
+                0x13, 64, 64, 0x123u);
+            if (selection != index
+                || texture_path(selection) != "ply/name_only.pix.000")
+            {
+                return 59;
+            }
+        }
+        // Reusing a name with the same GS layout is not a new bind.
+        if (register_named_upload("ply/name_only.pix.000",
+            bitbltbuf, trxreg, 0, 0x123u)) return 60;
+        // Unrelated writes must not discard an otherwise live image.
+        const std::uint64_t unrelated = (0x3000ull << 32)
+            | (1ull << 48) | (0x13ull << 56);
+        invalidate_destination(unrelated, trxreg);
+        if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u) < 0)
+        {
+            return 61;
+        }
+        reload_replacements();
+        const int restored = resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u);
+        if (restored < 0
+            || texture_path(restored) != "ply/name_only.pix.000") return 48;
+        invalidate_destination(bitbltbuf, trxreg);
+        if (resident_chunk(0x3800, 2, 0x13, 64, 64) != -1) return 49;
+        if (!register_named_upload("ply/name_only.pix.000",
+            bitbltbuf, trxreg, 0, 0x123u)) return 62;
+        if (revoke_named_upload("ply/another.pix.000", 0x3800))
+        {
+            return 63; // Cannot release another owner's new BP mapping.
+        }
+        if (!revoke_named_upload("ply/name_only.pix.000", 0x3800))
+        {
+            return 64;
+        }
+        if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u) != -1)
+        {
+            return 65;
+        }
+
+        // Regression from real EU Beta main-menu navigation: PSMT8 menu
+        // labels begin at GS BP 0x2E20, with CLUTs at 0x2E04 / 0x2E1C.
+        // A 16x16 PSMCT32 CLUT transfer uses exactly 4 GS blocks.
+        // The previous entire-page estimate wrongly included BP 0x2E20
+        // and made the Japanese PNG revert to English on selection.
+        const std::string menu_name = "dis/main_menu.pix.002";
+        const std::uint64_t menu_buf = (0x2e20ull << 32)
+            | (8ull << 48) | (0x13ull << 56);
+        const std::uint64_t menu_reg = 512ull | (512ull << 32);
+        if (!register_named_upload(menu_name, menu_buf, menu_reg,
+            0, 0x2e04u)) return 70;
+        const int menu_index = resident_chunk(0x2e20, 8, 0x13,
+            512, 512, 0x2e04u);
+        if (menu_index < 0 || texture_path(menu_index) != menu_name)
+        {
+            return 71;
+        }
+        const std::uint64_t clut_reg_menu = 16ull | (16ull << 32);
+        for (std::uint32_t cbp : {0x2e04u, 0x2e18u, 0x2e1cu})
+        {
+            const std::uint64_t buf = (static_cast<std::uint64_t>(cbp)
+                << 32) | (1ull << 48);
+            for (int frame = 0; frame < 4; ++frame)
+            {
+                invalidate_destination(buf, clut_reg_menu);
+                if (resident_chunk(0x2e20, 8, 0x13,
+                    512, 512, 0x2e04u) != menu_index)
+                {
+                    return 72;
+                }
+            }
+        }
+        // A real transfer into the sprite's indexed-pixel storage must
+        // still retire it, unlike adjacent palette changes.
+        invalidate_destination(menu_buf, 128ull | (64ull << 32));
+        if (resident_chunk(0x2e20, 8, 0x13,
+            512, 512, 0x2e04u) != -1)
+        {
+            return 73;
+        }
+
+        // A PS2 local-to-local transfer has source BP/PSM/BW in the low
+        // half and destination BP/PSM/BW in the high half of BITBLTBUF.
+        // A verified full-image copy should preserve the canonical name
+        // at the new BP, even if no TEX0 write follows the transfer.
+        const std::string source_name = "ply/name_only.pix.000";
+        const std::uint64_t source_buf = (0x3000ull << 32)
+            | (2ull << 48) | (0x13ull << 56);
+        const std::uint64_t copy_reg = 64ull | (64ull << 32);
+        if (!register_named_upload(source_name, source_buf,
+            copy_reg, 0, 0x123u)) return 74;
+        const std::uint64_t gs_copy =
+            (0x3000ull | (2ull << 16) | (0x13ull << 24))
+            | (0x3400ull << 32) | (2ull << 48) | (0x13ull << 56);
+        local_copy_destination(gs_copy, copy_reg, 0);
+        const int copied = resident_chunk(0x3400, 2, 0x13,
+            64, 64, 0x456u);
+        if (copied < 0 || texture_path(copied) != source_name)
+        {
+            return 75;
+        }
+        // A partial copy, an unknown source, or mismatched PSM cannot
+        // establish an image's canonical name.
+        const std::uint64_t partial_copy_reg = 32ull | (32ull << 32);
+        local_copy_destination(gs_copy, partial_copy_reg, 0);
+        if (resident_chunk(0x3400, 2, 0x13,
+            64, 64, 0x456u) != -1)
+        {
+            return 76;
+        }
+        const std::uint64_t unrelated_copy =
+            (0x3600ull | (2ull << 16) | (0x13ull << 24))
+            | (0x3400ull << 32) | (2ull << 48) | (0x13ull << 56);
+        local_copy_destination(unrelated_copy, copy_reg, 0);
+        if (resident_chunk(0x3400, 2, 0x13,
+            64, 64, 0x456u) != -1)
+        {
+            return 77;
+        }
+        return 0;
+    }
     if (!replacements_available() || registered_texture_count() != 4) return 1;
+    if (std::getenv("PS2_SDBZ_SKIP_PNG"))
+    {
+        // Keep registry recognition active while deliberately suppressing
+        // PNG substitution for the black-rectangle A/B diagnostic.
+        return chunk_image(0) ? 51 : 0;
+    }
+    if (std::getenv("PS2_SDBZ_SKIP_PNG_NAMES"))
+    {
+        // Skip exactly one named PNG without affecting the other entries.
+        if (texture_path(0) != "dis/main_menu.pix.000") return 52;
+        if (texture_path(1).empty()) return 53;
+        return chunk_image(0) ? 54 : 0;
+    }
     if (texture_path(3) != "ply/extra.pix.000") return 28;
     // Alias must resolve to the same canonical filename/index.
     s_texture_upload_signature japan_upload{};
@@ -156,6 +374,24 @@ int main()
     invalidate_destination((0x3500ull << 32), 64ull | (64ull << 32));
     if (resident_chunk(0x3500, 1, 0x14, 64, 64) != -1) return 27;
 
+    // A loader can identify a texture by logical filename even when its
+    // pixel fingerprint is absent from every external registry.
+    const std::uint64_t named_buf = (0x3600ull << 32)
+        | (2ull << 48) | (0x13ull << 56);
+    const std::uint64_t named_reg = 64ull | (64ull << 32);
+    const std::string named_path = "ply/named_only.pix.000";
+    if (!register_named_upload(named_path, named_buf, named_reg, 0)) return 38;
+    const int named_index = resident_chunk(0x3600, 2, 0x13, 64, 64);
+    if (named_index < 0 || texture_path(named_index) != named_path) return 39;
+    if (register_named_upload("../escape", named_buf, named_reg, 0)) return 40;
+    if (register_named_upload(named_path, named_buf, named_reg, 1)) return 41;
+    reload_replacements();
+    const int restored_index = resident_chunk(0x3600, 2, 0x13, 64, 64);
+    if (restored_index < 0
+        || texture_path(restored_index) != named_path) return 42;
+    invalidate_destination(named_buf, named_reg);
+    if (resident_chunk(0x3600, 2, 0x13, 64, 64) != -1) return 43;
+
     // Wrong fingerprints or incomplete transfers may never establish identity.
     upload.bitbltbuf = (0x3300ull << 32) | (4ull << 48) | (0x13ull << 56);
     upload.fnv1a64 ^= 0x1234;
@@ -204,6 +440,16 @@ class NativeResidencyTests(unittest.TestCase):
             str(ROOT / "runtime/src/resource_pack_zip.cpp"),
                 "-lz", "-o", str(exe)], check=True)
             subprocess.run([str(exe)], check=True)
+            pure_name_env = dict(os.environ)
+            pure_name_env["PS2_SDBZ_NAME_ONLY"] = "1"
+            subprocess.run([str(exe)], env=pure_name_env, check=True)
+            skip_png_env = dict(os.environ)
+            skip_png_env["PS2_SDBZ_SKIP_PNG"] = "1"
+            subprocess.run([str(exe)], env=skip_png_env, check=True)
+            skip_names_env = dict(os.environ)
+            skip_names_env["PS2_SDBZ_SKIP_PNG_NAMES"] = "dis/main_menu.pix.000"
+            skip_names_env.pop("PS2_SDBZ_SKIP_PNG", None)
+            subprocess.run([str(exe)], env=skip_names_env, check=True)
 
 if __name__ == "__main__":
     unittest.main()

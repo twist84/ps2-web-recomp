@@ -3,13 +3,16 @@
 
 #include "gs.hpp"
 #include "queue.hpp"
+#include "../sdbz_texture_source_probe.hpp"
 
 #include "ps2/state.hpp"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <vector>
+#include <utility>
 
 namespace ps2::gif {
 
@@ -86,7 +89,40 @@ struct GsSink {
     void image(const std::uint8_t *data, std::uint32_t qwords) { gs::write_image(data, qwords); }
 };
 
-void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc) {
+struct s_named_scan_event
+{
+    std::uint32_t after_qword = 0;
+    ps2::s_named_texture_binding bind;
+};
+
+// GS transfer setup registers are shared between all GIF paths. The
+// emulation-thread scanner tracks them so it can reconstruct a canonical
+// filename from a *live* guest handle after TRXDIR overwrites a resident.
+// This is only metadata; the original GIF stream remains unchanged.
+struct s_scanned_transfer
+{
+    std::uint64_t bitbltbuf = 0;
+    std::uint64_t trxpos = 0;
+    std::uint64_t trxreg = 0;
+};
+s_scanned_transfer g_scanned_transfer{};
+// GIF PATH2 is emitted by the VU worker while PATH3 can originate on the
+// emulation thread. Protect their shared GS transfer-register provenance,
+// but never hold this lock while posting to either worker's queue.
+std::mutex g_real_scan_mutex;
+
+void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc,
+    std::vector<s_named_scan_event> *events = nullptr,
+    bool early_signal_side_effects = true) {
+    // The real game may call the TEX0 builder within a generated EE unit,
+    // bypassing the dispatcher entry probe. Observe GIF texture binds
+    // during the existing emulation-thread scan, before queuing this GIF.
+    static const bool scan_names = []()
+    {
+        const char *value = std::getenv("PS2_SDBZ_NAME_ONLY");
+        return (value && *value && *value != '0')
+            || std::getenv("PS2_TRACE_SDBZ_TEXTURE_NAMES") != nullptr;
+    }();
     std::uint32_t i = 0;
     while (i < qwc) {
         Reg128 q;
@@ -109,15 +145,98 @@ void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc) {
         if (p.flg == 0 && p.address_data) {
             for (; i < qwc && p.active; ++i) {
                 const std::uint8_t *at = data + static_cast<std::size_t>(i) * 16;
-                if (((p.regs >> (p.reg * 4)) & 0xFu) == 0xEu && at[8] >= 0x50 && at[8] <= 0x62) {
-                    std::uint64_t value;
-                    std::memcpy(&value, at, 8);
-                    if (at[8] >= 0x60) gs::signal(at[8], value);
-                    else if (at[8] <= 0x53) gs::note_transfer(at[8], value);
+                if (((p.regs >> (p.reg * 4)) & 0xFu) == 0xEu) {
+                    if (at[8] >= 0x50 && at[8] <= 0x62) {
+                        std::uint64_t value;
+                        std::memcpy(&value, at, 8);
+                        // The VU worker is handling an actual queued GIF,
+                        // not VIF's emulation-thread shadow pass. Its GS
+                        // SIGNAL and transfer registers must be processed
+                        // by the render worker in queue order, not early.
+                        if (early_signal_side_effects)
+                        {
+                            if (at[8] >= 0x60) gs::signal(at[8], value);
+                            else if (at[8] <= 0x53) gs::note_transfer(at[8], value);
+                        }
+
+                        if (scan_names && events)
+                        {
+                            // Shadow-only VIF scans inspect SIGNAL and
+                            // transfer metadata but are not GS submissions.
+                            // They must never own a native filename or
+                            // change the provenance state of the real GIF.
+                            if (at[8] == 0x50)
+                            {
+                                g_scanned_transfer.bitbltbuf = value;
+                            }
+                            else if (at[8] == 0x51)
+                            {
+                                g_scanned_transfer.trxpos = value;
+                            }
+                            else if (at[8] == 0x52)
+                            {
+                                g_scanned_transfer.trxreg = value;
+                            }
+                            else if (at[8] == 0x53 && (value & 3u) == 0)
+                            {
+                                // The actual TRXDIR qword invalidates the
+                                // old resident. Restore only if the upload
+                                // has a unique verified original name.
+                                ps2::s_named_texture_binding bind;
+                                if (events
+                                    && ps2::sdbz_texture_source_transfer(
+                                        g_scanned_transfer.bitbltbuf,
+                                        g_scanned_transfer.trxreg,
+                                        g_scanned_transfer.trxpos, bind))
+                                {
+                                    events->push_back(
+                                        {i + 1, std::move(bind)});
+                                }
+                            }
+                        }
+                    }
+                    if (scan_names && (at[8] == 0x06 || at[8] == 0x07)) {
+                        std::uint64_t value;
+                        std::memcpy(&value, at, 8);
+                        ps2::s_named_texture_binding bind;
+                        if (events
+                            && ps2::sdbz_texture_source_tex0(value, &bind))
+                        {
+                            events->push_back({i + 1, std::move(bind)});
+                        }
+                    }
                 }
                 if (++p.reg >= p.nreg) {
                     p.reg = 0;
                     if (++p.loop >= p.nloop) p.active = false;
+                }
+            }
+            continue;
+        }
+        // PACKED direct TEX0 and REGLIST TEX0 do not use A+D. Handle
+        // both without changing packet progression or GS register values.
+        if (scan_names && (p.flg == 0 || p.flg == 1)) {
+            for (; i < qwc && p.active; ++i) {
+                const std::uint8_t *at = data
+                    + static_cast<std::size_t>(i) * 16;
+                const int halves = p.flg == 1 ? 2 : 1;
+                for (int half = 0; half < halves && p.active; ++half) {
+                    const std::uint32_t reg = static_cast<std::uint32_t>(
+                        p.regs >> (p.reg * 4)) & 0xFu;
+                    if (reg == 0x06 || reg == 0x07) {
+                        std::uint64_t tex0;
+                        std::memcpy(&tex0, at + half * 8, 8);
+                        ps2::s_named_texture_binding bind;
+                        if (events
+                            && ps2::sdbz_texture_source_tex0(tex0, &bind))
+                        {
+                            events->push_back({i + 1, std::move(bind)});
+                        }
+                    }
+                    if (++p.reg >= p.nreg) {
+                        p.reg = 0;
+                        if (++p.loop >= p.nloop) p.active = false;
+                    }
                 }
             }
             continue;
@@ -145,6 +264,10 @@ void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc) {
 }
 
 Path g_scan[4];
+// VIF shadow packets are inspected for SIGNALs but are never submitted to
+// the GS. Their GIF parser continuation state must not alter the stream
+// used for actual queued TEX0/name observations.
+Path g_shadow_scan[4];
 
 // PATH3 under VIF1's MSKPATH3: while the mask is up a real GIF leaves channel 2's data
 // waiting, and a mask that comes up while a packet is under way stops PATH3 at the packet's
@@ -169,8 +292,49 @@ void out(int path, const std::uint8_t *data, std::uint32_t qwc) {
         render(path, data, qwc);
         return;
     }
-    if (gs::queue::role() != gs::queue::Role::Vu) scan(g_scan[path], data, qwc);
-    gs::queue::post(gs::queue::kGif, static_cast<std::uint32_t>(path), qwc, data, qwc * 16);
+    // If one GIF packet binds several textures, it is not safe to post all
+    // named bindings before that packet. Split only at matched TEX0 qwords;
+    // the GS retains its GIF parser state across the queued pieces.
+    static const bool name_only = []()
+    {
+        const char *value = std::getenv("PS2_SDBZ_NAME_ONLY");
+        return value && *value && *value != '0';
+    }();
+    std::vector<s_named_scan_event> events;
+    const bool vu_output = gs::queue::role() == gs::queue::Role::Vu;
+    // The actual menu GIF arrives on the VU worker (PATH2). Omitting it
+    // used to work accidentally because VIF shadow scans emitted names;
+    // after shadow isolation, no names reached the renderer at all.
+    if (name_only || !vu_output)
+    {
+        std::lock_guard<std::mutex> lock(g_real_scan_mutex);
+        scan(g_scan[path], data, qwc, name_only ? &events : nullptr,
+            !vu_output);
+    }
+    std::uint32_t emitted = 0;
+    for (const auto &event : events)
+    {
+        if (event.after_qword > emitted && event.after_qword <= qwc)
+        {
+            const std::uint32_t length = event.after_qword - emitted;
+            gs::queue::post(gs::queue::kGif,
+                static_cast<std::uint32_t>(path), length,
+                data + static_cast<std::size_t>(emitted) * 16u,
+                length * 16u);
+            emitted = event.after_qword;
+        }
+        gs::publish_named_texture(event.bind.name, event.bind.bp,
+            event.bind.bw, event.bind.psm, event.bind.width,
+            event.bind.height, event.bind.clut_bp);
+    }
+    if (emitted < qwc)
+    {
+        const std::uint32_t remaining = qwc - emitted;
+        gs::queue::post(gs::queue::kGif,
+            static_cast<std::uint32_t>(path), remaining,
+            data + static_cast<std::size_t>(emitted) * 16u,
+            remaining * 16u);
+    }
 }
 
 // How many of these qwords belong to the packet under way; mid_packet is left set when
@@ -229,7 +393,12 @@ void reset() {
     g_stat = 0;
     if (hold_here()) drop_held();
     if (gs::queue::active()) {
-        for (Path &p : g_scan) p = Path{};
+        {
+            std::lock_guard<std::mutex> lock(g_real_scan_mutex);
+            for (Path &p : g_scan) p = Path{};
+            g_scanned_transfer = {};
+        }
+        for (Path &p : g_shadow_scan) p = Path{};
         gs::queue::post(gs::queue::kGifReset, 0, 0, nullptr, 0);
         return;
     }
@@ -270,7 +439,7 @@ void transfer(int path, const std::uint8_t *data, std::uint32_t qwc) {
     h.data.insert(h.data.end(), data, data + static_cast<std::size_t>(qwc) * 16);
 }
 
-void scan_signals(int path, const std::uint8_t *data, std::uint32_t qwc) { scan(g_scan[path], data, qwc); }
+void scan_signals(int path, const std::uint8_t *data, std::uint32_t qwc) { scan(g_shadow_scan[path], data, qwc); }
 
 bool busy(int path) { return g_paths[path].active; }
 

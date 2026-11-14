@@ -845,8 +845,35 @@ void write(std::uint32_t reg, std::uint64_t value) {
     case 0x14: case 0x15: s.ctx[reg - 0x14].tex1 = value; break;
     case 0x16: case 0x17: {
         Context &c = s.ctx[reg - 0x16];
+        const std::uint64_t old_tex0 = c.tex0;
         const std::uint64_t mask = 0xFFFFFFE0'03F00000ull;
         c.tex0 = (c.tex0 & ~mask) | (value & mask);
+#ifdef PS2_NATIVE_PNG
+        // TEX2 can select a different CLUT for the *same* indexed pixel
+        // buffer (for example the highlighted menu selection). A named PNG
+        // identifies the source sprite, not the transient CLUT contents.
+        // Extend that source's verified palette aliases only if all pixel
+        // layout fields are unchanged, never by guessing from a hash.
+        if (native_texture::name_only_mode()
+            && ((old_tex0 >> 20) & 0x3fu) == ((c.tex0 >> 20) & 0x3fu))
+        {
+            const std::uint32_t previous_clut =
+                static_cast<std::uint32_t>(old_tex0 >> 37) & 0x3fffu;
+            const std::uint32_t next_clut =
+                static_cast<std::uint32_t>(c.tex0 >> 37) & 0x3fffu;
+            if (previous_clut != next_clut
+                && native_texture::allow_named_palette_change(
+                    static_cast<std::uint32_t>(old_tex0) & 0x3fffu,
+                    static_cast<std::uint32_t>(old_tex0 >> 14) & 0x3fu,
+                    static_cast<std::uint32_t>(old_tex0 >> 20) & 0x3fu,
+                    1u << ((old_tex0 >> 26) & 0xfu),
+                    1u << ((old_tex0 >> 30) & 0xfu),
+                    previous_clut, next_clut))
+            {
+                ++g_setup_generation;
+            }
+        }
+#endif
         load_clut(c.tex0);
         break;
     }
@@ -886,9 +913,19 @@ void write(std::uint32_t reg, std::uint64_t value) {
         bool need_trace = trace_texture_uploads();
 #ifdef PS2_NATIVE_PNG
         need_trace = need_trace || native_texture::replacements_available();
-        if ((value & 3u) == 0 || (value & 3u) == 2)
+        if ((value & 3u) == 0)
         {
-            native_texture::invalidate_destination(s.bitbltbuf, s.trxreg);
+            native_texture::invalidate_destination(s.bitbltbuf,
+                s.trxreg, s.trxpos);
+            ++g_setup_generation;
+        }
+        else if ((value & 3u) == 2)
+        {
+            // A complete GS local copy from an identified original texture
+            // should carry the filename to its destination. The old path
+            // always discarded that name and could show EU/English sprites.
+            native_texture::local_copy_destination(s.bitbltbuf,
+                s.trxreg, s.trxpos);
             ++g_setup_generation;
         }
 #endif
@@ -1313,6 +1350,112 @@ void flush_and_wait() {
 #endif
 }
 
+struct s_named_texture_bind
+{
+    std::uint32_t bp = 0;
+    std::uint32_t bw = 0;
+    std::uint32_t psm = 0;
+    std::uint32_t clut_bp = 0xffffffffu;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    char name[96]{};
+};
+
+void apply_named_texture(const s_named_texture_bind &bind)
+{
+#ifdef PS2_NATIVE_PNG
+    if (!native_texture::name_only_mode())
+    {
+        return;
+    }
+    const std::uint64_t bitbltbuf =
+        (static_cast<std::uint64_t>(bind.bp) << 32)
+        | (static_cast<std::uint64_t>(bind.bw) << 48)
+        | (static_cast<std::uint64_t>(bind.psm) << 56);
+    const std::uint64_t trxreg =
+        static_cast<std::uint64_t>(bind.width)
+        | (static_cast<std::uint64_t>(bind.height) << 32);
+    if (native_texture::register_named_upload(
+        bind.name, bitbltbuf, trxreg, 0, bind.clut_bp))
+    {
+        // The currently bound TEX0 may be unchanged. Re-evaluate its
+        // native texture selector after a new named residency arrives.
+        ++g_setup_generation;
+    }
+#else
+    (void)bind;
+#endif
+}
+
+void revoke_named_texture(const std::string &logical_name,
+    std::uint32_t bp)
+{
+#ifdef PS2_NATIVE_PNG
+    if (!native_texture::name_only_mode() || logical_name.empty()
+        || logical_name.size() >= 96 || bp >= 0x4000u)
+    {
+        return;
+    }
+    s_named_texture_bind bind{};
+    bind.bp = bp;
+    std::memcpy(bind.name, logical_name.c_str(), logical_name.size());
+    if (queue::active())
+    {
+        queue::post(queue::kNamedTextureUnbind, 0, 0, &bind,
+            sizeof bind);
+    }
+    else if (native_texture::revoke_named_upload(logical_name, bp))
+    {
+        ++g_setup_generation;
+    }
+#else
+    (void)logical_name;
+    (void)bp;
+#endif
+}
+
+void publish_named_texture(const std::string &logical_name,
+    std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
+    std::uint32_t width, std::uint32_t height,
+    std::uint32_t clut_bp)
+{
+#ifdef PS2_NATIVE_PNG
+    if (!native_texture::name_only_mode()
+        || logical_name.empty() || logical_name.size() >= 96
+        || bp >= 0x4000u || !bw || bw > 63
+        || clut_bp > 0x3fffu
+        || !width || !height || width > 1024 || height > 1024)
+    {
+        return;
+    }
+    s_named_texture_bind bind{};
+    bind.bp = bp;
+    bind.bw = bw;
+    bind.psm = psm;
+    bind.clut_bp = clut_bp;
+    bind.width = width;
+    bind.height = height;
+    std::memcpy(bind.name, logical_name.c_str(), logical_name.size());
+    if (queue::active())
+    {
+        // Emulation -> VU -> GS ordering is identical to queued GIF data.
+        queue::post(queue::kNamedTextureBind, 0, 0, &bind, sizeof bind);
+    }
+    else
+    {
+        apply_named_texture(bind);
+    }
+#else
+    (void)logical_name;
+    (void)bp;
+    (void)bw;
+    (void)psm;
+    (void)width;
+    (void)height;
+    (void)clut_bp;
+#endif
+}
+
 void start_thread() { queue::render().start(32u << 20); }
 
 void post_present() {
@@ -1355,6 +1498,33 @@ Rendered render_pending(const std::function<void(const DisplayRegs &)> &on_prese
         bool presented = false;
         switch (h.type) {
         case queue::kGif: gif::render(static_cast<int>(h.arg0), payload, h.arg1); break;
+        case queue::kNamedTextureBind:
+        {
+            if (h.bytes == sizeof(s_named_texture_bind))
+            {
+                s_named_texture_bind bind{};
+                std::memcpy(&bind, payload, sizeof bind);
+                bind.name[sizeof(bind.name) - 1] = 0;
+                apply_named_texture(bind);
+            }
+            break;
+        }
+        case queue::kNamedTextureUnbind:
+        {
+#ifdef PS2_NATIVE_PNG
+            if (h.bytes == sizeof(s_named_texture_bind))
+            {
+                s_named_texture_bind bind{};
+                std::memcpy(&bind, payload, sizeof bind);
+                bind.name[sizeof(bind.name) - 1] = 0;
+                if (native_texture::revoke_named_upload(bind.name, bind.bp))
+                {
+                    ++g_setup_generation;
+                }
+            }
+#endif
+            break;
+        }
         case queue::kGifReset: gif::render_reset(); break;
         case queue::kReset: render_reset(); break;
         case queue::kSoftReset: soft_reset(); break;

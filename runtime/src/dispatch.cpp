@@ -1,4 +1,5 @@
 #include "ps2/generated.hpp"
+#include "sdbz_texture_source_probe.hpp"
 #include "ps2/system.hpp"
 
 #include <algorithm>
@@ -445,6 +446,22 @@ void dispatch(Cpu &c, std::uint32_t, std::uint32_t depth) {
     const std::uint32_t pc = c.pc;
     if (pc & kUnwind) return;
     if (pc == kHandlerReturn || pc == kIdle) return;
+    // Read-only opt-in observation of named FPIX/TIM2 creation in the
+    // EU Beta and Japan executables. This does not alter guest or GS state.
+    static const bool observe_sdbz_names = []()
+    {
+        const char *strict = std::getenv("PS2_SDBZ_NAME_ONLY");
+        return (strict && *strict && *strict != '0')
+            || std::getenv("PS2_TRACE_SDBZ_TEXTURE_NAMES") != nullptr;
+    }();
+    if (observe_sdbz_names
+        && (pc == 0x0019AA70u || pc == 0x0019A670u
+            || pc == 0x0019A860u || pc == 0x0019A460u
+            || pc == 0x0019A5F0u || pc == 0x0019A3E0u
+            || pc == 0x0010C3E0u || pc == 0x0010C350u))
+    {
+        sdbz_texture_source_probe(c, pc);
+    }
     if (g_forced.has(pc)) [[clang::musttail]] return interpret(c, 0u, depth);
     auto rit = g_reconstructed.find(pc);
     if (rit != g_reconstructed.end()) {

@@ -87,6 +87,9 @@ public:
     bool open();
     void clear();
     std::optional<s_asset> find(std::string_view name) const;
+    // Map original CTexture inline names (e.g. main_menu001) onto
+    // unambiguous INFO/GAME archive names (dis/main_menu.pix.001).
+    std::string resolve_texture_name(std::string_view name) const;
     std::size_t read(const s_asset &asset, std::uint32_t offset,
         void *destination, std::size_t capacity) const;
     std::size_t entry_count() const;
@@ -94,6 +97,7 @@ public:
 
 private:
     std::map<std::string, s_asset> m_assets;
+    std::map<std::string, std::string> m_texture_paths;
     std::uint32_t m_game_sector = 0;
 };
 
@@ -111,6 +115,10 @@ std::uint32_t sound_bank_id();
 std::uint32_t sound_upload_status();
 std::optional<std::uint32_t> sound_bank_spu_address(std::uint32_t bank_id);
 std::size_t copy_sound_bank(void *destination, std::size_t capacity);
+
+// Resolve a source texture name without hashing or searching the filesystem.
+// An unknown or ambiguous archive basename deliberately returns empty.
+std::string resolve_texture_name(std::string_view name);
 
 bool native_requested();
 bool intercept_module(const std::string &path);
