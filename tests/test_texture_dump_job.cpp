@@ -1,6 +1,8 @@
 #include "../host/texture_dump_job.hpp"
 
 #include <array>
+#include <algorithm>
+#include <iterator>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
