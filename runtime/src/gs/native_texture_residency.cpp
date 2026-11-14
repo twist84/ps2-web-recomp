@@ -454,7 +454,7 @@ const s_image *chunk_image(int index)
             }
             std::fprintf(stderr,
                 "[gs-native] png name=%s source=%s result=%s"
-                " size=%ux%u opaque-black=%zu transparent=%zu total=%zu\\n",
+                " size=%ux%u opaque-black=%zu transparent=%zu total=%zu\n",
                 entry.path.c_str(),
                 packed ? source.m_pack_id.c_str() : "legacy-NATIVE/none",
                 pixels.empty() ? "missing/invalid" : "loaded",
