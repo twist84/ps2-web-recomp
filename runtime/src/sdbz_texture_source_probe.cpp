@@ -4,6 +4,7 @@
 #include "ps2/memory.hpp"
 #include "gs/gs.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -259,10 +260,13 @@ void inspect_binding(Cpu &cpu, std::uint32_t table_base)
         return;
     }
     const std::uint32_t bp = u16(slot + 2);
-    const std::uint32_t bw = u16(slot + 4);
     const std::uint32_t psm = u16(slot + 14);
     const std::uint32_t width = u16(slot + 22);
     const std::uint32_t height = u16(slot + 24);
+    // Verified TEX0 builder: the halfword at +0x04 is CLUT base pointer,
+    // not texture buffer width. TBW is max(1, original_width / 64),
+    // encoded in TEX0 bits 14..19.
+    const std::uint32_t bw = std::max(1u, width / 64u);
     if (!bw || bw > 63 || bp >= 0x4000u
         || (psm != 0 && psm != 19 && psm != 20)
         || !width || !height || width > 1024 || height > 1024)
