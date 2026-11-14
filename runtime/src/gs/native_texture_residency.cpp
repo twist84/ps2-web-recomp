@@ -418,6 +418,18 @@ bool valid_atlas_size(std::uint32_t index, std::uint32_t width,
 
 const s_image *chunk_image(int index)
 {
+    // Diagnostic A/B: retain the full GIF/name tracking path while forcing
+    // the original GS pixels. This isolates replacement-PNG artifacts from
+    // the emulation/queue path without disabling resource packs or UI mods.
+    static const bool disable_png = []()
+    {
+        const char *value = std::getenv("PS2_SDBZ_SKIP_PNG");
+        return value && *value && *value != '0';
+    }();
+    if (disable_png)
+    {
+        return nullptr;
+    }
     load_registry();
     if (index < 0 || index >= static_cast<int>(g_entries.size())) return nullptr;
     auto &entry = g_entries[static_cast<std::size_t>(index)];
