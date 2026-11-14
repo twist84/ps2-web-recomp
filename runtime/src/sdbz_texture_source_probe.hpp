@@ -20,6 +20,7 @@ struct s_named_texture_binding
     std::uint32_t bp = 0;
     std::uint32_t bw = 0;
     std::uint32_t psm = 0;
+    std::uint32_t clut_bp = 0;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
 };
