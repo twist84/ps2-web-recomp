@@ -223,8 +223,15 @@ experimental path. This mode:
   `name -> CTexture object` association
 - Resolves the object's final handle and the regional handle table layout
   when the game builds its TEX0
+- Resolves the game's compact constructor names through the INFO/GAME archive
+  index: `main_menu001` becomes `dis/main_menu.pix.001`, with no hashes.
+  Duplicate archive basenames are rejected as ambiguous rather than guessed.
+- Observes actual GIF TEX0 writes (PACKED, A+D and REGLIST) as a fallback
+  when generated EE code bypasses the original texture-builder entry hook.
+  It splits a GIF batch only at resolved name bindings so queued GS drawing
+  sees the correct texture identity after each TEX0 write.
 - Publishes `name + BP + calculated TBW + PSM + dimensions` to the GS thread,
-  in the same queued order as the game's GIF commands
+  in GIF register order without changing the game's original pixel uploads
 - Associates that name with GS residency, and loads replacement PNGs from
   `assets/sdbz/textures/<name>.png`
 - **Does not load native texture fingerprint registries or compute FNV hashes
