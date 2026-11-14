@@ -77,6 +77,7 @@ class NativeAssetCatalogTests(unittest.TestCase):
             "-I", str(ROOT / "runtime/src"),
             str(cls.source), str(ROOT / "runtime/src/disc.cpp"),
             str(ROOT / "runtime/src/disc_folder.cpp"),
+            str(ROOT / "runtime/src/resource_pack_zip.cpp"), "-lz",
             "-o", str(cls.executable)], check=True)
 
     @classmethod
