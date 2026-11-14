@@ -113,6 +113,11 @@ int main()
     ps2::sdbz_texture_source_tex0(tex0 ^ (1ull << 20));
     // Identical pixels with a different palette are *not* the same texture.
     ps2::sdbz_texture_source_tex0(tex0 ^ (1ull << 37));
+    // A recycled handle with a different size must never borrow the
+    // previously observed texture's canonical filename.
+    put_u16(ps2::g_ram + 0x004FF8F0u + 22u, 8);
+    ps2::sdbz_texture_source_tex0(tex0);
+    put_u16(ps2::g_ram + 0x004FF8F0u + 22u, 4);
     // Invalid handles cannot be assigned a filename.
     cpu.r[4].w[0] = 256;
     ps2::sdbz_texture_source_probe(cpu, 0x0010C3E0u);
