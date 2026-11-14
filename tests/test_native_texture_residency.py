@@ -56,11 +56,12 @@ int main()
     {
         std::ofstream registry(root / "native_textures.registry");
         registry << "825F7B0566C19109\t19\t256\t256\tdis/main_menu.pix.000\n"
-            << "B51AF81B5A15B2A7\t19\t512\t512\tdis/main_menu.pix.001\n";
+            << "B51AF81B5A15B2A7\t19\t512\t512\tdis/main_menu.pix.001\n"
+            << "1111222233334444\t20\t64\t64\tply/character.pix.000\n";
     }
     ps2::resource_pack::mount(root, root);
     reset_residency();
-    if (!replacements_available() || registered_texture_count() != 2) return 1;
+    if (!replacements_available() || registered_texture_count() != 3) return 1;
     if (atlas_scale(0, 256, 256) != 1
         || atlas_scale(0, 512, 512) != 2
         || atlas_scale(1, 512, 512) != 1
@@ -112,6 +113,20 @@ int main()
     reload_replacements();
     if (!replacements_available() || !chunk_image(0)) return 22;
     if (resident_chunk(0x3400, 4, 0x13, 256, 256) != 0) return 23;
+
+    // A non-menu, four-bit source fingerprint is resolved from the same
+    // registry. No hardcoded menu offsets, PSM or filename assumptions.
+    s_texture_upload_signature character{};
+    character.bitbltbuf = (0x3500ull << 32) | (1ull << 48)
+        | (0x14ull << 56);
+    character.trxreg = 64ull | (64ull << 32);
+    character.expected_bytes = character.received_bytes = 64ull * 64 / 2;
+    character.fnv1a64 = 0x1111222233334444ull;
+    if (complete_upload(character) != 2) return 24;
+    if (resident_chunk(0x3500, 1, 0x14, 64, 64) != 2) return 25;
+    if (texture_path(2) != "ply/character.pix.000") return 26;
+    invalidate_destination((0x3500ull << 32), 64ull | (64ull << 32));
+    if (resident_chunk(0x3500, 1, 0x14, 64, 64) != -1) return 27;
 
     // Wrong fingerprints or incomplete transfers may never establish identity.
     upload.bitbltbuf = (0x3300ull << 32) | (4ull << 48) | (0x13ull << 56);
