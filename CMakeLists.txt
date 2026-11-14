@@ -64,6 +64,7 @@ add_library(ps2runtime STATIC
     runtime/src/vu_jit.cpp
     runtime/src/vu_jit_web.cpp
     runtime/src/ipu/ipu.cpp
+    runtime/src/sdbz_texture_source_probe.cpp
     runtime/src/gs/gs.cpp
     runtime/src/gs/gif.cpp
     runtime/src/gs/queue.cpp
