@@ -103,6 +103,29 @@ int main()
         {
             return 50;
         }
+        // TEX2 changes the palette of this particular verified named
+        // texture while keeping its original indexed pixels. Either GS
+        // context may subsequently draw with either palette address.
+        if (!allow_named_palette_change(0x3800, 2, 0x13, 64, 64,
+            0x123u, 0x124u)) return 66;
+        if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x124u) != index
+            || resident_chunk(0x3800, 2, 0x13, 64, 64, 0x123u) != index)
+        {
+            return 67;
+        }
+        // A different PSM or unknown previous palette cannot acquire the
+        // source name through TEX2.
+        if (allow_named_palette_change(0x3800, 2, 0x14, 64, 64,
+                0x123u, 0x125u)
+            || allow_named_palette_change(0x3800, 2, 0x13, 64, 64,
+                0x130u, 0x125u))
+        {
+            return 68;
+        }
+        if (resident_chunk(0x3800, 2, 0x13, 64, 64, 0x125u) != -1)
+        {
+            return 69;
+        }
         // A partial PSMT8 transfer begins *before* the old texture BP.
         // Its raw 64*64 bytes fit in 16 GS blocks, but its swizzled page
         // occupies 32 blocks and overwrites the old texture's first page.
