@@ -1709,48 +1709,136 @@ void build_disc_layout(const fs::path &root, s_folder &folder)
 }
 }
 
-std::vector<s_direct_game_asset> enumerate_direct_game(const fs::path &root)
+std::vector<s_direct_game_asset> enumerate_direct_game(
+    const fs::path &root, fs::path &selected_zip)
 {
-    const fs::path loose = find_directory(root, "GAME");
-    if (loose.empty()) return {};
     const fs::path canonical_root = fs::canonical(root);
-    const fs::path canonical_game = fs::canonical(loose);
-    if (!is_inside(canonical_root, canonical_game))
-        throw std::runtime_error("GAME/ escapes disc root");
+    std::map<std::string, s_direct_game_asset> sources;
+    std::size_t zipped = 0;
+    std::size_t loose_count = 0;
+    selected_zip.clear();
 
-    std::vector<s_direct_game_asset> assets;
-    std::set<std::string> seen;
-    std::error_code error;
-    for (fs::recursive_directory_iterator it(canonical_game, error), end;
-        !error && it != end; it.increment(error))
+    // Regional ZIPs are authoritative GAME/ sources, not texture packs.
+    // Require the exact root GAME/ tree and index every entry at mount time
+    // without extracting its bytes until an ARKD file request arrives.
+    const fs::path regional = find_region_zip(root);
+    if (!regional.empty())
     {
-        if (it->is_symlink() || !it->is_regular_file()) continue;
-        const fs::path canonical_file = fs::canonical(it->path());
-        if (!is_inside(canonical_game, canonical_file))
-            throw std::runtime_error("native GAME asset escapes its directory");
-        const std::uint64_t size = fs::file_size(canonical_file);
-        if (!size || size > UINT32_MAX)
-            throw std::runtime_error("native GAME asset has invalid size");
-        const fs::path relative = it->path().lexically_relative(canonical_game);
-        const std::string name = archive_name_from_path(relative, 4096);
-        if (!seen.insert(archive_name_key(name)).second)
-            throw std::runtime_error("duplicate case-insensitive native GAME asset");
-        assets.push_back({name, canonical_file, static_cast<std::uint32_t>(size)});
-    }
-    if (error)
-        throw std::runtime_error("cannot enumerate native GAME assets: " + error.message());
-    // Native savestates refer to these assets by ID. Filesystem directory
-    // iteration order is not stable, especially across Windows/Linux.
-    // Give each name a deterministic ID before exposing it to the IOP.
-    std::sort(assets.begin(), assets.end(),
-        [](const s_direct_game_asset &left,
-            const s_direct_game_asset &right)
+        const fs::path canonical_zip = fs::canonical(regional);
+        if (!is_inside(canonical_root, canonical_zip)
+            || !fs::is_regular_file(canonical_zip))
         {
-            return archive_name_key(left.name) < archive_name_key(right.name);
-        });
-    std::fprintf(stderr,
-        "[disc] native GAME direct index: %zu assets, no INFO record cap\n",
-        assets.size());
+            throw std::runtime_error("GAME regional ZIP resolves outside disc/");
+        }
+        std::vector<resource_pack::s_zip_entry> entries;
+        if (!resource_pack::zip::index(
+                canonical_zip, entries, k_game_zip_limits))
+        {
+            throw std::runtime_error(
+                "invalid GAME regional ZIP (expected ordinary ZIP32, "
+                "stored/deflated entries and safe paths)");
+        }
+        for (const auto &entry : entries)
+        {
+            // Files outside the GAME/ tree are deliberately ignored, so
+            // README files and archive metadata never become game assets.
+            if (entry.m_path.size() <= 5
+                || upper(entry.m_path.substr(0, 5)) != "GAME/")
+            {
+                continue;
+            }
+            const std::string name = entry.m_path.substr(5);
+            if (name.size() > 4096 || !entry.m_size)
+            {
+                throw std::runtime_error("invalid regional GAME asset name/size");
+            }
+            (void)archive_path(name);
+            const std::string key = archive_name_key(name);
+            s_direct_game_asset asset{name, {}, entry.m_size, entry};
+            if (!sources.emplace(key, std::move(asset)).second)
+            {
+                throw std::runtime_error(
+                    "case-insensitive name collision inside regional GAME ZIP");
+            }
+            ++zipped;
+        }
+        if (!zipped)
+        {
+            throw std::runtime_error(
+                "regional GAME ZIP contains no files below GAME/");
+        }
+        selected_zip = canonical_zip;
+        std::fprintf(stderr,
+            "[disc] regional GAME source: %s (%zu indexed members)\n",
+            regional.filename().string().c_str(), zipped);
+    }
+
+    // Loose GAME/ has the highest priority for local modding, followed by
+    // the selected GAME_{REGION}.zip, followed by original GAME.DAT entries
+    // in ARKD's catalog when present.
+    const fs::path loose = find_directory(root, "GAME");
+    if (!loose.empty())
+    {
+        const fs::path canonical_game = fs::canonical(loose);
+        if (!is_inside(canonical_root, canonical_game))
+        {
+            throw std::runtime_error("GAME/ escapes disc root");
+        }
+        std::error_code error;
+        for (fs::recursive_directory_iterator it(canonical_game, error), end;
+            !error && it != end; it.increment(error))
+        {
+            if (it->is_symlink())
+            {
+                if (it->is_directory())
+                {
+                    it.disable_recursion_pending();
+                }
+                continue;
+            }
+            if (!it->is_regular_file())
+            {
+                continue;
+            }
+            const fs::path canonical_file = fs::canonical(it->path());
+            if (!is_inside(canonical_game, canonical_file))
+            {
+                throw std::runtime_error("native GAME asset escapes its directory");
+            }
+            const std::uint64_t size = fs::file_size(canonical_file);
+            if (!size || size > UINT32_MAX)
+            {
+                throw std::runtime_error("native GAME asset has invalid size");
+            }
+            const fs::path relative =
+                it->path().lexically_relative(canonical_game);
+            const std::string name = archive_name_from_path(relative, 4096);
+            sources[archive_name_key(name)] = {
+                name, canonical_file, static_cast<std::uint32_t>(size), {}
+            };
+            ++loose_count;
+        }
+        if (error)
+        {
+            throw std::runtime_error(
+                "cannot enumerate native GAME assets: " + error.message());
+        }
+    }
+
+    // Stable, case-insensitive IDs are important to guest saved file indexes.
+    std::vector<s_direct_game_asset> assets;
+    assets.reserve(sources.size());
+    for (auto &source : sources)
+    {
+        assets.push_back(std::move(source.second));
+    }
+    if (!assets.empty())
+    {
+        std::fprintf(stderr,
+            "[disc] native GAME direct index: %zu assets "
+            "(%zu ZIP, %zu loose overrides/additions), no INFO record cap\n",
+            assets.size(), zipped, loose_count);
+    }
     return assets;
 }
 
