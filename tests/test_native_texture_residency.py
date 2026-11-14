@@ -59,6 +59,12 @@ int main()
             << "B51AF81B5A15B2A7\t19\t512\t512\tdis/main_menu.pix.001\n"
             << "1111222233334444\t20\t64\t64\tply/character.pix.000\n";
     }
+    // A second release can use a different original fingerprint for the
+    // same filename and layout, without requiring another PNG/GPU slot.
+    {
+        std::ofstream japan(root / "native_textures.japan.registry");
+        japan << "0123456789ABCDEF\t19\t256\t256\tdis/main_menu.pix.000\n";
+    }
     // Registry entries are discovered from pack assets even when disabled.
     const auto extra = root / "resourcepacks" / "Extra Pack"
         / "assets" / "sdbz";
@@ -75,6 +81,15 @@ int main()
     reset_residency();
     if (!replacements_available() || registered_texture_count() != 4) return 1;
     if (texture_path(3) != "ply/extra.pix.000") return 28;
+    // Alias must resolve to the same canonical filename/index.
+    s_texture_upload_signature japan_upload{};
+    japan_upload.bitbltbuf = (0x2800ull << 32) | (4ull << 48)
+        | (0x13ull << 56);
+    japan_upload.trxreg = 256ull | (256ull << 32);
+    japan_upload.expected_bytes = japan_upload.received_bytes = 256ull * 256;
+    japan_upload.fnv1a64 = 0x0123456789ABCDEFull;
+    if (complete_upload(japan_upload) != 0) return 36;
+    if (resident_chunk(0x2800, 4, 0x13, 256, 256) != 0) return 37;
     if (atlas_scale(0, 256, 256) != 1
         || atlas_scale(0, 512, 512) != 2
         || atlas_scale(1, 512, 512) != 1

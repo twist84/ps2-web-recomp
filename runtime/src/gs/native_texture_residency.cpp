@@ -70,9 +70,33 @@ struct s_resident
 
 std::vector<s_entry> g_entries;
 std::unordered_map<s_key, int, s_key_hash> g_lookup;
+// Fingerprints are version-specific, but a logical filename and original
+// layout identify the same replacement across different game releases.
+struct s_name_key
+{
+    std::string path;
+    std::uint32_t width, height, psm;
+
+    bool operator==(const s_name_key &other) const
+    {
+        return path == other.path && width == other.width
+            && height == other.height && psm == other.psm;
+    }
+};
+
+struct s_name_key_hash
+{
+    std::size_t operator()(const s_name_key &key) const
+    {
+        const std::size_t a = std::hash<std::string>{}(key.path);
+        const std::size_t b = static_cast<std::size_t>(key.width)
+            ^ (static_cast<std::size_t>(key.height) << 16) ^ key.psm;
+        return a ^ (b + 0x9e3779b9u + (a << 6) + (a >> 2));
+    }
+};
+std::unordered_map<s_name_key, int, s_name_key_hash> g_by_name;
 std::array<s_resident, 256> g_residents{};
-// GS base pointers are 14-bit block addresses. Avoid scanning every
-// resident slot while preparing each textured draw.
+// Direct GS base-pointer index avoids a 256-slot search per textured draw.
 std::array<int, k_gs_blocks> g_resident_by_bp = []()
 {
     std::array<int, k_gs_blocks> result{};
@@ -166,6 +190,7 @@ void load_registry()
     g_registry_loaded = true;
     g_entries.clear();
     g_lookup.clear();
+    g_by_name.clear();
     for (const auto &source : resource_pack::texture_registries())
     {
         std::istringstream lines(source);
@@ -179,21 +204,31 @@ void load_registry()
             if (!parse_line(line, entry)) continue;
             const s_key key{entry.fingerprint, entry.width,
                 entry.height, entry.psm};
-            const auto at = g_lookup.find(key);
-            if (at != g_lookup.end())
+            const s_name_key name_key{entry.path, entry.width,
+                entry.height, entry.psm};
+            // Each unique source filename/layout owns one decoded image and
+            // one logical GPU slot, regardless of the number of regional
+            // upload fingerprints that identify it.
+            auto name_it = g_by_name.find(name_key);
+            int index = -1;
+            if (name_it != g_by_name.end())
             {
-                // An identical source image may appear under several names.
-                // Avoid accidentally replacing a different original asset
-                // if two entries have the same signature but different paths.
-                if (at->second >= 0
-                    && g_entries[static_cast<std::size_t>(at->second)].path
-                        != entry.path)
-                    at->second = -1;
-                continue;
+                index = name_it->second;
             }
-            const int index = static_cast<int>(g_entries.size());
-            g_lookup.emplace(key, index);
-            g_entries.push_back(std::move(entry));
+            else
+            {
+                index = static_cast<int>(g_entries.size());
+                g_entries.push_back(std::move(entry));
+                g_by_name.emplace(std::move(name_key), index);
+            }
+            const auto [at, inserted] = g_lookup.emplace(key, index);
+            if (!inserted && at->second != index)
+            {
+                // Distinct names with an identical GS source signature are
+                // ambiguous without archive/texture-upload context. Never
+                // guess which replacement to use, irrespective of order.
+                at->second = -1;
+            }
         }
     }
     if (trace_native_textures())
@@ -248,6 +283,7 @@ void reset_residency()
     g_next_resident = 0;
     g_entries.clear();
     g_lookup.clear();
+    g_by_name.clear();
     g_registry_loaded = false;
 }
 
@@ -256,6 +292,7 @@ void reload_replacements()
     // Keep original GS identities while refreshing the registry and PNG cache.
     g_entries.clear();
     g_lookup.clear();
+    g_by_name.clear();
     g_registry_loaded = false;
     load_registry();
 }
@@ -357,14 +394,12 @@ int complete_upload(const s_texture_upload_signature &upload)
     }
     if (!slot)
         slot = &g_residents[(g_next_resident++) % g_residents.size()];
-    // A reused slot must not leave a stale lookup at its previous address.
     const std::size_t slot_index = static_cast<std::size_t>(slot - g_residents.data());
     if (slot->valid && g_resident_by_bp[slot->bp] == static_cast<int>(slot_index))
     {
         g_resident_by_bp[slot->bp] = -1;
     }
-    // Newest completed upload owns this base pointer. Any old resident
-    // at the same address is obsolete, even if its format differs.
+    // Most recent completed upload supersedes any previous base-pointer owner.
     const int previous = g_resident_by_bp[bp];
     if (previous >= 0 && static_cast<std::size_t>(previous) != slot_index)
     {

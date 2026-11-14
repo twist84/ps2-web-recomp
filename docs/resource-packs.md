@@ -136,6 +136,37 @@ Controller-only controls:
 - D-pad Down past the last pack selects **Dump All Textures to Pack**;
   press A to export textures to a new folder pack without leaving the game
 
+### Cross-version source texture aliases (EU Beta and Japan)
+
+The resource-pack replacement path is **the original logical filename**, not
+the source pixel hash. The original texture registry still provides GS upload
+recognition: each release may have a different FNV64 fingerprint for the same
+filename. To load both releases' known fingerprints, place these optional files
+beside `SDBZ.exe`:
+
+- `native_textures.eu-beta.registry` — dumped EU Beta source registry
+- `native_textures.japan.registry` — dumped Japan source registry
+
+The legacy `native_textures.registry` is also read. All three use the existing
+five-column tab-separated registry format. Resource pack ZIP/folder registries
+continue to be read, including those in disabled packs.
+
+The runtime maps every (fingerprint, PSM, width, height) signature to a
+canonical (logical filename, PSM, width, height) record. Identical names and
+layouts share one decoded PNG and one logical native GPU atlas identity even
+when their upload fingerprints differ. Different original layouts are kept
+separate to validate replacement image dimensions.
+
+A source signature associated with **more than one different logical filename**
+is ambiguous, including when duplicates occur within one release. It will
+deliberately fall back to original GS rendering rather than guess based on
+registry ordering. Source hashes cannot uniquely recover these filenames:
+resolving such cases requires extra archive/asset origin context from the
+game's upload pipeline, not simply another filename lookup.
+
+This adds no per-draw filesystem scans: the merged signature and name indices
+are constructed when the source registries are loaded.
+
 ### Data-driven texture identities
 
 The C++ dumper now writes `assets/sdbz/textures.registry` alongside exported PNGs.
