@@ -239,7 +239,23 @@ experimental path. This mode:
   original GS texture
 
 Set `PS2_TRACE_SDBZ_TEXTURE_NAMES=1` as well to log constructor and
-binding records for diagnosis.
+binding records for diagnosis. Indexed GS textures also require the source
+CLUT base to match TEX0; changing the palette through TEX2 intentionally
+falls back to original GS pixels instead of showing an unrelated PNG.
+
+For malformed/black PNG troubleshooting, set `PS2_TRACE_NATIVE_TEXTURES=1`.
+Each attempted PNG logs its canonical name, supplying pack ID, dimensions,
+the number of fully transparent pixels, and opaque-black pixels. The entry is
+only printed once per texture cache generation. If a pack-supplied PNG is
+itself black, re-export its alpha/CLUT correctly instead of changing
+fingerprint/name matching.
+
+For an A/B comparison with the same game and resource-pack state, set
+`PS2_SDBZ_SKIP_PNG=1`. This keeps named GS tracking and resource packs
+enabled but renders original GS textures instead of any replacement PNG.
+If the black rectangles disappear, investigate PNG sources or replacement
+alpha handling; if they remain, investigate GIF/GS rendering. Unset the
+variable for actual texture replacement.
 
 This mode is intentionally **opt-in and unmerged** pending in-game tests.
 Because GS uploads are asynchronous and guest handles can be recycled, validate
