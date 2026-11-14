@@ -457,6 +457,7 @@ void dispatch(Cpu &c, std::uint32_t, std::uint32_t depth) {
     if (observe_sdbz_names
         && (pc == 0x0019AA70u || pc == 0x0019A670u
             || pc == 0x0019A860u || pc == 0x0019A460u
+            || pc == 0x0019A5F0u || pc == 0x0019A3E0u
             || pc == 0x0010C3E0u || pc == 0x0010C350u))
     {
         sdbz_texture_source_probe(c, pc);
