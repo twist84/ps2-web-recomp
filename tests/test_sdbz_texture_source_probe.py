@@ -93,6 +93,7 @@ int main()
     for (const std::uint32_t table : {0x004FF8F0u, 0x005007F0u})
     {
         auto *slot = ps2::g_ram + table;
+        slot[0] = 1; // allocated handle entry
         put_u16(slot + 2, 0x0120u); // GS base block
         put_u16(slot + 4, 4);       // CLUT base pointer, not TBW
         put_u16(slot + 14, 19);     // GS PSMT8
