@@ -304,6 +304,96 @@ void inspect_binding(Cpu &cpu, std::uint32_t table_base)
     }
 }
 
+void sdbz_texture_source_tex0(std::uint64_t tex0)
+{
+    if (!name_only_enabled() && !trace_enabled())
+    {
+        return;
+    }
+
+    // The old guest TEX0 builder hook can be skipped by calls compiled
+    // inside one generated unit. Observe the actual GIF TEX0 metadata
+    // instead, while still on the EE emulation thread.
+    const auto *eu_pix = ee_bytes(k_pix_initialize_eu_beta, 4);
+    const auto *eu_bind = ee_bytes(k_bind_texture_eu_beta, 4);
+    const auto *jp_pix = ee_bytes(k_pix_initialize_japan, 4);
+    const auto *jp_bind = ee_bytes(k_bind_texture_japan, 4);
+    const bool is_eu_beta = eu_pix && eu_bind
+        && u32(eu_pix) == 0x27BDFF70u
+        && u32(eu_bind) == 0x27BDFF30u;
+    const bool is_japan = jp_pix && jp_bind
+        && u32(jp_pix) == 0x27BDFF70u
+        && u32(jp_bind) == 0x27BDFF30u;
+    if (is_eu_beta == is_japan)
+    {
+        return;
+    }
+
+    const std::uint32_t bp = static_cast<std::uint32_t>(tex0) & 0x3fffu;
+    const std::uint32_t bw = static_cast<std::uint32_t>(tex0 >> 14) & 0x3fu;
+    const std::uint32_t psm = static_cast<std::uint32_t>(tex0 >> 20) & 0x3fu;
+    const std::uint32_t width = 1u << ((tex0 >> 26) & 0xfu);
+    const std::uint32_t height = 1u << ((tex0 >> 30) & 0xfu);
+    if (bp >= 0x4000u || !bw || width > 1024 || height > 1024
+        || (psm != 0 && psm != 19 && psm != 20))
+    {
+        return;
+    }
+
+    rebuild_handles();
+    const std::uint32_t table_base =
+        is_eu_beta ? k_handle_table_eu_beta : k_handle_table_japan;
+    const std::uint32_t expected_bw = std::max(1u, width / 64u);
+    if (bw != expected_bw)
+    {
+        return;
+    }
+
+    const std::string *match = nullptr;
+    bool ambiguous = false;
+    for (std::uint32_t handle = 1; handle <= k_max_handles; ++handle)
+    {
+        const auto &identity = g_named_handles[handle];
+        if (identity.ambiguous || identity.name.empty())
+        {
+            continue;
+        }
+        const auto *slot = ee_bytes(table_base
+            + (handle - 1u) * k_handle_stride, k_handle_stride);
+        if (!slot || slot[0] != 1 || u16(slot + 2) != bp
+            || u16(slot + 14) != psm || u16(slot + 22) != width
+            || u16(slot + 24) != height)
+        {
+            continue;
+        }
+        if (match && *match != identity.name)
+        {
+            ambiguous = true;
+            break;
+        }
+        match = &identity.name;
+    }
+    if (ambiguous || !match)
+    {
+        return;
+    }
+    if (name_only_enabled())
+    {
+        gs::publish_named_texture(*match, bp, bw, psm, width, height);
+    }
+    if (trace_enabled())
+    {
+        static std::uint32_t reports = 0;
+        if (reports++ < 128)
+        {
+            std::fprintf(stderr,
+                "[sdbz-name] tex0-bind name=%s bp=%04X bw=%u"
+                " psm=%u size=%ux%u\n",
+                match->c_str(), bp, bw, psm, width, height);
+        }
+    }
+}
+
 void sdbz_texture_source_probe(Cpu &cpu, std::uint32_t pc)
 {
     // Region-specific addresses are not interchangeable. The other region
