@@ -32,12 +32,14 @@ int complete_upload(const s_texture_upload_signature &upload);
 // Must be called on the GS render thread after a complete image upload.
 // Unnamed GPU transfers are deliberately not assigned guessed filenames.
 bool register_named_upload(const std::string &logical_name,
-    std::uint64_t bitbltbuf, std::uint64_t trxreg, std::uint64_t trxpos);
+    std::uint64_t bitbltbuf, std::uint64_t trxreg, std::uint64_t trxpos,
+    std::uint32_t clut_bp = 0xffffffffu);
 
 // Returns an index only when both the current residency and TEX0 layout agree.
 // A GS base pointer alone is deliberately not sufficient.
 int resident_chunk(std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
-    std::uint32_t width, std::uint32_t height);
+    std::uint32_t width, std::uint32_t height,
+    std::uint32_t clut_bp = 0xffffffffu);
 const s_image *chunk_image(int index);
 
 // High-resolution replacements retain the game's base atlas dimensions.
