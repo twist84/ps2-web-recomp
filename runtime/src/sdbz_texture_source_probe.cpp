@@ -67,6 +67,8 @@ struct s_resolved_handle
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     bool ambiguous = false;
+    std::uint32_t owner_object = 0;
+    std::string owner_guest_name;
 };
 std::array<s_resolved_handle, k_max_handles + 1> g_named_handles;
 std::uint64_t g_source_revision = 1;
@@ -131,6 +133,27 @@ bool texture_name(std::uint32_t object, std::string &name)
         name.push_back(static_cast<char>(ch));
     }
     return false;
+}
+
+// The host's source-name cache is rebuilt when a constructor runs, but the
+// game's handle allocator can free or reassign a slot without running any
+// constructor before the next GS TEX0 write. Reject cached identities whose
+// original CTexture object no longer owns that handle.
+bool live_handle_owner(const s_resolved_handle &identity,
+    std::uint32_t handle)
+{
+    if (!identity.owner_object)
+    {
+        return false;
+    }
+    const auto *owner_handle = ee_bytes(identity.owner_object + 0x38u, 4);
+    if (!owner_handle || u32(owner_handle) != handle)
+    {
+        return false;
+    }
+    std::string current_name;
+    return texture_name(identity.owner_object, current_name)
+        && current_name == identity.owner_guest_name;
 }
 
 void inspect_pix(Cpu &cpu)
@@ -262,6 +285,8 @@ void rebuild_handles()
             entry.psm = observed.psm;
             entry.width = observed.width;
             entry.height = observed.height;
+            entry.owner_object = object;
+            entry.owner_guest_name = observed.guest_name;
         }
     }
     g_resolved_revision = g_source_revision;
@@ -276,7 +301,8 @@ void inspect_binding(Cpu &cpu, std::uint32_t table_base)
     }
     rebuild_handles();
     const auto &identity = g_named_handles[handle];
-    if (identity.name.empty() || identity.ambiguous)
+    if (identity.name.empty() || identity.ambiguous
+        || !live_handle_owner(identity, handle))
     {
         return;
     }
@@ -374,6 +400,7 @@ bool sdbz_texture_source_tex0(std::uint64_t tex0,
     {
         const auto &identity = g_named_handles[handle];
         if (identity.ambiguous || identity.name.empty()
+            || !live_handle_owner(identity, handle)
             || identity.width != width || identity.height != height
             || identity.psm != psm)
         {
