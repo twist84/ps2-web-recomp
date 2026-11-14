@@ -304,11 +304,12 @@ void inspect_binding(Cpu &cpu, std::uint32_t table_base)
     }
 }
 
-void sdbz_texture_source_tex0(std::uint64_t tex0)
+bool sdbz_texture_source_tex0(std::uint64_t tex0,
+    s_named_texture_binding *result)
 {
     if (!name_only_enabled() && !trace_enabled())
     {
-        return;
+        return false;
     }
 
     // The old guest TEX0 builder hook can be skipped by calls compiled
@@ -326,7 +327,7 @@ void sdbz_texture_source_tex0(std::uint64_t tex0)
         && u32(jp_bind) == 0x27BDFF30u;
     if (is_eu_beta == is_japan)
     {
-        return;
+        return false;
     }
 
     const std::uint32_t bp = static_cast<std::uint32_t>(tex0) & 0x3fffu;
@@ -337,7 +338,7 @@ void sdbz_texture_source_tex0(std::uint64_t tex0)
     if (bp >= 0x4000u || !bw || width > 1024 || height > 1024
         || (psm != 0 && psm != 19 && psm != 20))
     {
-        return;
+        return false;
     }
 
     rebuild_handles();
@@ -346,7 +347,7 @@ void sdbz_texture_source_tex0(std::uint64_t tex0)
     const std::uint32_t expected_bw = std::max(1u, width / 64u);
     if (bw != expected_bw)
     {
-        return;
+        return false;
     }
 
     const std::string *match = nullptr;
@@ -375,9 +376,13 @@ void sdbz_texture_source_tex0(std::uint64_t tex0)
     }
     if (ambiguous || !match)
     {
-        return;
+        return false;
     }
-    if (name_only_enabled())
+    if (result)
+    {
+        *result = {*match, bp, bw, psm, width, height};
+    }
+    else if (name_only_enabled())
     {
         gs::publish_named_texture(*match, bp, bw, psm, width, height);
     }
@@ -392,6 +397,7 @@ void sdbz_texture_source_tex0(std::uint64_t tex0)
                 match->c_str(), bp, bw, psm, width, height);
         }
     }
+    return true;
 }
 
 void sdbz_texture_source_probe(Cpu &cpu, std::uint32_t pc)
