@@ -484,7 +484,8 @@ bool sdbz_texture_source_tex0(std::uint64_t tex0,
         // Report distinct names and palette variants, rather than wasting
         // the entire trace quota on the first repeatedly bound sprite.
         static std::unordered_set<std::string> reported;
-        const std::string key = *match + ":" + std::to_string(tex0);
+        const std::string key = std::string(is_eu_beta ? "EU:" : "JP:")
+            + *match + ":" + std::to_string(tex0);
         if (reported.size() < 1024 && reported.insert(key).second)
         {
             std::fprintf(stderr,
