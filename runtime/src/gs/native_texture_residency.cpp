@@ -689,6 +689,29 @@ bool register_named_upload(const std::string &logical_name,
     return true;
 }
 
+bool revoke_named_upload(const std::string &logical_name,
+    std::uint32_t bp)
+{
+    if (bp >= k_gs_blocks)
+    {
+        return false;
+    }
+    const int slot = g_resident_by_bp[bp];
+    if (slot < 0)
+    {
+        return false;
+    }
+    auto &resident = g_residents[static_cast<std::size_t>(slot)];
+    if (!resident.valid || !resident.named || resident.bp != bp
+        || resident.logical_name != logical_name)
+    {
+        return false;
+    }
+    g_resident_by_bp[bp] = -1;
+    resident.valid = false;
+    return true;
+}
+
 int resident_chunk(std::uint32_t bp, std::uint32_t bw, std::uint32_t psm,
     std::uint32_t width, std::uint32_t height, std::uint32_t clut_bp)
 {
