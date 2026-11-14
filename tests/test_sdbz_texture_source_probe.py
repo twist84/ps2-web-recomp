@@ -18,10 +18,22 @@ HARNESS = r'''
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <string_view>
 
 namespace ps2
 {
 std::uint8_t g_ram[kRamSize]{};
+}
+namespace ps2::iop::arkd
+{
+std::string resolve_texture_name(std::string_view name)
+{
+    if (name == "main_menu001")
+    {
+        return "dis/main_menu.pix.001";
+    }
+    return {};
+}
 }
 namespace ps2::gs
 {
@@ -59,7 +71,7 @@ int main()
     put_u32(ps2::g_ram + 0x19AA70u, 0x27BDFF70u);
     put_u32(ps2::g_ram + 0x10C3E0u, 0x27BDFF30u);
     std::uint8_t *name = ps2::g_ram + 0x1010u;
-    std::strcpy(reinterpret_cast<char *>(name), "dis/main_menu.pix.001");
+    std::strcpy(reinterpret_cast<char *>(name), "main_menu001");
 
     auto *tim2 = ps2::g_ram + 0x2000u;
     std::memcpy(tim2, "TIM2", 4);
@@ -89,6 +101,12 @@ int main()
     }
     cpu.r[4].w[0] = 1;
     ps2::sdbz_texture_source_probe(cpu, 0x0010C3E0u);
+    // TEX0 fallback works without the guest TEX0-builder entry hook.
+    const std::uint64_t tex0 = 0x120ull | (1ull << 14)
+        | (19ull << 20) | (2ull << 26) | (2ull << 30);
+    ps2::sdbz_texture_source_tex0(tex0);
+    // An incorrectly matching pixel layout must never bind a name.
+    ps2::sdbz_texture_source_tex0(tex0 ^ (1ull << 20));
     // Invalid handles cannot be assigned a filename.
     cpu.r[4].w[0] = 256;
     ps2::sdbz_texture_source_probe(cpu, 0x0010C3E0u);
@@ -113,6 +131,7 @@ int main()
     cpu.r[4].w[0] = 1;
     ps2::sdbz_texture_source_probe(cpu, 0x0010C3E0u);
     ps2::sdbz_texture_source_probe(cpu, 0x0010C350u);
+    ps2::sdbz_texture_source_tex0(tex0);
     cpu.r[4].w[0] = 0x1000u;
     cpu.r[5].w[0] = 0x3000u;
     ps2::sdbz_texture_source_probe(cpu, 0x0019A860u);
@@ -121,7 +140,7 @@ int main()
     tim2[0] = 0;
     cpu.r[5].w[0] = 0x2000u;
     ps2::sdbz_texture_source_probe(cpu, 0x0019A460u);
-    return ps2::gs::g_named_publishes == 2 ? 0 : 1;
+    return ps2::gs::g_named_publishes == 4 ? 0 : 1;
 }
 '''
 
@@ -153,6 +172,8 @@ class NamedTextureProbeTests(unittest.TestCase):
             self.assertEqual(done.stderr.count("[sdbz-name] texture="), 2)
             self.assertEqual(done.stderr.count("[sdbz-name] FPIX"), 2)
             self.assertEqual(done.stderr.count("[sdbz-name] bind"), 2)
+            self.assertEqual(done.stderr.count("[sdbz-name] tex0-bind"), 2)
+            self.assertIn("canonical=dis/main_menu.pix.001", done.stderr)
             self.assertIn("bp=0120 bw=1 psm=19 size=4x4", done.stderr)
             self.assertIn("dis/main_menu.pix.001", done.stderr)
             self.assertIn("pixels=000020B0", done.stderr)
