@@ -257,6 +257,21 @@ If the black rectangles disappear, investigate PNG sources or replacement
 alpha handling; if they remain, investigate GIF/GS rendering. Unset the
 variable for actual texture replacement.
 
+For finer isolation without disabling other PNG replacements, set
+`PS2_SDBZ_SKIP_PNG_NAMES` to a comma-separated list of canonical names.
+For example:
+
+```bat
+set PS2_SDBZ_SKIP_PNG=
+set PS2_SDBZ_SKIP_PNG_NAMES=dis/main_menu.pix.002,dis/main_menu.pix.003
+SDBZ.exe
+```
+
+The named entries use the original GS pixels; all other enabled pack PNGs
+still load normally. Reset `PS2_SDBZ_SKIP_PNG_NAMES=` after testing. This
+is intentionally an exact-path diagnostic, not a runtime hash or heuristic
+black-pixel filter.
+
 This mode is intentionally **opt-in and unmerged** pending in-game tests.
 Because GS uploads are asynchronous and guest handles can be recycled, validate
 rendered replacements (including reloads/VRAM overwrites) before choosing it
