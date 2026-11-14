@@ -1450,8 +1450,9 @@ void render_state(ps2::state::Stream &s) {
         g_texture_trace.reset();
 #ifdef PS2_NATIVE_PNG
         native_texture::reset_residency();
-        std::memset(g_native_gpu_uploaded, 0, sizeof g_native_gpu_uploaded);
-        std::memset(g_native_match_logged, 0, sizeof g_native_match_logged);
+#ifdef PS2_GPU
+        if (gpu_on()) gpu::invalidate_native_atlases();
+#endif
 #endif
     }
     s.pod(g_state);
