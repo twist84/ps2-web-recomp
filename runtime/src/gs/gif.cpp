@@ -146,8 +146,12 @@ void scan(Path &p, const std::uint8_t *data, std::uint32_t qwc,
                         if (at[8] >= 0x60) gs::signal(at[8], value);
                         else if (at[8] <= 0x53) gs::note_transfer(at[8], value);
 
-                        if (scan_names)
+                        if (scan_names && events)
                         {
+                            // Shadow-only VIF scans inspect SIGNAL and
+                            // transfer metadata but are not GS submissions.
+                            // They must never own a native filename or
+                            // change the provenance state of the real GIF.
                             if (at[8] == 0x50)
                             {
                                 g_scanned_transfer.bitbltbuf = value;
