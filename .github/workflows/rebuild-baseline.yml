@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - SDBZ
-      - "rewrite/**"
   pull_request:
     branches:
       - SDBZ
@@ -33,8 +32,11 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER="${{ matrix.cxx }}" \
             -DPS2_FETCH_ZLIB=OFF
-      - name: Build EE and VU recompilers
-        run: cmake --build build-baseline --target eerecomp vurecomp --parallel 2
+      - name: Build EE recompiler
+        run: cmake --build build-baseline --target eerecomp --parallel 2
+      - name: Build Clang-only VU recompiler
+        if: matrix.cxx == 'clang++'
+        run: cmake --build build-baseline --target vurecomp --parallel 2
       - name: Test ELF function discovery and BSS handling
         run: |
           python3 tests/analysis_tailcall.py --recompiler build-baseline/eerecomp
