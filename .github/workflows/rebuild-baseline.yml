@@ -1,0 +1,74 @@
+name: Rebuild baseline - EE tools and synthetic runtime
+
+on:
+  push:
+    branches:
+      - SDBZ
+  pull_request:
+    branches:
+      - SDBZ
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ee-tools:
+    name: EE tools and synthetic regressions / ${{ matrix.cxx }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        cxx: [g++, clang++]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deterministic build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ninja-build zlib1g-dev
+      - name: Configure standalone recompiler build
+        run: |
+          cmake -S . -B build-baseline -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER="${{ matrix.cxx }}" \
+            -DPS2_FETCH_ZLIB=OFF
+      - name: Build EE recompiler
+        run: cmake --build build-baseline --target eerecomp --parallel 2
+      - name: Build Clang-only VU recompiler
+        if: matrix.cxx == 'clang++'
+        run: cmake --build build-baseline --target vurecomp --parallel 2
+      - name: Test ELF function discovery and BSS handling
+        run: |
+          python3 tests/analysis_tailcall.py --recompiler build-baseline/eerecomp
+          python3 tests/elf_bss.py --recompiler build-baseline/eerecomp
+      - name: Test generated C++ fallthrough compilation
+        run: python3 tests/codegen_fallthrough.py --recompiler build-baseline/eerecomp
+
+  runtime-clang:
+    name: PS2 runtime and synthetic CTest / clang++
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang ninja-build zlib1g-dev
+      - name: Configure game-free runtime tests
+        run: |
+          cmake -S . -B build-baseline -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DPS2_FETCH_ZLIB=OFF \
+            -DPS2_BUILD_TESTS=ON
+      - name: Compile runtime and synthetic tests
+        run: |
+          cmake --build build-baseline --target \
+            sif_scratchpad_test \
+            kernel_exit_delete_thread_test \
+            gt3_initialization_test \
+            gt3_state_test \
+            --parallel 2
+      - name: Run synthetic native CTest cases
+        run: |
+          ctest --test-dir build-baseline --output-on-failure \
+            -R '^(sif_scratchpad|kernel_exit_delete_thread|gt3_initialization|gt3_state)$'
